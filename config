@@ -1,0 +1,117 @@
+{
+  "amazon_api": {
+    "region": "NA",
+    "profile_id": "1780498399290938",
+    "client_id": "amzn1.application-oa2-client.5f71a2504cb34903be357c736c290a30",
+    "client_secret": "amzn1.oa2-cs.v1.a1a0e3a3cf314be2eb5269334bd4401a18762fd702e2b100a4f61697a674f3af",
+    "refresh_token": "Atzr|IwEBIPE8acBsY5_GWupkUloHdIl36DwwOv4ml1Wd3W9gO4LNiQ7LUm7DhkNPF5-1HGnDn03j9c1jpnmKAyjFc4K5J4SpjI8GmNoKAG-1ivVbAPLVUInrnT5sNZc0nNdQOXQXpa6XWmN49QmwRppxYGSIt_31jq5v9WPO9BinMZc5NmNchy6tgFQ7G7q67Mvc7EFc6wLqSuEqF3mu2NPKOVAlQb5TiohtZPrCbfYPpSx31HrDwaw0zj5sY3_P2G0UckEBmWNi24gPh8YOzQ0bmhjqoCHOCtDgoTdsBlA7DqB42N9HNz5_hYmTb27VO1_TuNzRfg0Xj5U-ef-sLh1Wmz1B8tl-MqF_2PkkW6Wpxn5yZu4eiUisyOJm2AWBJ_HXp4eauk9w8kFM5satAfg4bk4gCUzM6p-0ztKHQhIzjhTSwOzt8l9OAcMAZNzVEhpcKNWxpgZrJp3Zc0pC4pIENc-UTVv1G1zdi6wrIv59pop_GaX1myLrCsnjCRRdhXfMgfFGTKxIs16Dccd7bsgjzNAlry5C",
+    "token_info": {
+      "last_refreshed": "2025-10-12T16:40:22.722524",
+      "access_token_expires_in": 3600
+    }
+  },
+  "dashboard": {
+    "url": "https://amazonppcdashboard.vercel.app"
+  },
+  "email_notifications": {
+    "enabled": true,
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587,
+    "smtp_user": "YOUR_SMTP_USER_HERE",
+    "smtp_password": "YOUR_SMTP_PASSWORD_HERE",
+    "from_email": "YOUR_SMTP_USER_HERE",
+    "to_email": "james@natureswaysoil.com",
+    "send_on_completion": true,
+    "send_on_error": true
+  },
+  "optimization_rules": {
+    "lookback_days": 14,
+    "min_clicks": 10,
+    "min_spend": 5.0,
+    "target_acos": 0.45,
+    "high_acos": 0.6,
+    "low_acos": 0.25,
+    "min_ctr": 0.003,
+    "up_pct": 0.15,
+    "down_pct": 0.2,
+    "min_bid": 0.25,
+    "max_bid": 5.0
+  },
+  "dayparting": {
+    "enabled": true,
+    "peak_hours": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+    ],
+    "peak_multiplier": 1.2,
+    "off_peak_multiplier": 0.85,
+    "day_multipliers": {
+      "MONDAY": 1.0,
+      "TUESDAY": 1.0,
+      "WEDNESDAY": 1.0,
+      "THURSDAY": 1.0,
+      "FRIDAY": 1.1,
+      "SATURDAY": 1.2,
+      "SUNDAY": 1.15
+    },
+    "min_multiplier": 0.4,
+    "max_multiplier": 1.8
+  },
+  "campaign_management": {
+    "enabled": true,
+    "acos_threshold": 0.45,
+    "min_spend": 20.0,
+    "auto_activate": true,
+    "auto_pause": true
+  },
+  "keyword_discovery": {
+    "enabled": true,
+    "min_clicks": 5,
+    "max_acos": 0.4,
+    "initial_bid": 0.75,
+    "max_keywords_per_run": 50
+  },
+  "negative_keywords": {
+    "enabled": true,
+    "min_spend": 10.0,
+    "max_acos": 1.0,
+    "auto_add": true
+  },
+  "budget_optimization": {
+    "enabled": true,
+    "increase_threshold_acos": 0.3,
+    "decrease_threshold_acos": 0.6,
+    "budget_change_pct": 0.2,
+    "min_daily_budget": 5.0,
+    "max_daily_budget": 100.0
+  },
+  "placement_bids": {
+    "enabled": true,
+    "top_of_search_multiplier": 1.5,
+    "product_pages_multiplier": 0.8
+  },
+  "features": {
+    "enabled": [
+      "bid_optimization",
+      "dayparting",
+      "campaign_management",
+      "keyword_discovery",
+      "negative_keywords"
+    ]
+  },
+  "logging": {
+    "level": "INFO",
+    "output_dir": "./logs",
+    "audit_trail": true
+  }
+}
