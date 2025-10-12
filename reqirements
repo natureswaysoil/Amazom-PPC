@@ -1,0 +1,15 @@
+
+# Google Cloud Functions Requirements
+# Python 3.11 runtime
+
+# Google Cloud Functions Framework
+functions-framework==3.*
+
+# Core dependencies for optimizer
+requests==2.31.0
+python-dateutil==2.8.2
+pytz==2024.1
+
+# Email support
+# (smtplib is built-in)
+
