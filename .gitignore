@@ -60,3 +60,5 @@ audit/
 # Config with secrets (use environment variables instead)
 config.local.json
 secrets.json
+API_SECRETS_CONFIGURATION.md
+API_SECRETS_CONFIGURATION.pdf
