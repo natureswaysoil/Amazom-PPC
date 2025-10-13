@@ -4,22 +4,23 @@
     "profile_id": "1780498399290938",
     "client_id": "amzn1.application-oa2-client.5f71a2504cb34903be357c736c290a30",
     "client_secret": "amzn1.oa2-cs.v1.a1a0e3a3cf314be2eb5269334bd4401a18762fd702e2b100a4f61697a674f3af",
-    "refresh_token": "Atzr|IwEBIPE8acBsY5_GWupkUloHdIl36DwwOv4ml1Wd3W9gO4LNiQ7LUm7DhkNPF5-1HGnDn03j9c1jpnmKAyjFc4K5J4SpjI8GmNoKAG-1ivVbAPLVUInrnT5sNZc0nNdQOXQXpa6XWmN49QmwRppxYGSIt_31jq5v9WPO9BinMZc5NmNchy6tgFQ7G7q67Mvc7EFc6wLqSuEqF3mu2NPKOVAlQb5TiohtZPrCbfYPpSx31HrDwaw0zj5sY3_P2G0UckEBmWNi24gPh8YOzQ0bmhjqoCHOCtDgoTdsBlA7DqB42N9HNz5_hYmTb27VO1_TuNzRfg0Xj5U-ef-sLh1Wmz1B8tl-MqF_2PkkW6Wpxn5yZu4eiUisyOJm2AWBJ_HXp4eauk9w8kFM5satAfg4bk4gCUzM6p-0ztKHQhIzjhTSwOzt8l9OAcMAZNzVEhpcKNWxpgZrJp3Zc0pC4pIENc-UTVv1G1zdi6wrIv59pop_GaX1myLrCsnjCRRdhXfMgfFGTKxIs16Dccd7bsgjzNAlry5C",
+    "refresh_token": "Atzr|IwEBIBGvUBJYDy4z4OZJEU68Oqr2eNOrkyOmWyHjFcEW4C_lmmoKmqvy9wafePmmmDZJuMAvsQHDwt41G1vV3_C_0-9QtLxtMHDxQz46XtcnQvIJBY3HQOu9j2Z25NCO8gDcSJ88eAgNcno_GM97qDF6meQZWULUtSqDHVq7TgP00BHxeu3A6ibHRGFWCCe5vXq7w-CW4PIOB68wJJpXZwkb66P52hwfGPL4vDXuwm97mBxaNBCWGwrWBeAnoKismuP1yF9hqV3fVrwN16VKh-ddF1UpUec-u5uGkzsqxLJffmG2H-71_MMr89CAAlVwouWF2AbvPPxJloXc1Nen8t_pCWZB2vyGB7gki14_unEeoKlGofeXuj6jYYPs32RnPLLa6UwopjlNz-xk83r50sLUCrhJFkKfONmS6FnjFZ84GDa0O7vkSeOTEJRp7PeJNFnlznGI18vmonaH4REVqythHuwKwjbGUqc1j-ebGqslIv300PECZH3Ox54hQ4-EuQ4GYxMwpylwOV4LM77k1vRN3z54",
     "token_info": {
-      "last_refreshed": "2025-10-12T16:40:22.722524",
-      "access_token_expires_in": 3600
+      "last_refreshed": "2025-10-13T02:56:41",
+      "access_token_expires_in": 3600,
+      "note": "Access token is automatically refreshed by the optimizer before API calls"
     }
   },
   "dashboard": {
-    "url": "https://amazonppcdashboard.vercel.app"
+    "url": "https://ppc-dashboard.abacusai.app"
   },
   "email_notifications": {
-    "enabled": true,
+    "enabled": false,
     "smtp_host": "smtp.gmail.com",
     "smtp_port": 587,
     "smtp_user": "YOUR_SMTP_USER_HERE",
     "smtp_password": "YOUR_SMTP_PASSWORD_HERE",
-    "from_email": "YOUR_SMTP_USER_HERE",
+    "from_email": "YOUR_EMAIL_HERE",
     "to_email": "james@natureswaysoil.com",
     "send_on_completion": true,
     "send_on_error": true
@@ -39,20 +40,7 @@
   },
   "dayparting": {
     "enabled": true,
-    "peak_hours": [
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      15,
-      16,
-      17,
-      18,
-      19,
-      20
-    ],
+    "peak_hours": [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     "peak_multiplier": 1.2,
     "off_peak_multiplier": 0.85,
     "day_multipliers": {

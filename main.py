@@ -1,7 +1,9 @@
-
 """
 Google Cloud Function Entry Point for Amazon PPC Optimizer
 Triggered by Cloud Scheduler via HTTP request
+
+This function automatically refreshes Amazon Advertising API tokens before making API calls.
+Token refresh is handled automatically by the optimizer_core module.
 """
 
 import json
@@ -9,6 +11,7 @@ import logging
 import os
 import sys
 import traceback
+import tempfile
 from datetime import datetime
 import functions_framework
 import smtplib
@@ -19,15 +22,24 @@ import requests
 # Add parent directory to path to import optimizer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Import the main optimizer (we'll include it in the deployment)
-from optimizer_core import AmazonPPCOptimizer
-
 # Configure logging for Cloud Functions
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def create_config_file(config_dict):
+    """
+    Create a temporary config file from dictionary
+    The optimizer_core expects a file path, so we create a temp file
+    """
+    import yaml
+    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
+    yaml.dump(config_dict, temp_file)
+    temp_file.close()
+    return temp_file.name
 
 
 def send_email_notification(subject, body, config):
@@ -50,7 +62,7 @@ def send_email_notification(subject, body, config):
         <body>
             <h2>{subject}</h2>
             <div style="font-family: Arial, sans-serif;">
-                {body.replace('\n', '<br>')}
+                {body.replace(chr(10), '<br>')}
             </div>
             <hr>
             <p style="color: #666; font-size: 12px;">
@@ -114,6 +126,9 @@ def run_optimizer(request):
     """
     Cloud Function entry point - triggered by Cloud Scheduler
     
+    The optimizer automatically refreshes the Amazon Advertising API access token
+    before making API calls using the refresh_token stored in environment variables.
+    
     Args:
         request: HTTP request object (from Cloud Scheduler)
         
@@ -124,9 +139,15 @@ def run_optimizer(request):
     start_time = datetime.now()
     logger.info(f"=== Amazon PPC Optimizer Started at {start_time} ===")
     
+    config_file_path = None
+    
     try:
         # Load configuration from environment or file
         config = load_config()
+        
+        # Set environment variables for the optimizer
+        # The optimizer reads credentials from environment variables
+        set_environment_variables(config)
         
         # Validate required credentials
         validate_credentials(config)
@@ -134,12 +155,27 @@ def run_optimizer(request):
         # Check if this is a dry run
         dry_run = request.args.get('dry_run', 'false').lower() == 'true'
         
+        # Create temporary config file for optimizer
+        config_file_path = create_config_file(config)
+        
+        # Get profile ID
+        profile_id = config.get('amazon_api', {}).get('profile_id')
+        
         # Initialize optimizer
         logger.info("Initializing optimizer...")
-        optimizer = AmazonPPCOptimizer(config, dry_run=dry_run)
+        
+        # Import here to ensure environment variables are set first
+        from optimizer_core import PPCAutomation
+        
+        optimizer = PPCAutomation(
+            config_path=config_file_path,
+            profile_id=profile_id,
+            dry_run=dry_run
+        )
         
         # Run optimization
-        logger.info("Running optimization...")
+        # The optimizer will automatically refresh the access token if needed
+        logger.info("Running optimization (token refresh handled automatically)...")
         results = optimizer.run()
         
         # Update dashboard
@@ -199,6 +235,14 @@ Please check the Cloud Functions logs for more details.
             'message': error_msg,
             'timestamp': datetime.now().isoformat()
         }, 500
+    
+    finally:
+        # Clean up temp config file
+        if config_file_path and os.path.exists(config_file_path):
+            try:
+                os.unlink(config_file_path)
+            except:
+                pass
 
 
 def load_config():
@@ -220,6 +264,21 @@ def load_config():
     raise ValueError("No configuration found. Set PPC_CONFIG environment variable or provide config.json")
 
 
+def set_environment_variables(config):
+    """
+    Set environment variables from config for the optimizer
+    The optimizer_core reads these environment variables for API authentication
+    """
+    amazon_api = config.get('amazon_api', {})
+    
+    # Set required environment variables that optimizer_core expects
+    os.environ['AMAZON_CLIENT_ID'] = amazon_api.get('client_id', '')
+    os.environ['AMAZON_CLIENT_SECRET'] = amazon_api.get('client_secret', '')
+    os.environ['AMAZON_REFRESH_TOKEN'] = amazon_api.get('refresh_token', '')
+    
+    logger.info("Environment variables set for optimizer")
+
+
 def validate_credentials(config):
     """Validate required API credentials are present"""
     required_fields = ['client_id', 'client_secret', 'refresh_token', 'profile_id']
@@ -229,6 +288,8 @@ def validate_credentials(config):
     
     if missing:
         raise ValueError(f"Missing required API credentials: {', '.join(missing)}")
+    
+    logger.info("✓ All required credentials present")
 
 
 def format_results_summary(results, duration, dry_run):
@@ -247,36 +308,48 @@ def format_results_summary(results, duration, dry_run):
     ]
     
     # Add key metrics
-    if 'summary' in results:
-        summary = results['summary']
-        summary_lines.extend([
-            f"Campaigns Analyzed: {summary.get('campaigns_analyzed', 0)}",
-            f"Keywords Optimized: {summary.get('keywords_optimized', 0)}",
-            f"Bids Adjusted: {summary.get('bids_adjusted', 0)}",
-            f"Negative Keywords Added: {summary.get('negative_keywords_added', 0)}",
-            f"Budget Changes: {summary.get('budget_changes', 0)}",
-            f"",
-        ])
-    
-    # Add performance highlights
-    if 'highlights' in results:
-        summary_lines.append("Performance Highlights:")
-        for highlight in results['highlights']:
-            summary_lines.append(f"  • {highlight}")
-        summary_lines.append("")
-    
-    # Add recommendations
-    if 'recommendations' in results:
-        summary_lines.append("Recommendations:")
-        for rec in results['recommendations']:
-            summary_lines.append(f"  • {rec}")
-        summary_lines.append("")
+    if isinstance(results, dict):
+        if 'summary' in results:
+            summary = results['summary']
+            summary_lines.extend([
+                f"Campaigns Analyzed: {summary.get('campaigns_analyzed', 0)}",
+                f"Keywords Optimized: {summary.get('keywords_optimized', 0)}",
+                f"Bids Adjusted: {summary.get('bids_adjusted', 0)}",
+                f"Negative Keywords Added: {summary.get('negative_keywords_added', 0)}",
+                f"Budget Changes: {summary.get('budget_changes', 0)}",
+                f"",
+            ])
+        
+        # Add performance highlights
+        if 'highlights' in results:
+            summary_lines.append("Performance Highlights:")
+            for highlight in results['highlights']:
+                summary_lines.append(f"  • {highlight}")
+            summary_lines.append("")
+        
+        # Add recommendations
+        if 'recommendations' in results:
+            summary_lines.append("Recommendations:")
+            for rec in results['recommendations']:
+                summary_lines.append(f"  • {rec}")
+            summary_lines.append("")
     
     summary_lines.extend([
         f"-" * 50,
         f"",
         f"For detailed insights, visit the dashboard:",
-        f"{results.get('dashboard_url', 'Not configured')}",
+        f"{results.get('dashboard_url', 'Not configured') if isinstance(results, dict) else 'Not configured'}",
     ])
     
     return '\n'.join(summary_lines)
+
+
+# For local testing
+if __name__ == "__main__":
+    class MockRequest:
+        def __init__(self):
+            self.args = {'dry_run': 'true'}
+    
+    result, status = run_optimizer(MockRequest())
+    print(f"Status: {status}")
+    print(f"Result: {json.dumps(result, indent=2)}")
