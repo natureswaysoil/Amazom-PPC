@@ -59,10 +59,10 @@ Use the `config.json` file in the repository.
 
 See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed deployment instructions.
 
-### Quick Deploy
+### Quick Deploy (Secure - Recommended)
 
 ```bash
-# Deploy to Google Cloud Functions
+# Deploy with authentication and Secret Manager (RECOMMENDED)
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
@@ -70,11 +70,18 @@ gcloud functions deploy amazon-ppc-optimizer \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
-  --allow-unauthenticated \
+  --no-allow-unauthenticated \
   --timeout=540s \
   --memory=512MB \
-  --set-env-vars AMAZON_CLIENT_ID=amzn1.application-oa2-client.xxxxx,AMAZON_CLIENT_SECRET=xxxxx,AMAZON_REFRESH_TOKEN=xxxxx
+  --set-secrets=AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest
 ```
+
+**Important Security Notes:**
+- ✅ **DO** use `--no-allow-unauthenticated` for production
+- ✅ **DO** use Google Secret Manager for credentials
+- ✅ **DO** configure Cloud Scheduler with proper authentication
+- ❌ **DON'T** use `--allow-unauthenticated` (causes rate limiting issues)
+- ❌ **DON'T** pass secrets as environment variables in command line
 
 ## 🔄 Token Refresh
 
@@ -142,6 +149,27 @@ curl "https://YOUR-FUNCTION-URL?dry_run=true"
 
 ## 🐛 Troubleshooting
 
+### HTTP 429 (Too Many Requests) Errors
+
+If you're experiencing HTTP 429 errors:
+
+**Cause**: Function deployed with `--allow-unauthenticated` flag
+- Unauthenticated functions have stricter rate limits
+- Uptime checks hit the function too frequently
+- All requests are rate-limited before function execution
+
+**Solution**:
+1. Redeploy with `--no-allow-unauthenticated` flag (see deployment section)
+2. Configure Cloud Scheduler with proper authentication (service account)
+3. Use the `/health` endpoint for uptime checks: `?health=true`
+4. Reduce uptime check frequency or disable for this function
+
+**Verify Fix**:
+```bash
+# Check logs - successful requests should show execution time > 0ms
+gcloud functions logs read amazon-ppc-optimizer --limit=10
+```
+
 ### Token Issues
 - The optimizer automatically handles token refresh
 - Check Cloud Function logs if authentication fails
@@ -150,11 +178,24 @@ curl "https://YOUR-FUNCTION-URL?dry_run=true"
 ### Deployment Issues
 - Ensure all required dependencies are in `requirements.txt`
 - Check function timeout (increase if needed)
-- Verify environment variables are set correctly
+- Verify secrets are properly configured in Secret Manager
+- Use `--no-allow-unauthenticated` for production deployments
 
 ### API Rate Limits
 - The optimizer includes rate limiting (10 requests/second)
 - Automatic retry with exponential backoff
+- Cloud Function rate limits: use authenticated deployment to avoid issues
+
+### Uptime Check Configuration
+
+To avoid triggering the main optimization logic with uptime checks:
+
+```bash
+# Use health check endpoint
+curl "https://YOUR-FUNCTION-URL?health=true"
+```
+
+Or configure less frequent checks (e.g., every 5-10 minutes instead of every 5-6 seconds)
 
 ## 📝 License
 

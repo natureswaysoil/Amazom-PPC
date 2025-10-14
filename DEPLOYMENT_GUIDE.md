@@ -88,14 +88,37 @@ gcloud beta billing projects link $PROJECT_ID --billing-account=BILLING_ACCOUNT_
 
 ## Deployment Steps
 
-### Method 1: Deploy from Git Repository
+### Prerequisites: Set Up Secret Manager (Recommended)
+
+Before deploying, store your credentials securely in Google Secret Manager:
+
+```bash
+# Create secrets for Amazon API credentials
+echo -n "YOUR_CLIENT_ID" | gcloud secrets create amazon-client-id --data-file=-
+echo -n "YOUR_CLIENT_SECRET" | gcloud secrets create amazon-client-secret --data-file=-
+echo -n "YOUR_REFRESH_TOKEN" | gcloud secrets create amazon-refresh-token --data-file=-
+
+# Grant the Cloud Functions service account access to secrets
+PROJECT_NUMBER=$(gcloud projects describe $(gcloud config get-value project) --format="value(projectNumber)")
+gcloud secrets add-iam-policy-binding amazon-client-id \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+gcloud secrets add-iam-policy-binding amazon-client-secret \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+gcloud secrets add-iam-policy-binding amazon-refresh-token \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+### Method 1: Deploy with Secret Manager (RECOMMENDED - Secure)
 
 ```bash
 # Clone the repository
 git clone https://github.com/natureswaysoil/Amazom-PPC.git
 cd Amazom-PPC
 
-# Deploy to Cloud Functions
+# Deploy to Cloud Functions with Secret Manager
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
@@ -103,36 +126,25 @@ gcloud functions deploy amazon-ppc-optimizer \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
-  --allow-unauthenticated \
+  --no-allow-unauthenticated \
   --timeout=540s \
   --memory=512MB \
   --min-instances=0 \
   --max-instances=1 \
-  --set-env-vars AMAZON_CLIENT_ID="amzn1.application-oa2-client.5f71a2504cb34903be357c736c290a30",AMAZON_CLIENT_SECRET="amzn1.oa2-cs.v1.a1a0e3a3cf314be2eb5269334bd4401a18762fd702e2b100a4f61697a674f3af",AMAZON_REFRESH_TOKEN="Atzr|IwEBIBGvUBJYDy4z4OZJEU68Oqr2eNOrkyOmWyHjFcEW4C_lmmoKmqvy9wafePmmmDZJuMAvsQHDwt41G1vV3_C_0-9QtLxtMHDxQz46XtcnQvIJBY3HQOu9j2Z25NCO8gDcSJ88eAgNcno_GM97qDF6meQZWULUtSqDHVq7TgP00BHxeu3A6ibHRGFWCCe5vXq7w-CW4PIOB68wJJpXZwkb66P52hwfGPL4vDXuwm97mBxaNBCWGwrWBeAnoKismuP1yF9hqV3fVrwN16VKh-ddF1UpUec-u5uGkzsqxLJffmG2H-71_MMr89CAAlVwouWF2AbvPPxJloXc1Nen8t_pCWZB2vyGB7gki14_unEeoKlGofeXuj6jYYPs32RnPLLa6UwopjlNz-xk83r50sLUCrhJFkKfONmS6FnjFZ84GDa0O7vkSeOTEJRp7PeJNFnlznGI18vmonaH4REVqythHuwKwjbGUqc1j-ebGqslIv300PECZH3Ox54hQ4-EuQ4GYxMwpylwOV4LM77k1vRN3z54"
+  --set-secrets=AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest
 ```
 
-**Note**: Replace the environment variable values with your actual credentials.
+**Important**: 
+- ✅ Uses `--no-allow-unauthenticated` to prevent HTTP 429 rate limiting issues
+- ✅ Credentials stored securely in Secret Manager
+- ✅ Requires Cloud Scheduler authentication setup (see below)
 
-### Method 2: Deploy with Configuration File
+### Method 2: Deploy with Environment Variables (Development Only)
+
+**⚠️ Warning**: This method is less secure and should only be used for development/testing.
 
 ```bash
-# Create a config file with your settings
-cat > config.json <<EOF
-{
-  "amazon_api": {
-    "client_id": "YOUR_CLIENT_ID",
-    "client_secret": "YOUR_CLIENT_SECRET",
-    "refresh_token": "YOUR_REFRESH_TOKEN",
-    "profile_id": "YOUR_PROFILE_ID",
-    "region": "NA"
-  },
-  "optimization_rules": { ... }
-}
-EOF
-
-# Deploy with config as environment variable
-export PPC_CONFIG=$(cat config.json)
-
+# Deploy with environment variables
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
@@ -140,11 +152,15 @@ gcloud functions deploy amazon-ppc-optimizer \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
-  --allow-unauthenticated \
+  --no-allow-unauthenticated \
   --timeout=540s \
   --memory=512MB \
-  --set-env-vars PPC_CONFIG="$PPC_CONFIG"
+  --min-instances=0 \
+  --max-instances=1 \
+  --set-env-vars AMAZON_CLIENT_ID="YOUR_CLIENT_ID",AMAZON_CLIENT_SECRET="YOUR_CLIENT_SECRET",AMAZON_REFRESH_TOKEN="YOUR_REFRESH_TOKEN"
 ```
+
+**Note**: Even for development, use `--no-allow-unauthenticated` to avoid rate limiting issues.
 
 ### Deployment Parameters Explained
 
@@ -153,10 +169,12 @@ gcloud functions deploy amazon-ppc-optimizer \
 - `--region=us-central1`: Deployment region (change as needed)
 - `--entry-point=run_optimizer`: Function name to call
 - `--trigger-http`: HTTP trigger (for Cloud Scheduler)
+- `--no-allow-unauthenticated`: **CRITICAL** - Requires authentication, prevents HTTP 429 rate limiting
 - `--timeout=540s`: 9-minute timeout (optimizer may take several minutes)
 - `--memory=512MB`: Allocated memory
 - `--min-instances=0`: Scale to zero when not in use
 - `--max-instances=1`: Only one concurrent execution
+- `--set-secrets`: Mount secrets from Secret Manager (secure credential storage)
 
 ## Environment Variables
 
@@ -187,18 +205,36 @@ gcloud functions deploy amazon-ppc-optimizer \
 
 ## Scheduling
 
-### Set Up Cloud Scheduler
+### Set Up Service Account for Cloud Scheduler
 
-Run the optimizer automatically on a schedule:
+Create a service account with permission to invoke the function:
 
 ```bash
-# Create a Cloud Scheduler job (runs daily at 3 AM)
+# Create service account
+gcloud iam service-accounts create ppc-scheduler \
+  --display-name="PPC Optimizer Scheduler"
+
+# Grant the service account permission to invoke the function
+gcloud functions add-iam-policy-binding amazon-ppc-optimizer \
+  --region=us-central1 \
+  --member="serviceAccount:ppc-scheduler@YOUR-PROJECT.iam.gserviceaccount.com" \
+  --role="roles/cloudfunctions.invoker"
+```
+
+### Set Up Cloud Scheduler with Authentication
+
+Run the optimizer automatically on a schedule with proper authentication:
+
+```bash
+# Create a Cloud Scheduler job (runs daily at 3 AM) with authentication
 gcloud scheduler jobs create http amazon-ppc-optimizer-daily \
   --location=us-central1 \
   --schedule="0 3 * * *" \
   --uri="https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer" \
   --http-method=GET \
-  --time-zone="America/New_York"
+  --time-zone="America/New_York" \
+  --oidc-service-account-email="ppc-scheduler@YOUR-PROJECT.iam.gserviceaccount.com" \
+  --oidc-token-audience="https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer"
 
 # For dry-run mode (testing without changes)
 gcloud scheduler jobs create http amazon-ppc-optimizer-dryrun \
@@ -206,8 +242,12 @@ gcloud scheduler jobs create http amazon-ppc-optimizer-dryrun \
   --schedule="0 */4 * * *" \
   --uri="https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer?dry_run=true" \
   --http-method=GET \
-  --time-zone="America/New_York"
+  --time-zone="America/New_York" \
+  --oidc-service-account-email="ppc-scheduler@YOUR-PROJECT.iam.gserviceaccount.com" \
+  --oidc-token-audience="https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer"
 ```
+
+**Important**: The `--oidc-service-account-email` and `--oidc-token-audience` flags are required when the function uses `--no-allow-unauthenticated`.
 
 ### Schedule Examples
 
@@ -219,14 +259,65 @@ gcloud scheduler jobs create http amazon-ppc-optimizer-dryrun \
 ### Manually Trigger
 
 ```bash
-# Trigger the function manually
+# Trigger the function manually via Cloud Scheduler
 gcloud scheduler jobs run amazon-ppc-optimizer-daily --location=us-central1
 
-# Or via curl
-curl "https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer"
+# Or via authenticated curl (requires token)
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  "https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer"
 ```
 
+### Health Check Endpoint
+
+The function includes a lightweight health check endpoint for monitoring:
+
+```bash
+# Use health check (doesn't trigger optimization)
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  "https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer?health=true"
+
+# Response: {"status": "healthy", "service": "amazon-ppc-optimizer", "timestamp": "..."}
+```
+
+### Uptime Monitoring Best Practices
+
+To avoid HTTP 429 errors from uptime checks:
+
+1. **Use the health check endpoint**: Add `?health=true` to the URL
+2. **Reduce check frequency**: Set interval to 5-10 minutes (not every 5-6 seconds)
+3. **Configure authentication**: Ensure uptime checks use proper authentication
+4. **Disable unnecessary checks**: The function is triggered by Cloud Scheduler, not continuous traffic
+
+Example uptime check configuration:
+- **URL**: `https://YOUR-FUNCTION-URL?health=true`
+- **Interval**: 5 minutes
+- **Timeout**: 10 seconds
+- **Authentication**: Use service account with `roles/cloudfunctions.invoker`
+
 ## Monitoring
+
+### Configure Uptime Checks (Optional)
+
+If you want to monitor function availability, configure uptime checks properly:
+
+```bash
+# Create uptime check using health endpoint
+gcloud monitoring uptime create amazon-ppc-health \
+  --display-name="Amazon PPC Optimizer Health Check" \
+  --resource-type=uptime-url \
+  --timeout=10s \
+  --check-interval=5m \
+  --path="/?health=true" \
+  --matcher-content="healthy"
+```
+
+**Important Notes**:
+- Use `?health=true` parameter to avoid triggering optimization
+- Set check interval to 5+ minutes (NOT every 5-6 seconds)
+- Configure authentication if function uses `--no-allow-unauthenticated`
+- Frequent checks can cause HTTP 429 rate limiting
+
+**Alternative**: Since Cloud Scheduler triggers the function, you may not need uptime checks. Instead, monitor Cloud Scheduler job execution status.
 
 ### View Logs
 
@@ -239,6 +330,12 @@ gcloud functions logs read amazon-ppc-optimizer --follow
 
 # View logs in Cloud Console
 gcloud functions describe amazon-ppc-optimizer --gen2 --region=us-central1
+
+# Filter for errors
+gcloud functions logs read amazon-ppc-optimizer --limit=50 | grep ERROR
+
+# Check for rate limiting issues
+gcloud functions logs read amazon-ppc-optimizer --limit=50 | grep "429"
 ```
 
 ### Key Log Messages to Monitor
@@ -256,15 +353,71 @@ https://ppc-dashboard.abacusai.app
 
 ## Troubleshooting
 
+### HTTP 429 Rate Limiting Errors
+
+**Error**: "HTTP 429 Too Many Requests" or "Quota exceeded"
+
+**Root Causes**:
+1. Function deployed with `--allow-unauthenticated` flag
+2. Uptime checks hitting the function too frequently (every 5-6 seconds)
+3. No authentication protection, triggering rate limits before function executes
+4. Logs show 0ms duration and 14B response size
+
+**Solutions**:
+
+1. **Redeploy with authentication** (CRITICAL):
+   ```bash
+   gcloud functions deploy amazon-ppc-optimizer \
+     --gen2 \
+     --runtime=python311 \
+     --region=us-central1 \
+     --source=. \
+     --entry-point=run_optimizer \
+     --trigger-http \
+     --no-allow-unauthenticated \
+     --timeout=540s \
+     --memory=512MB \
+     --set-secrets=AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest
+   ```
+
+2. **Configure Cloud Scheduler with authentication**:
+   - Create service account: `ppc-scheduler`
+   - Grant invoker role to the service account
+   - Add `--oidc-service-account-email` to scheduler job
+
+3. **Update uptime checks**:
+   - Use health check endpoint: `?health=true`
+   - Reduce frequency to 5-10 minutes
+   - Configure proper authentication for checks
+
+4. **Verify the fix**:
+   ```bash
+   # Check recent logs - should show execution time > 0ms
+   gcloud functions logs read amazon-ppc-optimizer --limit=10
+   
+   # Successful requests will show:
+   # - "=== Amazon PPC Optimizer Started at ..."
+   # - Execution duration > 0ms
+   # - Response size > 14B
+   ```
+
 ### Authentication Errors
 
 **Error**: "Authentication failed"
 
 **Solutions**:
-1. Verify refresh_token is correct
+1. Verify refresh_token is correct in Secret Manager
 2. Check client_id and client_secret
 3. Ensure Amazon Ads API access is still active
 4. Token may have been revoked - regenerate in Amazon console
+5. Check Secret Manager IAM permissions
+
+**Error**: "Unauthorized" or "401 Forbidden"
+
+**Solutions**:
+1. Ensure Cloud Scheduler is using OIDC authentication
+2. Verify service account has `roles/cloudfunctions.invoker` role
+3. Check that `--oidc-token-audience` matches function URL
 
 ### Timeout Errors
 
@@ -361,10 +514,20 @@ Check logs for these messages:
 ## Security Best Practices
 
 1. **Never commit credentials** to Git
-2. **Use Secret Manager** for production (optional enhancement)
-3. **Rotate tokens** regularly
-4. **Monitor logs** for unauthorized access attempts
-5. **Restrict function access** (remove `--allow-unauthenticated` and use IAM)
+2. **Use Secret Manager** for production (REQUIRED - see deployment instructions)
+3. **Use `--no-allow-unauthenticated`** flag (prevents rate limiting and unauthorized access)
+4. **Configure Cloud Scheduler authentication** with OIDC service account
+5. **Rotate tokens** regularly
+6. **Monitor logs** for unauthorized access attempts
+7. **Use service accounts** with minimal required permissions
+8. **Audit IAM policies** regularly to ensure proper access control
+
+### Why Authentication Matters
+
+- **Prevents HTTP 429 errors**: Authenticated functions have higher rate limits
+- **Security**: Only authorized services can trigger the function
+- **Cost control**: Prevents abuse and unexpected charges
+- **Compliance**: Better audit trail for who/what triggered executions
 
 ## Next Steps
 

@@ -121,6 +121,38 @@ def update_dashboard(results, config):
         logger.error(f"Failed to update dashboard: {str(e)}")
 
 
+def is_valid_scheduler_request(request):
+    """
+    Validate that the request is from Cloud Scheduler
+    
+    Cloud Scheduler adds specific headers to requests:
+    - X-CloudScheduler: true
+    - X-CloudScheduler-JobName: job name
+    - User-Agent: Google-Cloud-Scheduler
+    
+    Args:
+        request: HTTP request object
+        
+    Returns:
+        bool: True if request is from Cloud Scheduler or health check
+    """
+    # Check for Cloud Scheduler headers
+    is_scheduler = (
+        request.headers.get('X-CloudScheduler') == 'true' or
+        request.headers.get('X-CloudScheduler-JobName') or
+        'Google-Cloud-Scheduler' in request.headers.get('User-Agent', '')
+    )
+    
+    if is_scheduler:
+        logger.info(f"Valid Cloud Scheduler request from job: {request.headers.get('X-CloudScheduler-JobName', 'unknown')}")
+        return True
+    
+    # Log unauthorized attempt
+    logger.warning(f"Unauthorized request attempt from {request.remote_addr}")
+    logger.warning(f"User-Agent: {request.headers.get('User-Agent', 'unknown')}")
+    return False
+
+
 @functions_framework.http
 def run_optimizer(request):
     """
@@ -129,12 +161,33 @@ def run_optimizer(request):
     The optimizer automatically refreshes the Amazon Advertising API access token
     before making API calls using the refresh_token stored in environment variables.
     
+    Includes:
+    - Health check endpoint for uptime monitoring
+    - Cloud Scheduler authentication validation
+    - Proper error handling for unauthorized requests
+    
     Args:
         request: HTTP request object (from Cloud Scheduler)
         
     Returns:
         Response object with execution results
     """
+    
+    # Health check endpoint - lightweight response for uptime monitoring
+    if request.path == '/health' or request.args.get('health') == 'true':
+        logger.info("Health check request received")
+        return {
+            'status': 'healthy',
+            'service': 'amazon-ppc-optimizer',
+            'timestamp': datetime.now().isoformat()
+        }, 200
+    
+    # Validate Cloud Scheduler request
+    if not is_valid_scheduler_request(request):
+        return {
+            'error': 'Unauthorized',
+            'message': 'This function must be called by Cloud Scheduler'
+        }, 401
     
     start_time = datetime.now()
     logger.info(f"=== Amazon PPC Optimizer Started at {start_time} ===")
