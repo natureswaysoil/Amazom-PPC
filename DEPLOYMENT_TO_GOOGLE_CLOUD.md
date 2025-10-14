@@ -132,6 +132,13 @@ gcloud functions deploy amazon-ppc-optimizer \
 - `--memory=512MB`: Memory allocation (adjust based on needs)
 - `--timeout=540s`: Maximum execution time (9 minutes)
 
+> **Important**: Gen2 Cloud Functions use Cloud Run URLs (format: `https://FUNCTION_NAME-HASH-REGION.a.run.app`).
+> The URL is NOT in the Gen1 format `https://REGION-PROJECT.cloudfunctions.net/FUNCTION_NAME`.
+> After deployment, retrieve the actual URL with:
+> ```bash
+> gcloud functions describe amazon-ppc-optimizer --region=us-central1 --gen2 --format='value(serviceConfig.uri)'
+> ```
+
 ## Step 5: Set Up Cloud Scheduler
 
 Create a scheduled job to run the optimizer periodically:
@@ -170,7 +177,9 @@ gcloud scheduler jobs create http ppc-optimizer-daily \
 
 ## Step 6: Verify Deployment
 
-### Test the Health Check
+### Get the Function URL
+
+Gen2 Cloud Functions use Cloud Run URLs. Get your function's URL:
 
 ```bash
 # Get the function URL
@@ -179,6 +188,15 @@ FUNCTION_URL=$(gcloud functions describe amazon-ppc-optimizer \
   --gen2 \
   --format='value(serviceConfig.uri)')
 
+echo "Function URL: ${FUNCTION_URL}"
+# Example output: https://amazon-ppc-optimizer-abc123xyz-uc.a.run.app
+```
+
+> **Note**: The URL will be in the format `https://amazon-ppc-optimizer-HASH-uc.a.run.app`, NOT `https://us-central1-amazon-ppc-474902.cloudfunctions.net/amazon-ppc-optimizer`.
+
+### Test the Health Check
+
+```bash
 # Test health check endpoint
 curl "${FUNCTION_URL}?health=true" \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)"
