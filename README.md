@@ -122,6 +122,77 @@ Dashboard receives:
 - Performance metrics
 - Execution status
 
+## 🏥 Automated Health Check Workflow
+
+The repository includes an automated health check workflow (`.github/workflows/health-check.yml`) that runs after each deployment to ensure the Cloud Function is healthy and ready to use.
+
+### How It Works
+
+1. **Triggered automatically** after the "Deploy to Google Cloud" workflow completes
+   - Note: If you haven't set up a deployment workflow yet, you can still manually trigger this workflow
+   - Or create a deployment workflow named "Deploy to Google Cloud" to enable automatic triggering
+2. **Runs health check** by calling the health endpoint: `https://amazon-ppc-optimizer-nucguq3dba-uc.a.run.app/?health=true`
+3. **Sends email notification** to natureswaysoil@gmail.com with results
+4. **Posts to dashboard** (optional) for visual monitoring
+
+### Configure Email Notifications
+
+To enable email notifications, add these GitHub Secrets:
+
+1. Go to your repository: **Settings** → **Secrets and variables** → **Actions**
+2. Click **New repository secret** and add:
+
+| Secret Name | Description | How to Get |
+|------------|-------------|------------|
+| `GMAIL_USER` | Your Gmail address | e.g., `natureswaysoil@gmail.com` |
+| `GMAIL_PASS` | Gmail App Password | See below ⬇️ |
+
+#### Getting a Gmail App Password
+
+1. Go to [Google Account App Passwords](https://myaccount.google.com/apppasswords)
+2. Sign in to your Gmail account
+3. Create a new app password:
+   - App: **Other (Custom name)**
+   - Name: **GitHub Actions**
+4. Copy the 16-character password
+5. Add it as the `GMAIL_PASS` secret in GitHub
+
+**Important**: Use an App Password, NOT your regular Gmail password! App passwords are more secure and can be revoked without changing your main password.
+
+### Configure Dashboard Integration (Optional)
+
+To enable dashboard API integration, add these GitHub Secrets:
+
+| Secret Name | Description | Example |
+|------------|-------------|---------|
+| `DASHBOARD_API_ENDPOINT` | Dashboard API URL | `https://ppc-dashboard.abacusai.app/api/health-check` |
+| `DASHBOARD_API_KEY` | Authentication token | Your dashboard API key |
+
+The workflow will automatically post health check results to the dashboard if these secrets are configured. If not configured, the workflow will still complete successfully - dashboard integration is optional.
+
+### Manual Testing
+
+You can manually trigger the health check workflow:
+
+1. Go to **Actions** tab in GitHub
+2. Select **Health Check and Notifications** workflow
+3. Click **Run workflow**
+4. Select the branch and click **Run workflow**
+
+### What Gets Sent
+
+**Email includes**:
+- ✅ Health check status (PASSED/FAILED)
+- HTTP response code and body
+- Deployment details (commit, branch, timestamp)
+- Cloud Function URL
+- Links to logs and dashboard
+
+**Dashboard receives** (if configured):
+- Health check status and timestamp
+- Deployment information
+- Cloud Function endpoint details
+
 ## 🧪 Testing
 
 ### Local Testing
