@@ -402,6 +402,13 @@ if __name__ == "__main__":
     class MockRequest:
         def __init__(self):
             self.args = {'dry_run': 'true'}
+            self.path = '/'
+            self.headers = {
+                'X-CloudScheduler': 'true',
+                'X-CloudScheduler-JobName': 'local-test',
+                'User-Agent': 'Google-Cloud-Scheduler'
+            }
+            self.remote_addr = '127.0.0.1'
     
     result, status = run_optimizer(MockRequest())
     print(f"Status: {status}")
