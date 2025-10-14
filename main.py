@@ -12,43 +12,113 @@ import os
 import sys
 import traceback
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
+from typing import Dict, Optional, Tuple, Any
 import functions_framework
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import requests
+import yaml
 
 # Add parent directory to path to import optimizer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Configure logging for Cloud Functions
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Detect if running in Cloud Functions environment
+IS_CLOUD_FUNCTION = os.getenv('K_SERVICE') is not None or os.getenv('FUNCTION_TARGET') is not None
+
+if IS_CLOUD_FUNCTION:
+    # Use only StreamHandler for Cloud Functions (logs go to Cloud Logging)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+else:
+    # For local development, use both console and file logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(f'ppc_main_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+        ]
+    )
+
 logger = logging.getLogger(__name__)
 
 
-def create_config_file(config_dict):
+@contextmanager
+def create_config_file(config_dict: Dict) -> str:
     """
-    Create a temporary config file from dictionary
-    The optimizer_core expects a file path, so we create a temp file
+    Create a temporary config file from dictionary using context manager
+    The optimizer_core expects YAML format file, so we ensure consistent format handling
+    
+    Args:
+        config_dict: Configuration dictionary (from JSON or other source)
+        
+    Yields:
+        Path to temporary YAML config file
+        
+    Raises:
+        ValueError: If config_dict is invalid
+        IOError: If file creation fails
     """
-    import yaml
-    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
-    yaml.dump(config_dict, temp_file)
-    temp_file.close()
-    return temp_file.name
+    if not isinstance(config_dict, dict):
+        raise ValueError("config_dict must be a dictionary")
+    
+    temp_file = None
+    try:
+        # Create temp file with YAML format (optimizer_core expects YAML)
+        temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8')
+        yaml.dump(config_dict, temp_file, default_flow_style=False, allow_unicode=True)
+        temp_file.close()
+        logger.info(f"Created temporary config file: {temp_file.name}")
+        yield temp_file.name
+    except Exception as e:
+        logger.error(f"Failed to create config file: {e}")
+        if temp_file and os.path.exists(temp_file.name):
+            try:
+                os.unlink(temp_file.name)
+            except Exception as cleanup_err:
+                logger.warning(f"Failed to cleanup temp file: {cleanup_err}")
+        raise
+    finally:
+        # Cleanup temp file
+        if temp_file and os.path.exists(temp_file.name):
+            try:
+                os.unlink(temp_file.name)
+                logger.debug(f"Cleaned up temporary config file: {temp_file.name}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp file {temp_file.name}: {e}")
 
 
-def send_email_notification(subject, body, config):
-    """Send email notification via SMTP"""
+def send_email_notification(subject: str, body: str, config: Dict) -> bool:
+    """
+    Send email notification via SMTP with retry logic
+    
+    Args:
+        subject: Email subject line
+        body: Plain text email body
+        config: Configuration dictionary containing email settings
+        
+    Returns:
+        True if email sent successfully, False otherwise
+    """
     try:
         email_config = config.get('email_notifications', {})
         if not email_config.get('enabled', False):
             logger.info("Email notifications disabled")
-            return
+            return True
+        
+        # Validate required email config fields
+        required_fields = ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'from_email', 'to_email']
+        missing_fields = [field for field in required_fields if not email_config.get(field)]
+        if missing_fields:
+            logger.error(f"Missing required email configuration fields: {', '.join(missing_fields)}")
+            return False
         
         msg = MIMEMultipart('alternative')
         msg['Subject'] = subject
@@ -56,6 +126,7 @@ def send_email_notification(subject, body, config):
         msg['To'] = email_config['to_email']
         
         # Create HTML version
+        dashboard_url = config.get('dashboard', {}).get('url', '#')
         html_body = f"""
         <html>
         <head></head>
@@ -67,7 +138,7 @@ def send_email_notification(subject, body, config):
             <hr>
             <p style="color: #666; font-size: 12px;">
                 Generated by Amazon PPC Optimizer on Google Cloud Functions<br>
-                Dashboard: <a href="{config.get('dashboard', {}).get('url', '#')}">View Dashboard</a>
+                Dashboard: <a href="{dashboard_url}">View Dashboard</a>
             </p>
         </body>
         </html>
@@ -76,25 +147,52 @@ def send_email_notification(subject, body, config):
         msg.attach(MIMEText(body, 'plain'))
         msg.attach(MIMEText(html_body, 'html'))
         
-        # Send via SMTP
-        with smtplib.SMTP(email_config['smtp_host'], email_config['smtp_port']) as server:
-            server.starttls()
-            server.login(email_config['smtp_user'], email_config['smtp_password'])
-            server.send_message(msg)
+        # Send via SMTP with retry logic
+        max_retries = 3
+        retry_delay = 2
         
-        logger.info(f"Email notification sent to {email_config['to_email']}")
+        for attempt in range(max_retries):
+            try:
+                with smtplib.SMTP(email_config['smtp_host'], int(email_config['smtp_port']), timeout=30) as server:
+                    server.starttls()
+                    server.login(email_config['smtp_user'], email_config['smtp_password'])
+                    server.send_message(msg)
+                
+                logger.info(f"Email notification sent to {email_config['to_email']}")
+                return True
+                
+            except (smtplib.SMTPException, OSError) as smtp_err:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Email send attempt {attempt + 1}/{max_retries} failed: {smtp_err}. Retrying...")
+                    import time
+                    time.sleep(retry_delay * (attempt + 1))
+                else:
+                    logger.error(f"Failed to send email after {max_retries} attempts: {smtp_err}")
+                    return False
+        
+        return False
         
     except Exception as e:
-        logger.error(f"Failed to send email: {str(e)}")
+        logger.error(f"Failed to send email notification: {str(e)}")
+        return False
 
 
-def update_dashboard(results, config):
-    """Send optimization results to the dashboard"""
+def update_dashboard(results: Dict, config: Dict) -> bool:
+    """
+    Send optimization results to the dashboard
+    
+    Args:
+        results: Optimization results dictionary
+        config: Configuration dictionary containing dashboard settings
+        
+    Returns:
+        True if dashboard updated successfully, False otherwise
+    """
     try:
-        dashboard_url = config.get('dashboard', {}).get('url')
+        dashboard_url = config.get('dashboard', {}).get('url', None)
         if not dashboard_url:
-            logger.warning("Dashboard URL not configured")
-            return
+            logger.warning("Dashboard URL not configured, skipping dashboard update")
+            return True
         
         # Send POST request to dashboard API endpoint
         api_endpoint = f"{dashboard_url}/api/optimization-results"
@@ -114,15 +212,18 @@ def update_dashboard(results, config):
         
         if response.status_code == 200:
             logger.info("Dashboard updated successfully")
+            return True
         else:
             logger.warning(f"Dashboard update returned status {response.status_code}")
+            return False
             
     except Exception as e:
         logger.error(f"Failed to update dashboard: {str(e)}")
+        return False
 
 
 @functions_framework.http
-def run_optimizer(request):
+def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     """
     Cloud Function entry point - triggered by Cloud Scheduler
     
@@ -133,13 +234,11 @@ def run_optimizer(request):
         request: HTTP request object (from Cloud Scheduler)
         
     Returns:
-        Response object with execution results
+        Tuple of (response dictionary, HTTP status code)
     """
     
     start_time = datetime.now()
     logger.info(f"=== Amazon PPC Optimizer Started at {start_time} ===")
-    
-    config_file_path = None
     
     try:
         # Load configuration from environment or file
@@ -155,28 +254,29 @@ def run_optimizer(request):
         # Check if this is a dry run
         dry_run = request.args.get('dry_run', 'false').lower() == 'true'
         
-        # Create temporary config file for optimizer
-        config_file_path = create_config_file(config)
-        
-        # Get profile ID
-        profile_id = config.get('amazon_api', {}).get('profile_id')
-        
-        # Initialize optimizer
-        logger.info("Initializing optimizer...")
-        
-        # Import here to ensure environment variables are set first
-        from optimizer_core import PPCAutomation
-        
-        optimizer = PPCAutomation(
-            config_path=config_file_path,
-            profile_id=profile_id,
-            dry_run=dry_run
-        )
-        
-        # Run optimization
-        # The optimizer will automatically refresh the access token if needed
-        logger.info("Running optimization (token refresh handled automatically)...")
-        results = optimizer.run()
+        # Use context manager for temp config file (ensures cleanup)
+        with create_config_file(config) as config_file_path:
+            # Get profile ID with default value
+            profile_id = config.get('amazon_api', {}).get('profile_id', '')
+            if not profile_id:
+                raise ValueError("profile_id is required in amazon_api configuration")
+            
+            # Initialize optimizer
+            logger.info("Initializing optimizer...")
+            
+            # Import here to ensure environment variables are set first
+            from optimizer_core import PPCAutomation
+            
+            optimizer = PPCAutomation(
+                config_path=config_file_path,
+                profile_id=profile_id,
+                dry_run=dry_run
+            )
+            
+            # Run optimization
+            # The optimizer will automatically refresh the access token if needed
+            logger.info("Running optimization (token refresh handled automatically)...")
+            results = optimizer.run()
         
         # Update dashboard
         logger.info("Updating dashboard...")
@@ -227,47 +327,66 @@ Stack Trace:
 Please check the Cloud Functions logs for more details.
                 """
                 send_email_notification(subject, body, config)
-        except:
-            pass
+        except Exception as notification_err:
+            logger.warning(f"Failed to send error notification: {notification_err}")
         
         return {
             'status': 'error',
             'message': error_msg,
             'timestamp': datetime.now().isoformat()
         }, 500
+
+
+def load_config() -> Dict[str, Any]:
+    """
+    Load configuration from environment variables or config file
     
-    finally:
-        # Clean up temp config file
-        if config_file_path and os.path.exists(config_file_path):
-            try:
-                os.unlink(config_file_path)
-            except:
-                pass
-
-
-def load_config():
-    """Load configuration from environment variables or config file"""
+    Returns:
+        Configuration dictionary loaded from JSON
+        
+    Raises:
+        ValueError: If no valid configuration is found
+        json.JSONDecodeError: If JSON parsing fails
+    """
     
     # Check if config is in environment variable (recommended for Cloud Functions)
-    config_json = os.environ.get('PPC_CONFIG')
+    config_json = os.environ.get('PPC_CONFIG', None)
     if config_json:
         logger.info("Loading config from environment variable")
-        return json.loads(config_json)
+        try:
+            config = json.loads(config_json)
+            logger.info("Configuration successfully loaded from environment variable")
+            return config
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse PPC_CONFIG JSON: {e}")
+            raise ValueError(f"Invalid JSON in PPC_CONFIG environment variable: {e}")
     
     # Fall back to config.json file
     config_file = os.path.join(os.path.dirname(__file__), 'config.json')
     if os.path.exists(config_file):
         logger.info(f"Loading config from {config_file}")
-        with open(config_file, 'r') as f:
-            return json.load(f)
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            logger.info(f"Configuration successfully loaded from {config_file}")
+            return config
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse config.json: {e}")
+            raise ValueError(f"Invalid JSON in config.json: {e}")
+        except IOError as e:
+            logger.error(f"Failed to read config.json: {e}")
+            raise ValueError(f"Failed to read config.json: {e}")
     
     raise ValueError("No configuration found. Set PPC_CONFIG environment variable or provide config.json")
 
 
-def set_environment_variables(config):
+def set_environment_variables(config: Dict[str, Any]) -> None:
     """
     Set environment variables from config for the optimizer
     The optimizer_core reads these environment variables for API authentication
+    
+    Args:
+        config: Configuration dictionary
     """
     amazon_api = config.get('amazon_api', {})
     
@@ -279,12 +398,20 @@ def set_environment_variables(config):
     logger.info("Environment variables set for optimizer")
 
 
-def validate_credentials(config):
-    """Validate required API credentials are present"""
+def validate_credentials(config: Dict[str, Any]) -> None:
+    """
+    Validate required API credentials are present
+    
+    Args:
+        config: Configuration dictionary
+        
+    Raises:
+        ValueError: If required credentials are missing
+    """
     required_fields = ['client_id', 'client_secret', 'refresh_token', 'profile_id']
     amazon_api = config.get('amazon_api', {})
     
-    missing = [field for field in required_fields if not amazon_api.get(field)]
+    missing = [field for field in required_fields if not amazon_api.get(field, '').strip()]
     
     if missing:
         raise ValueError(f"Missing required API credentials: {', '.join(missing)}")
@@ -292,8 +419,18 @@ def validate_credentials(config):
     logger.info("✓ All required credentials present")
 
 
-def format_results_summary(results, duration, dry_run):
-    """Format optimization results into email-friendly summary"""
+def format_results_summary(results: Dict[str, Any], duration: float, dry_run: bool) -> str:
+    """
+    Format optimization results into email-friendly summary
+    
+    Args:
+        results: Optimization results dictionary
+        duration: Execution duration in seconds
+        dry_run: Whether this was a dry run
+        
+    Returns:
+        Formatted summary string
+    """
     
     summary_lines = [
         f"Amazon PPC Optimization Report",
@@ -310,7 +447,7 @@ def format_results_summary(results, duration, dry_run):
     # Add key metrics
     if isinstance(results, dict):
         if 'summary' in results:
-            summary = results['summary']
+            summary = results.get('summary', {})
             summary_lines.extend([
                 f"Campaigns Analyzed: {summary.get('campaigns_analyzed', 0)}",
                 f"Keywords Optimized: {summary.get('keywords_optimized', 0)}",
@@ -323,14 +460,16 @@ def format_results_summary(results, duration, dry_run):
         # Add performance highlights
         if 'highlights' in results:
             summary_lines.append("Performance Highlights:")
-            for highlight in results['highlights']:
+            highlights = results.get('highlights', [])
+            for highlight in highlights:
                 summary_lines.append(f"  • {highlight}")
             summary_lines.append("")
         
         # Add recommendations
         if 'recommendations' in results:
             summary_lines.append("Recommendations:")
-            for rec in results['recommendations']:
+            recommendations = results.get('recommendations', [])
+            for rec in recommendations:
                 summary_lines.append(f"  • {rec}")
             summary_lines.append("")
     
