@@ -214,6 +214,30 @@ class RateLimiter:
 
 
 # ============================================================================
+# PERFORMANCE TIMING DECORATOR
+# ============================================================================
+
+def timing_logger(operation_name: str = None):
+    """Decorator to log execution time of operations"""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            op_name = operation_name or func.__name__
+            start_time = time.time()
+            logger.info(f"Starting {op_name}...")
+            try:
+                result = func(*args, **kwargs)
+                elapsed = time.time() - start_time
+                logger.info(f"✓ {op_name} completed in {elapsed:.2f}s")
+                return result
+            except Exception as e:
+                elapsed = time.time() - start_time
+                logger.error(f"✗ {op_name} failed after {elapsed:.2f}s: {e}")
+                raise
+        return wrapper
+    return decorator
+
+
+# ============================================================================
 # CONFIGURATION LOADER
 # ============================================================================
 
@@ -909,7 +933,8 @@ class BidOptimizer:
         self.audit = audit_logger
     
     def optimize(self, dry_run: bool = False) -> Dict:
-        """Run bid optimization"""
+        """Run bid optimization with performance timing"""
+        start_time = time.time()
         logger.info("=== Starting Bid Optimization ===")
         
         results = {
@@ -1006,7 +1031,9 @@ class BidOptimizer:
             batch_results = self.api.batch_update_keywords(keyword_updates)
             logger.info(f"Batch update results: {batch_results}")
         
-        logger.info(f"Bid optimization complete: {results}")
+        elapsed = time.time() - start_time
+        logger.info(f"Bid optimization complete in {elapsed:.2f}s: {results}")
+        results['execution_time_seconds'] = round(elapsed, 2)
         return results
     
     def _calculate_new_bid(self, keyword: Keyword, metrics: PerformanceMetrics) -> Optional[float]:
@@ -1173,7 +1200,8 @@ class CampaignManager:
         self.audit = audit_logger
     
     def manage_campaigns(self, dry_run: bool = False) -> Dict:
-        """Activate/deactivate campaigns based on ACOS"""
+        """Activate/deactivate campaigns based on ACOS with performance timing"""
+        start_time = time.time()
         logger.info("=== Managing Campaigns ===")
         
         results = {
@@ -1261,7 +1289,9 @@ class CampaignManager:
             else:
                 results['no_change'] += 1
         
-        logger.info(f"Campaign management complete: {results}")
+        elapsed = time.time() - start_time
+        logger.info(f"Campaign management complete in {elapsed:.2f}s: {results}")
+        results['execution_time_seconds'] = round(elapsed, 2)
         return results
 
 
@@ -1274,7 +1304,8 @@ class KeywordDiscovery:
         self.audit = audit_logger
     
     def discover_keywords(self, dry_run: bool = False) -> Dict:
-        """Discover and add new keywords"""
+        """Discover and add new keywords with performance timing"""
+        start_time = time.time()
         logger.info("=== Discovering Keywords ===")
         
         results = {
@@ -1302,10 +1333,22 @@ class KeywordDiscovery:
         
         # Get existing keywords to avoid duplicates
         existing_keywords = self.api.get_keywords()
-        existing_keyword_texts = {
+        
+        # Use frozenset for immutable data (good for lookups)
+        existing_keyword_texts = frozenset(
             (kw.ad_group_id, kw.keyword_text.lower(), kw.match_type) 
             for kw in existing_keywords
-        }
+        )
+        
+        # Create keyword_id index for faster lookups
+        keyword_by_id = {kw.keyword_id: kw for kw in existing_keywords}
+        
+        # Create campaign_id index for faster filtering
+        keywords_by_campaign = defaultdict(list)
+        for kw in existing_keywords:
+            keywords_by_campaign[kw.campaign_id].append(kw)
+        
+        logger.debug(f"Indexed {len(existing_keywords)} keywords across {len(keywords_by_campaign)} campaigns")
         
         # Analyze search terms
         min_clicks = self.config.get('keyword_discovery.min_clicks', 5)
@@ -1372,7 +1415,9 @@ class KeywordDiscovery:
         elif dry_run:
             results['keywords_added'] = len(new_keywords_to_add)
         
-        logger.info(f"Keyword discovery complete: {results}")
+        elapsed = time.time() - start_time
+        logger.info(f"Keyword discovery complete in {elapsed:.2f}s: {results}")
+        results['execution_time_seconds'] = round(elapsed, 2)
         return results
 
 
