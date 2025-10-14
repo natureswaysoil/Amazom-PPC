@@ -74,7 +74,15 @@ gcloud functions deploy amazon-ppc-optimizer \
   --timeout=540s \
   --memory=512MB \
   --set-secrets=AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest
+
+# Get the deployed function URL (Gen2 uses Cloud Run URLs)
+gcloud functions describe amazon-ppc-optimizer \
+  --region=us-central1 \
+  --gen2 \
+  --format='value(serviceConfig.uri)'
 ```
+
+> **Note**: Gen2 Cloud Functions use Cloud Run URLs (format: `https://FUNCTION_NAME-HASH-REGION.a.run.app`), not the older Gen1 format (`https://REGION-PROJECT.cloudfunctions.net/FUNCTION_NAME`).
 
 **Important Security Notes:**
 - ✅ **DO** use `--no-allow-unauthenticated` for production

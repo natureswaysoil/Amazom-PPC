@@ -68,7 +68,7 @@ else
     exit 1
 fi
 
-# Get function URL
+# Get function URL (Gen2 functions use Cloud Run URLs)
 echo ""
 echo "🔗 Getting function URL..."
 FUNCTION_URL=$(gcloud functions describe "$FUNCTION_NAME" \
@@ -77,6 +77,7 @@ FUNCTION_URL=$(gcloud functions describe "$FUNCTION_NAME" \
     --format='value(serviceConfig.uri)')
 
 echo "   Function URL: $FUNCTION_URL"
+echo "   Note: Gen2 uses Cloud Run URL format (https://FUNCTION-HASH-REGION.a.run.app)"
 
 # Create service account if it doesn't exist
 echo ""
