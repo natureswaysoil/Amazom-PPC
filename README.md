@@ -121,6 +121,8 @@ The repository includes an automated health check workflow (`.github/workflows/h
 ### How It Works
 
 1. **Triggered automatically** after the "Deploy to Google Cloud" workflow completes
+   - Note: If you haven't set up a deployment workflow yet, you can still manually trigger this workflow
+   - Or create a deployment workflow named "Deploy to Google Cloud" to enable automatic triggering
 2. **Runs health check** by calling the health endpoint: `https://amazon-ppc-optimizer-nucguq3dba-uc.a.run.app/?health=true`
 3. **Sends email notification** to natureswaysoil@gmail.com with results
 4. **Posts to dashboard** (optional) for visual monitoring
