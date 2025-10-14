@@ -88,37 +88,42 @@ def send_email_notification(subject, body, config):
         logger.error(f"Failed to send email: {str(e)}")
 
 
-def update_dashboard(results, config):
-    """Send optimization results to the dashboard"""
+def update_dashboard(results, config, duration_seconds=0.0, dry_run=False, dashboard_client=None):
+    """
+    Send optimization results to the dashboard
+    
+    Args:
+        results: Optimization results
+        config: Configuration dictionary
+        duration_seconds: Duration of optimization run
+        dry_run: Whether this was a dry run
+        dashboard_client: Optional DashboardClient instance (will create if not provided)
+    """
     try:
-        dashboard_url = config.get('dashboard', {}).get('url')
-        if not dashboard_url:
-            logger.warning("Dashboard URL not configured")
-            return
+        # Import dashboard client
+        from dashboard_client import DashboardClient
         
-        # Send POST request to dashboard API endpoint
-        api_endpoint = f"{dashboard_url}/api/optimization-results"
+        # Use provided client or create new one
+        if dashboard_client is None:
+            dashboard_client = DashboardClient(config)
         
-        payload = {
-            'timestamp': datetime.now().isoformat(),
-            'results': results,
-            'status': 'success'
-        }
-        
-        response = requests.post(
-            api_endpoint,
-            json=payload,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
+        # Send results with enhanced payload
+        success = dashboard_client.send_results(
+            results=results,
+            config=config,
+            duration_seconds=duration_seconds,
+            dry_run=dry_run
         )
         
-        if response.status_code == 200:
-            logger.info("Dashboard updated successfully")
+        if success:
+            logger.info("Dashboard updated successfully with enhanced payload")
         else:
-            logger.warning(f"Dashboard update returned status {response.status_code}")
+            logger.warning("Dashboard update did not complete successfully")
             
     except Exception as e:
+        # Dashboard errors should not stop optimization
         logger.error(f"Failed to update dashboard: {str(e)}")
+        logger.debug("Optimization will continue despite dashboard error")
 
 
 def is_valid_scheduler_request(request):
@@ -153,10 +158,46 @@ def is_valid_scheduler_request(request):
     return False
 
 
+def is_valid_dashboard_request(request):
+    """
+    Validate that the request is from the dashboard
+    
+    Args:
+        request: HTTP request object
+        
+    Returns:
+        bool: True if request has valid dashboard API key
+    """
+    try:
+        config = load_config()
+        expected_api_key = config.get('dashboard', {}).get('api_key', '')
+        
+        # If no API key configured, allow for backward compatibility
+        if not expected_api_key:
+            logger.warning("Dashboard API key not configured - allowing request")
+            return True
+        
+        # Check Authorization header
+        auth_header = request.headers.get('Authorization', '')
+        
+        if auth_header.startswith('Bearer '):
+            provided_key = auth_header[7:]  # Remove 'Bearer ' prefix
+            if provided_key == expected_api_key:
+                logger.info("Valid dashboard API key")
+                return True
+        
+        logger.warning("Invalid or missing dashboard API key")
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error validating dashboard request: {e}")
+        return False
+
+
 @functions_framework.http
 def run_optimizer(request):
     """
-    Cloud Function entry point - triggered by Cloud Scheduler
+    Cloud Function entry point - triggered by Cloud Scheduler or Dashboard
     
     The optimizer automatically refreshes the Amazon Advertising API access token
     before making API calls using the refresh_token stored in environment variables.
@@ -164,10 +205,11 @@ def run_optimizer(request):
     Includes:
     - Health check endpoint for uptime monitoring
     - Cloud Scheduler authentication validation
+    - Dashboard trigger support with API key authentication
     - Proper error handling for unauthorized requests
     
     Args:
-        request: HTTP request object (from Cloud Scheduler)
+        request: HTTP request object (from Cloud Scheduler or Dashboard)
         
     Returns:
         Response object with execution results
@@ -179,24 +221,42 @@ def run_optimizer(request):
         return {
             'status': 'healthy',
             'service': 'amazon-ppc-optimizer',
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'version': '2.0.0'
         }, 200
     
-    # Validate Cloud Scheduler request
-    if not is_valid_scheduler_request(request):
-        return {
-            'error': 'Unauthorized',
-            'message': 'This function must be called by Cloud Scheduler'
-        }, 401
+    # Check if this is a dashboard trigger request
+    is_dashboard_trigger = request.args.get('trigger') == 'dashboard' or request.path == '/trigger'
+    
+    if is_dashboard_trigger:
+        # Validate dashboard API key
+        if not is_valid_dashboard_request(request):
+            return {
+                'error': 'Unauthorized',
+                'message': 'Valid dashboard API key required'
+            }, 401
+        logger.info("Optimization triggered by dashboard")
+    else:
+        # Validate Cloud Scheduler request
+        if not is_valid_scheduler_request(request):
+            return {
+                'error': 'Unauthorized',
+                'message': 'This function must be called by Cloud Scheduler or Dashboard'
+            }, 401
     
     start_time = datetime.now()
     logger.info(f"=== Amazon PPC Optimizer Started at {start_time} ===")
     
     config_file_path = None
+    dashboard_client = None
     
     try:
         # Load configuration from environment or file
         config = load_config()
+        
+        # Initialize dashboard client early for progress updates
+        from dashboard_client import DashboardClient
+        dashboard_client = DashboardClient(config)
         
         # Set environment variables for the optimizer
         # The optimizer reads credentials from environment variables
@@ -207,6 +267,13 @@ def run_optimizer(request):
         
         # Check if this is a dry run
         dry_run = request.args.get('dry_run', 'false').lower() == 'true'
+        
+        # Start optimization run and get run ID
+        run_id = dashboard_client.start_run(dry_run=dry_run)
+        logger.info(f"Starting optimization run: {run_id}")
+        
+        # Send progress: Initialization
+        dashboard_client.send_progress("Initializing optimizer...", 10.0)
         
         # Create temporary config file for optimizer
         config_file_path = create_config_file(config)
@@ -226,20 +293,29 @@ def run_optimizer(request):
             dry_run=dry_run
         )
         
+        # Send progress: Starting optimization
+        dashboard_client.send_progress("Starting optimization...", 20.0)
+        
         # Run optimization
         # The optimizer will automatically refresh the access token if needed
         logger.info("Running optimization (token refresh handled automatically)...")
         results = optimizer.run()
         
-        # Update dashboard
-        logger.info("Updating dashboard...")
-        update_dashboard(results, config)
+        # Send progress: Processing results
+        dashboard_client.send_progress("Processing optimization results...", 90.0)
         
-        # Prepare summary
+        # Update dashboard with final results
+        logger.info("Updating dashboard with results...")
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         
+        update_dashboard(results, config, duration, dry_run, dashboard_client)
+        
+        # Prepare summary
         summary = format_results_summary(results, duration, dry_run)
+        
+        # Send progress: Complete
+        dashboard_client.send_progress("Optimization completed successfully", 100.0)
         
         # Send email notification
         if config.get('email_notifications', {}).get('send_on_completion', True):
@@ -253,7 +329,8 @@ def run_optimizer(request):
             'message': 'Optimization completed successfully',
             'results': results,
             'duration_seconds': duration,
-            'dry_run': dry_run
+            'dry_run': dry_run,
+            'run_id': run_id
         }, 200
         
     except Exception as e:
@@ -261,6 +338,18 @@ def run_optimizer(request):
         error_trace = traceback.format_exc()
         logger.error(f"Optimization failed: {error_msg}")
         logger.error(error_trace)
+        
+        # Report error to dashboard
+        if dashboard_client:
+            try:
+                context = {
+                    'timestamp': datetime.now().isoformat(),
+                    'function': 'run_optimizer',
+                    'dry_run': request.args.get('dry_run', 'false').lower() == 'true'
+                }
+                dashboard_client.send_error(e, context)
+            except Exception as dashboard_error:
+                logger.error(f"Failed to report error to dashboard: {dashboard_error}")
         
         # Send error notification
         try:
