@@ -107,13 +107,22 @@ gcloud functions deploy amazon-ppc-optimizer \
 Schedule automatic runs:
 
 ```bash
+# First, get the actual Gen2 function URL
+FUNCTION_URL=$(gcloud functions describe amazon-ppc-optimizer \
+  --region=us-central1 \
+  --gen2 \
+  --format='value(serviceConfig.uri)')
+
+# Create scheduler job with the actual URL
 gcloud scheduler jobs create http amazon-ppc-optimizer-daily \
   --location=us-central1 \
   --schedule="0 3 * * *" \
-  --uri="https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer" \
+  --uri="${FUNCTION_URL}" \
   --http-method=GET \
   --time-zone="America/New_York"
 ```
+
+> **Note**: Gen2 Cloud Functions use Cloud Run URLs (e.g., `https://amazon-ppc-optimizer-HASH-uc.a.run.app`), not the Gen1 format (`https://REGION-PROJECT.cloudfunctions.net/FUNCTION_NAME`).
 
 ### 4. Test the Deployment
 
