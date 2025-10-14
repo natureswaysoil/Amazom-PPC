@@ -89,7 +89,7 @@ def send_email_notification(subject, body, config):
 
 
 def update_dashboard(results, config):
-    """Send optimization results to the dashboard"""
+    """Send optimization results to the dashboard with retry logic and exponential backoff"""
     try:
         dashboard_url = config.get('dashboard', {}).get('url')
         if not dashboard_url:
@@ -105,17 +105,48 @@ def update_dashboard(results, config):
             'status': 'success'
         }
         
-        response = requests.post(
-            api_endpoint,
-            json=payload,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
+        # Retry logic with exponential backoff (3 attempts)
+        max_retries = 3
+        retry_delay = 2  # Start with 2 seconds
         
-        if response.status_code == 200:
-            logger.info("Dashboard updated successfully")
-        else:
-            logger.warning(f"Dashboard update returned status {response.status_code}")
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Updating dashboard (attempt {attempt + 1}/{max_retries})...")
+                
+                response = requests.post(
+                    api_endpoint,
+                    json=payload,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=30  # Increased from 10s to 30s
+                )
+                
+                if response.status_code == 200:
+                    logger.info("Dashboard updated successfully")
+                    return
+                else:
+                    logger.warning(f"Dashboard update returned status {response.status_code}")
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                        logger.info(f"Retrying in {wait_time}s...")
+                        import time
+                        time.sleep(wait_time)
+                    
+            except requests.exceptions.Timeout:
+                logger.warning(f"Dashboard request timeout (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying in {wait_time}s...")
+                    import time
+                    time.sleep(wait_time)
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Dashboard request failed (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying in {wait_time}s...")
+                    import time
+                    time.sleep(wait_time)
+        
+        logger.error(f"Failed to update dashboard after {max_retries} attempts")
             
     except Exception as e:
         logger.error(f"Failed to update dashboard: {str(e)}")
