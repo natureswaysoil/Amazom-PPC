@@ -12,7 +12,11 @@
     }
   },
   "dashboard": {
-    "url": "https://ppc-dashboard.abacusai.app"
+    "url": "https://ppc-dashboard.abacusai.app",
+    "api_key": "",
+    "enabled": true,
+    "send_real_time_updates": true,
+    "timeout": 30
   },
   "email_notifications": {
     "enabled": false,

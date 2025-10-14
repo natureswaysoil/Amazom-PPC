@@ -114,13 +114,73 @@ The token refresh logic is built into `optimizer_core.py`:
 
 ## 📊 Dashboard Integration
 
-The optimizer sends results to the dashboard at:
-https://ppc-dashboard.abacusai.app
+The optimizer includes comprehensive dashboard integration with real-time updates:
 
-Dashboard receives:
-- Optimization results
-- Performance metrics
-- Execution status
+**Dashboard URL**: https://ppc-dashboard.abacusai.app
+
+### Features
+
+- **Enhanced Results Payload**: Detailed metrics including summary, campaigns, and top performers
+- **Real-time Progress Updates**: Live status during optimization runs
+- **Error Reporting**: Automatic error notification with full context
+- **Retry Logic**: Exponential backoff for reliable delivery
+- **API Key Authentication**: Secure communication with the dashboard
+- **Health Checks**: Verify optimizer connectivity from dashboard
+- **Dashboard Triggers**: Allow dashboard to trigger optimization runs
+
+### Configuration
+
+Add to your `config.json`:
+
+```json
+{
+  "dashboard": {
+    "url": "https://ppc-dashboard.abacusai.app",
+    "api_key": "your_dashboard_api_key_here",
+    "enabled": true,
+    "send_real_time_updates": true,
+    "timeout": 30
+  }
+}
+```
+
+### Dashboard Endpoints
+
+The optimizer communicates with these dashboard endpoints:
+
+- `POST /api/optimization-results` - Send completed optimization results
+- `POST /api/optimization-status` - Send real-time progress updates
+- `POST /api/optimization-error` - Report errors during optimization
+- `GET /api/health` - Health check endpoint
+
+### Triggering from Dashboard
+
+The dashboard can trigger optimization runs using:
+
+```bash
+curl -X POST "https://YOUR-FUNCTION-URL?trigger=dashboard" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json"
+```
+
+### Payload Structure
+
+The enhanced payload includes:
+
+- **Summary Metrics**: Campaigns analyzed, keywords optimized, budget changes
+- **Feature Results**: Detailed results for each optimization feature
+- **Campaign Breakdown**: Per-campaign performance and changes
+- **Top Performers**: Best performing keywords with metrics
+- **Errors & Warnings**: Complete error context and warnings
+- **Configuration Snapshot**: Settings used for this run
+
+### Non-Blocking Design
+
+Dashboard communication is designed to be non-blocking:
+- Failures don't stop optimization
+- Automatic retries with exponential backoff
+- Comprehensive logging of all interactions
+- Graceful degradation if dashboard is unavailable
 
 ## 🏥 Automated Health Check Workflow
 
