@@ -35,7 +35,7 @@ The optimizer can be configured in two ways:
 Set the `PPC_CONFIG` environment variable with a JSON string containing all configuration.
 
 ### 2. Config File (For Development)
-Use the `config.json` file in the repository.
+Use the `config.json` or `sample_config.yaml` files in the repository as **sanitized examples only**. All credentials are placeholders – replace them with your own values via environment variables or Secret Manager before running in any non-local environment.
 
 ### Required Configuration Keys
 
@@ -48,12 +48,69 @@ Use the `config.json` file in the repository.
     "profile_id": "1780498399290938",
     "region": "NA"
   },
-  "optimization_rules": { ... },
+  "bid_optimization": { ... },
   "dashboard": {
     "url": "https://ppc-dashboard.abacusai.app"
   }
 }
 ```
+
+### Runtime Overrides & Secret Sources
+
+At runtime the Cloud Function inspects the following environment variables to
+resolve credentials and execution preferences before falling back to the bundled
+`config.json`/`sample_config.yaml` examples:
+
+- `PPC_CONFIG_PATH` – absolute path to a YAML/JSON configuration file mounted at runtime
+- `PPC_CONFIG` – JSON string containing the optimizer configuration (for Secret Manager bindings)
+- `AMAZON_PROFILE_ID` / `PPC_PROFILE_ID` – override the Amazon Ads profile ID without editing config files
+- `PPC_DRY_RUN` – set to `true` to execute without applying changes
+- `PPC_FEATURES` – comma separated list of feature modules to execute
+- `PPC_VERIFY_CONNECTION` and `PPC_VERIFY_SAMPLE_SIZE` – defaults for the verification helper
+
+This means you can keep sensitive values exclusively in Google Secret Manager or
+environment configuration; the repository examples remain sanitized.
+
+### Verify Amazon Ads Connectivity
+
+After providing valid credentials, run a lightweight verification to confirm the
+optimizer can retrieve data from Amazon Ads (omit `--profile-id` if it's set in
+the config file):
+
+```bash
+python optimizer_core.py \
+  --config sample_config.yaml \
+  --profile-id 1780498399290938 \
+  --verify-connection
+```
+
+The command exits with a non-zero status if the API call fails and prints a
+small sample of retrieved campaigns when successful. Use
+`--verify-sample-size=N` to adjust how many campaigns are returned in the
+verification payload.
+
+### Triggering the Optimizer via Cloud Function
+
+When deployed to Google Cloud Functions (entry point: `run_optimizer`), send an
+authenticated `POST` request with an optional JSON payload to run the
+automation:
+
+```bash
+curl -X POST "https://YOUR-FUNCTION-URL" \
+  -H "Authorization: Bearer $FUNCTION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "profile_id": "1780498399290938",
+        "dry_run": true,
+        "features": ["bid_optimization", "dayparting"]
+      }'
+```
+
+Omit `features` to execute every module enabled inside the configuration file.
+To verify Amazon Ads connectivity through the deployed function instead of the
+CLI helper, call the endpoint with `?verify_connection=true` and (optionally)
+`verify_sample_size=10`. The handler returns a JSON payload containing the
+verification sample or a descriptive error when credentials are misconfigured.
 
 ## 🚀 Deployment
 

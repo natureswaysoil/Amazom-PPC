@@ -61,8 +61,15 @@ Create a JSON configuration and set it as an environment variable during deploym
 
 ```bash
 # Create a single-line JSON config (remove newlines)
-PPC_CONFIG='{"amazon_api":{"client_id":"amzn1.application-oa2-client.xxxxx","client_secret":"amzn1.oa2-cs.v1.xxxxx","refresh_token":"Atzr|IwEBIxxxxx","profile_id":"1780498399290938","region":"NA"},"dashboard":{"url":"https://ppc-dashboard.abacusai.app"},"optimization_rules":{...}}'
+PPC_CONFIG='{"amazon_api":{"client_id":"amzn1.application-oa2-client.xxxxx","client_secret":"amzn1.oa2-cs.v1.xxxxx","refresh_token":"Atzr|IwEBIxxxxx","profile_id":"1780498399290938","region":"NA"},"dashboard":{"url":"https://ppc-dashboard.abacusai.app"},"bid_optimization":{...}}'
 ```
+
+Runtime overrides can be layered on top without redeploying by setting:
+
+- `PPC_CONFIG_PATH` – path to a mounted YAML/JSON config file
+- `AMAZON_PROFILE_ID`/`PPC_PROFILE_ID` – alternate profile scopes
+- `PPC_DRY_RUN`, `PPC_FEATURES` – adjust behaviour for scheduled or manual triggers
+- `PPC_VERIFY_CONNECTION`, `PPC_VERIFY_SAMPLE_SIZE` – configure the verification helper exposed by `run_optimizer`
 
 ### Option B: config.json File (For Testing)
 

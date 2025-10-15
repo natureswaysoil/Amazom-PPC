@@ -191,7 +191,7 @@ AMAZON_REFRESH_TOKEN=Atzr|IwEBIxxxxx
 **OR** a single combined variable:
 
 ```bash
-PPC_CONFIG='{"amazon_api": {...}, "optimization_rules": {...}}'
+PPC_CONFIG='{"amazon_api": {...}, "bid_optimization": {...}}'
 ```
 
 ### Updating Environment Variables
