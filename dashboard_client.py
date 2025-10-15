@@ -359,8 +359,8 @@ class DashboardClient:
             
             # Configuration snapshot
             'config_snapshot': {
-                'target_acos': config.get('optimization_rules', {}).get('target_acos'),
-                'lookback_days': config.get('optimization_rules', {}).get('lookback_days'),
+                'target_acos': config.get('bid_optimization', {}).get('target_acos'),
+                'lookback_days': config.get('bid_optimization', {}).get('lookback_days'),
                 'enabled_features': config.get('features', {}).get('enabled', [])
             }
         }

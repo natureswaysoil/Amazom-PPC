@@ -24,9 +24,11 @@ Setup:
     export AMAZON_REFRESH_TOKEN="Atzr|IwEBxxxxxxxx"
     
 Usage:
-    python amazon_ppc_automation.py --config ppc_config.yaml --profile-id 1780498399290938
-    python amazon_ppc_automation.py --config ppc_config.yaml --profile-id 1780498399290938 --dry-run
-    python amazon_ppc_automation.py --config ppc_config.yaml --profile-id 1780498399290938 --features bid_optimization dayparting
+    python optimizer_core.py --config ppc_config.yaml --profile-id 1780498399290938
+    python optimizer_core.py --config ppc_config.yaml --profile-id 1780498399290938 --dry-run
+    python optimizer_core.py --config ppc_config.yaml --profile-id 1780498399290938 \
+        --features bid_optimization dayparting
+    python optimizer_core.py --config ppc_config.yaml --verify-connection --verify-sample-size 10
 """
 
 import argparse
@@ -41,7 +43,7 @@ import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple, Set, Any
 import gzip
 import traceback
 
@@ -240,9 +242,10 @@ class Config:
 
 class AuditLogger:
     """CSV-based audit trail logger"""
-    
+
     def __init__(self, output_dir: str = "."):
         self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
         self.filename = os.path.join(
             output_dir,
             f"ppc_audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -300,29 +303,34 @@ class AuditLogger:
 
 class AmazonAdsAPI:
     """Amazon Advertising API client with retry logic and rate limiting"""
-    
-    def __init__(self, profile_id: str, region: str = "NA"):
+
+    def __init__(self, profile_id: str, region: str = "NA",
+                 client_id: Optional[str] = None,
+                 client_secret: Optional[str] = None,
+                 refresh_token: Optional[str] = None):
         self.profile_id = profile_id
         self.region = region.upper()
         self.base_url = ENDPOINTS.get(self.region, ENDPOINTS["NA"])
+        self.client_id = client_id or os.getenv("AMAZON_CLIENT_ID")
+        self.client_secret = client_secret or os.getenv("AMAZON_CLIENT_SECRET")
+        self.refresh_token = refresh_token or os.getenv("AMAZON_REFRESH_TOKEN")
         self.auth = self._authenticate()
         self.rate_limiter = RateLimiter()
-    
+
     def _authenticate(self) -> Auth:
         """Authenticate and get access token"""
-        client_id = os.getenv("AMAZON_CLIENT_ID")
-        client_secret = os.getenv("AMAZON_CLIENT_SECRET")
-        refresh_token = os.getenv("AMAZON_REFRESH_TOKEN")
-        
-        if not all([client_id, client_secret, refresh_token]):
-            logger.error("Missing required environment variables")
+        if not all([self.client_id, self.client_secret, self.refresh_token]):
+            logger.error(
+                "Missing Amazon Ads API credentials. Set environment variables or"
+                " provide them in the configuration file."
+            )
             sys.exit(1)
-        
+
         payload = {
             "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": client_id,
-            "client_secret": client_secret,
+            "refresh_token": self.refresh_token,
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
         }
         
         try:
@@ -346,15 +354,15 @@ class AmazonAdsAPI:
         if self.auth.is_expired():
             logger.info("Access token expired, refreshing...")
             self.auth = self._authenticate()
-    
+
     def _headers(self) -> Dict[str, str]:
         """Get API request headers"""
         self._refresh_auth_if_needed()
-        
+
         return {
             "Authorization": f"{self.auth.token_type} {self.auth.access_token}",
             "Content-Type": "application/json",
-            "Amazon-Advertising-API-ClientId": os.getenv("AMAZON_CLIENT_ID"),
+            "Amazon-Advertising-API-ClientId": self.client_id,
             "Amazon-Advertising-API-Scope": self.profile_id,
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
@@ -395,6 +403,45 @@ class AmazonAdsAPI:
                 time.sleep(retry_delay * (attempt + 1))
         
         raise Exception("Max retries exceeded")
+
+    def verify_connection(self, sample_size: int = 5) -> Dict[str, Any]:
+        """Verify API connectivity by retrieving a small campaign sample"""
+
+        try:
+            response = self._request(
+                "GET",
+                "/v2/sp/campaigns",
+                params={"startIndex": 0, "count": max(sample_size, 1)}
+            )
+            campaigns = response.json() or []
+
+            sample = []
+            for entry in campaigns[:sample_size]:
+                sample.append(
+                    {
+                        "campaignId": entry.get("campaignId"),
+                        "name": entry.get("name"),
+                        "state": entry.get("state"),
+                        "dailyBudget": entry.get("dailyBudget"),
+                    }
+                )
+
+            result = {
+                "success": True,
+                "campaign_count": len(campaigns),
+                "sample": sample,
+            }
+            logger.info(
+                "Amazon Ads API connectivity verified. Retrieved %d campaigns.",
+                result["campaign_count"],
+            )
+            return result
+        except Exception as exc:
+            logger.error(f"Amazon Ads API verification failed: {exc}")
+            return {
+                "success": False,
+                "error": str(exc),
+            }
     
     # ========================================================================
     # CAMPAIGNS
@@ -1275,15 +1322,27 @@ class PPCAutomation:
     
     def __init__(self, config_path: str, profile_id: str, dry_run: bool = False):
         self.config = Config(config_path)
-        self.profile_id = profile_id
+        config_profile_id = self.config.get('amazon_api.profile_id')
+        self.profile_id = profile_id or str(config_profile_id or '')
+        if not self.profile_id:
+            logger.error("Amazon Ads profile ID is required. Provide --profile-id or set it in the configuration file.")
+            sys.exit(1)
         self.dry_run = dry_run
-        
+
         # Initialize API client
-        region = self.config.get('api.region', 'NA')
-        self.api = AmazonAdsAPI(profile_id, region)
+        amazon_cfg = self.config.get('amazon_api', {}) or {}
+        region = amazon_cfg.get('region', 'NA')
+        self.api = AmazonAdsAPI(
+            self.profile_id,
+            region,
+            client_id=amazon_cfg.get('client_id'),
+            client_secret=amazon_cfg.get('client_secret'),
+            refresh_token=amazon_cfg.get('refresh_token'),
+        )
         
         # Initialize audit logger
-        self.audit = AuditLogger()
+        audit_output_dir = self.config.get('logging.output_dir', './logs')
+        self.audit = AuditLogger(audit_output_dir)
         
         # Initialize feature modules
         self.bid_optimizer = BidOptimizer(self.config, self.api, self.audit)
@@ -1353,17 +1412,29 @@ class PPCAutomation:
 def main():
     parser = argparse.ArgumentParser(description='Amazon PPC Automation Suite')
     parser.add_argument('--config', required=True, help='Path to configuration YAML file')
-    parser.add_argument('--profile-id', required=True, help='Amazon Ads Profile ID')
+    parser.add_argument('--profile-id', help='Amazon Ads Profile ID (overrides config)')
     parser.add_argument('--dry-run', action='store_true', help='Run without making actual changes')
-    parser.add_argument('--features', nargs='+', 
+    parser.add_argument('--features', nargs='+',
                        choices=['bid_optimization', 'dayparting', 'campaign_management',
                                'keyword_discovery', 'negative_keywords'],
                        help='Specific features to run (default: all enabled in config)')
-    
+    parser.add_argument('--verify-connection', action='store_true',
+                        help='Check Amazon Ads API connectivity and exit')
+    parser.add_argument('--verify-sample-size', type=int, default=5,
+                        help='Number of campaigns to include in verification sample (default: 5)')
+
     args = parser.parse_args()
-    
+
     # Run automation
     automation = PPCAutomation(args.config, args.profile_id, args.dry_run)
+
+    if args.verify_connection:
+        verification = automation.api.verify_connection(args.verify_sample_size)
+        print(json.dumps(verification, indent=2))
+        if verification.get('success'):
+            sys.exit(0)
+        sys.exit(1)
+
     automation.run(args.features)
 
 
