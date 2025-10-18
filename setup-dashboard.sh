@@ -14,8 +14,8 @@ echo "Step 1: Creating dashboard secrets..."
 echo "Please provide your dashboard details:"
 echo ""
 
-read -p "Dashboard URL (default: https://ppc-dashboard.abacusai.app): " DASHBOARD_URL
-DASHBOARD_URL=${DASHBOARD_URL:-https://ppc-dashboard.abacusai.app}
+read -p "Dashboard URL (default: https://amazonppcdashboard.vercel.app): " DASHBOARD_URL
+DASHBOARD_URL=${DASHBOARD_URL:-https://amazonppcdashboard.vercel.app}
 
 read -p "Dashboard API Key: " DASHBOARD_API_KEY
 
