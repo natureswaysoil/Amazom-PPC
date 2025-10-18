@@ -2,23 +2,23 @@ import json
 import logging
 import os
 import tempfile
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import requests
 
 from optimizer_core import PPCAutomation
+from dashboard_client import DashboardClient
 
 logger = logging.getLogger(__name__)
 
 
 def _json_response(payload: Dict[str, Any], status: int = 200):
-    """Return a Flask-compatible JSON response tuple."""
     return (json.dumps(payload), status, {"Content-Type": "application/json"})
 
 
 def _coerce_bool(value: Any) -> Optional[bool]:
-    """Convert various representations of truthy/falsey values to bool."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -35,7 +35,6 @@ def _coerce_bool(value: Any) -> Optional[bool]:
 
 
 def _normalize_features(raw: Any) -> Optional[List[str]]:
-    """Normalize feature lists from strings or iterables."""
     if raw is None:
         return None
     if isinstance(raw, str):
@@ -44,7 +43,6 @@ def _normalize_features(raw: Any) -> Optional[List[str]]:
         raw = [str(part).strip() for part in raw]
     else:
         raise ValueError("features must be a comma separated string or list")
-
     features = [feature for feature in raw if feature]
     return features or []
 
@@ -89,8 +87,8 @@ def _resolve_config_path(request_data: Dict[str, Any]) -> str:
         "No PPC configuration found. Provide PPC_CONFIG, PPC_CONFIG_PATH, or config_path in the request."
     )
 
+
 def load_config():
-    # Read from environment variables
     config = {}
     config['dashboard'] = {
         'url': os.getenv('DASHBOARD_URL', ''),
@@ -104,6 +102,7 @@ def load_config():
     }
     return config
 
+
 def check_dashboard(cfg):
     url = cfg['dashboard']['url']
     api_key = cfg['dashboard']['api_key']
@@ -113,11 +112,14 @@ def check_dashboard(cfg):
         headers['Authorization'] = f'Bearer {api_key}'
     headers['X-Profile-ID'] = str(profile_id)
     try:
+        if not url:
+            return False
         resp = requests.get(f"{url}/api/health", headers=headers, timeout=10)
         return resp.status_code == 200
     except Exception as e:
         print(f"Dashboard health error: {e}")
         return False
+
 
 def check_email(cfg):
     api_key = cfg['email']['api_key']
@@ -146,28 +148,42 @@ def check_email(cfg):
 
 
 def run_optimizer(request):
-    """Google Cloud Functions entry point for executing the optimizer."""
     request_json: Dict[str, Any] = {}
     if request is not None:
         try:
             request_json = request.get_json(silent=True) or {}
-        except Exception:  # pragma: no cover - defensive
+        except Exception:
             request_json = {}
 
     if not isinstance(request_json, dict):
         logger.warning("Request JSON body is not an object; ignoring payload")
         request_json = {}
 
+    # Health endpoint without full config resolution
+    query_args = getattr(request, "args", {}) or {}
+    health_flag = (
+        request_json.get("health")
+        if "health" in request_json
+        else query_args.get("health")
+    )
+    if _coerce_bool(health_flag):
+        timestamp = datetime.now().isoformat()
+        cfg = load_config()
+        dashboard_ok = check_dashboard(cfg)
+        email_ok = check_email(cfg)
+        return _json_response({
+            "status": "healthy",
+            "timestamp": timestamp,
+            "dashboard_ok": dashboard_ok,
+            "email_ok": email_ok
+        })
+
+    # Resolve config and request params
     try:
         config_path = _resolve_config_path(request_json)
     except FileNotFoundError as exc:
         logger.error("Configuration resolution failed: %s", exc)
-        return _json_response({
-            "status": "error",
-            "error": str(exc)
-        }, status=500)
-
-    query_args = getattr(request, "args", {}) or {}
+        return _json_response({"status": "error", "error": str(exc)}, status=500)
 
     profile_id = (
         request_json.get("profile_id")
@@ -193,10 +209,7 @@ def run_optimizer(request):
         features = _normalize_features(features_value)
     except ValueError as exc:
         logger.error("Invalid features specification: %s", exc)
-        return _json_response({
-            "status": "error",
-            "error": str(exc)
-        }, status=400)
+        return _json_response({"status": "error", "error": str(exc)}, status=400)
 
     verify_flag = (
         request_json.get("verify_connection")
@@ -215,23 +228,19 @@ def run_optimizer(request):
     except (TypeError, ValueError):
         sample_size = 5
 
+    # Initialize optimization
     try:
         automation = PPCAutomation(config_path, profile_id, dry_run)
-    except SystemExit as exc:  # PPCAutomation exits on fatal config errors
+    except SystemExit as exc:
         logger.error("Optimizer initialization failed with exit code %s", exc.code)
-        return _json_response({
-            "status": "error",
-            "error": "Optimizer initialization failed. Check logs for details."
-        }, status=500)
-    except Exception as exc:  # pragma: no cover - defensive
+        return _json_response({"status": "error", "error": "Optimizer initialization failed. Check logs for details."}, status=500)
+    except Exception as exc:
         logger.exception("Unexpected error during optimizer initialization")
-        return _json_response({
-            "status": "error",
-            "error": str(exc)
-        }, status=500)
+        return _json_response({"status": "error", "error": str(exc)}, status=500)
 
     timestamp = datetime.now().isoformat()
 
+    # Verify connection path
     if verify_connection:
         verification = automation.api.verify_connection(sample_size)
         automation.audit.save()
@@ -244,31 +253,33 @@ def run_optimizer(request):
             "verification": verification
         }, status=status_code)
 
+    # Dashboard wiring and run
+    env_cfg = load_config()
+    dash_boot_cfg = {
+        'dashboard': env_cfg.get('dashboard', {}),
+        'amazon_api': {'profile_id': automation.profile_id}
+    }
+    dashboard = DashboardClient(dash_boot_cfg)
+    dashboard.start_run(dry_run)
+
+    start_ts = time.time()
+    results = automation.run(features)
+    duration_seconds = time.time() - start_ts
+
     try:
-        results = automation.run(features)
-        response = {
-            "status": "ok",
-            "timestamp": timestamp,
-            "profile_id": automation.profile_id,
-            "dry_run": dry_run,
-            "features": features,
-            "results": results,
-        }
-        return _json_response(response)
-    except SystemExit as exc:  # pragma: no cover - defensive
-        logger.error("Optimizer execution terminated with exit code %s", exc.code)
-        return _json_response({
-            "status": "error",
-            "error": "Optimizer run terminated prematurely.",
-            "timestamp": timestamp
-        }, status=500)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Unexpected error during optimizer run")
-        return _json_response({
-            "status": "error",
-            "error": str(exc),
-            "timestamp": timestamp
-        }, status=500)
+        dashboard.send_results(results, getattr(automation.config, 'data', {}), duration_seconds, dry_run)
+    except Exception:
+        logger.warning("Dashboard results send failed; continuing response")
+
+    response = {
+        "status": "ok",
+        "timestamp": timestamp,
+        "profile_id": automation.profile_id,
+        "dry_run": dry_run,
+        "features": features,
+        "results": results,
+    }
+    return _json_response(response)
 
 
 def run_health_check(request):

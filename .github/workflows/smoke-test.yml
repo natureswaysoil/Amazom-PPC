@@ -1,0 +1,112 @@
+name: Cloud Function Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      function_url:
+        description: "Cloud Function URL (overrides secrets.FUNCTION_URL)"
+        required: false
+        type: string
+      require_auth:
+        description: "Use identity token auth (true/false)"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    env:
+      INPUT_FUNCTION_URL: ${{ inputs.function_url }}
+      SECRET_FUNCTION_URL: ${{ secrets.FUNCTION_URL }}
+      REQUIRE_AUTH: ${{ inputs.require_auth || secrets.HEALTH_REQUIRE_AUTH || true }}
+
+    steps:
+      - name: Setup gcloud (if auth required)
+        if: ${{ env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true }}
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: '>= 471.0.0'
+
+      - name: Auth to Google Cloud (if configured)
+        if: ${{ env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Resolve FUNCTION_URL
+        id: resolve_url
+        shell: bash
+        run: |
+          set -e
+          if [ -n "$INPUT_FUNCTION_URL" ]; then
+            echo "function_url=$INPUT_FUNCTION_URL" >> $GITHUB_OUTPUT
+          elif [ -n "$SECRET_FUNCTION_URL" ]; then
+            echo "function_url=$SECRET_FUNCTION_URL" >> $GITHUB_OUTPUT
+          else
+            echo "::error::FUNCTION_URL not provided (input or secret)."
+            exit 1
+          fi
+
+      - name: Health
+        id: health
+        env:
+          FUNCTION_URL: ${{ steps.resolve_url.outputs.function_url }}
+        run: |
+          URL="${FUNCTION_URL%/}?health=true"
+          if [[ "${{ env.REQUIRE_AUTH }}" == "true" || "${{ env.REQUIRE_AUTH }}" == true ]]; then
+            TOKEN=$(gcloud auth print-identity-token)
+            curl -s -o resp.json -w "\n%{http_code}\n" -H "Authorization: Bearer ${TOKEN}" "$URL" | tee http_code.txt
+          else
+            curl -s -o resp.json -w "\n%{http_code}\n" "$URL" | tee http_code.txt
+          fi
+          cat resp.json
+          code=$(tail -n1 http_code.txt)
+          if [ "$code" != "200" ] || ! grep -q 'healthy' resp.json; then
+            echo "Health check failed with code $code"; exit 1; fi
+
+      - name: Verify Connection
+        id: verify
+        env:
+          FUNCTION_URL: ${{ steps.resolve_url.outputs.function_url }}
+        run: |
+          URL="${FUNCTION_URL%/}?verify_connection=true&verify_sample_size=3"
+          if [[ "${{ env.REQUIRE_AUTH }}" == "true" || "${{ env.REQUIRE_AUTH }}" == true ]]; then
+            TOKEN=$(gcloud auth print-identity-token)
+            curl -s -o resp.json -w "\n%{http_code}\n" -H "Authorization: Bearer ${TOKEN}" "$URL" | tee http_code.txt
+          else
+            curl -s -o resp.json -w "\n%{http_code}\n" "$URL" | tee http_code.txt
+          fi
+          cat resp.json
+          code=$(tail -n1 http_code.txt)
+          if [ "$code" != "200" ] || ! grep -q '"success": true' resp.json; then
+            echo "Verify connection failed with code $code"; exit 1; fi
+
+      - name: Dry Run
+        id: dry_run
+        env:
+          FUNCTION_URL: ${{ steps.resolve_url.outputs.function_url }}
+        run: |
+          URL="${FUNCTION_URL%/}"
+          BODY='{"dry_run": true, "features": ["bid_optimization","dayparting"]}'
+          if [[ "${{ env.REQUIRE_AUTH }}" == "true" || "${{ env.REQUIRE_AUTH }}" == true ]]; then
+            TOKEN=$(gcloud auth print-identity-token)
+            curl -s -o resp.json -w "\n%{http_code}\n" -X POST -H "Content-Type: application/json" -H "Authorization: Bearer ${TOKEN}" -d "$BODY" "$URL" | tee http_code.txt
+          else
+            curl -s -o resp.json -w "\n%{http_code}\n" -X POST -H "Content-Type: application/json" -d "$BODY" "$URL" | tee http_code.txt
+          fi
+          head -c 200 resp.json; echo
+          code=$(tail -n1 http_code.txt)
+          if [ "$code" != "200" ]; then echo "Dry run failed with code $code"; exit 1; fi
+
+      - name: Summary
+        env:
+          FUNCTION_URL: ${{ steps.resolve_url.outputs.function_url }}
+        run: |
+          echo "## Smoke Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "\n**Function URL**: ${FUNCTION_URL}" >> $GITHUB_STEP_SUMMARY
+          echo "\n- Health: ✅" >> $GITHUB_STEP_SUMMARY
+          echo "\n- Verify Connection: ✅" >> $GITHUB_STEP_SUMMARY
+          echo "\n- Dry Run: ✅" >> $GITHUB_STEP_SUMMARY
