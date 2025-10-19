@@ -113,11 +113,14 @@ def check_dashboard(cfg):
     headers['X-Profile-ID'] = str(profile_id)
     try:
         if not url:
+            logger.warning("Dashboard URL is empty")
             return False
+        logger.info(f"Checking dashboard health at: {url}/api/health")
         resp = requests.get(f"{url}/api/health", headers=headers, timeout=10)
+        logger.info(f"Dashboard health response: {resp.status_code}")
         return resp.status_code == 200
     except Exception as e:
-        print(f"Dashboard health error: {e}")
+        logger.error(f"Dashboard health error: {e}")
         return False
 
 
@@ -169,13 +172,16 @@ def run_optimizer(request):
     if _coerce_bool(health_flag):
         timestamp = datetime.now().isoformat()
         cfg = load_config()
+        logger.info(f"Health check - Dashboard URL: {cfg.get('dashboard', {}).get('url', 'NOT SET')}")
+        logger.info(f"Health check - Dashboard API Key present: {bool(cfg.get('dashboard', {}).get('api_key'))}")
         dashboard_ok = check_dashboard(cfg)
         email_ok = check_email(cfg)
         return _json_response({
             "status": "healthy",
             "timestamp": timestamp,
             "dashboard_ok": dashboard_ok,
-            "email_ok": email_ok
+            "email_ok": email_ok,
+            "dashboard_url": cfg.get('dashboard', {}).get('url', 'NOT SET')
         })
 
     # Resolve config and request params
