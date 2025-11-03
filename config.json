@@ -1,4 +1,9 @@
 {
+  "api": {
+    "region": "NA",
+    "max_requests_per_second": 10,
+    "note": "Amazon Advertising API supports 10 requests/second"
+  },
   "amazon_api": {
     "region": "NA",
     "profile_id": "YOUR_PROFILE_ID",
@@ -44,6 +49,8 @@
   },
   "dayparting": {
     "enabled": true,
+    "timezone": "US/Pacific",
+    "note": "Timezone-aware dayparting. Common options: US/Pacific, US/Eastern, US/Central, US/Mountain, UTC",
     "peak_hours": [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     "peak_multiplier": 1.2,
     "off_peak_multiplier": 0.85,

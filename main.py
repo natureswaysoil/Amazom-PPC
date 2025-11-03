@@ -124,29 +124,68 @@ def check_dashboard(cfg):
         return False
 
 
-def check_email(cfg):
-    api_key = cfg['email']['api_key']
-    from_addr = cfg['email']['from']
-    to_addr = cfg['email']['test_to']
-    if not (api_key and from_addr and to_addr):
-        print("Email config missing api_key, from, or test_to address.")
-        return False
-    email_url = "https://api.resend.com/emails"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "from": from_addr,
-        "to": to_addr,
-        "subject": "Health Check Email from PPC Optimizer",
-        "html": f"<strong>Health check at {datetime.now().isoformat()}</strong>"
-    }
+def update_dashboard(results, config):
+    """Send optimization results to the dashboard with retry logic and exponential backoff"""
     try:
-        resp = requests.post(email_url, json=payload, headers=headers, timeout=10)
-        return resp.status_code == 200
+        dashboard_url = config.get('dashboard', {}).get('url')
+        if not dashboard_url:
+            logger.warning("Dashboard URL not configured")
+            return
+        
+        # Send POST request to dashboard API endpoint
+        api_endpoint = f"{dashboard_url}/api/optimization-results"
+        
+        payload = {
+            'timestamp': datetime.now().isoformat(),
+            'results': results,
+            'status': 'success'
+        }
+        
+        # Retry logic with exponential backoff (3 attempts)
+        max_retries = 3
+        retry_delay = 2  # Start with 2 seconds
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Updating dashboard (attempt {attempt + 1}/{max_retries})...")
+                
+                response = requests.post(
+                    api_endpoint,
+                    json=payload,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=30  # Increased from 10s to 30s
+                )
+                
+                if response.status_code == 200:
+                    logger.info("Dashboard updated successfully")
+                    return
+                else:
+                    logger.warning(f"Dashboard update returned status {response.status_code}")
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                        logger.info(f"Retrying in {wait_time}s...")
+                        import time
+                        time.sleep(wait_time)
+                    
+            except requests.exceptions.Timeout:
+                logger.warning(f"Dashboard request timeout (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying in {wait_time}s...")
+                    import time
+                    time.sleep(wait_time)
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Dashboard request failed (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying in {wait_time}s...")
+                    import time
+                    time.sleep(wait_time)
+        
+        logger.error(f"Failed to update dashboard after {max_retries} attempts")
+            
     except Exception as e:
-        print(f"Email send error: {e}")
+        logger.error(f"Dashboard update error: {e}")
         return False
 
 
