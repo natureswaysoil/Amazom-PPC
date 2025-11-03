@@ -350,6 +350,10 @@ class AmazonAdsAPI:
         self.profile_id = profile_id
         self.region = region.upper()
         self.base_url = ENDPOINTS.get(self.region, ENDPOINTS["NA"])
+        # Get credentials from environment
+        self.client_id = os.getenv("AMAZON_CLIENT_ID")
+        self.client_secret = os.getenv("AMAZON_CLIENT_SECRET")
+        self.refresh_token = os.getenv("AMAZON_REFRESH_TOKEN")
         self.auth = self._authenticate()
         self.rate_limiter = RateLimiter(max_requests_per_second or MAX_REQUESTS_PER_SECOND)
         self.session = session or requests.Session()
@@ -359,19 +363,15 @@ class AmazonAdsAPI:
     
     def _authenticate(self) -> Auth:
         """Authenticate and get access token"""
-        client_id = os.getenv("AMAZON_CLIENT_ID")
-        client_secret = os.getenv("AMAZON_CLIENT_SECRET")
-        refresh_token = os.getenv("AMAZON_REFRESH_TOKEN")
-        
-        if not all([client_id, client_secret, refresh_token]):
+        if not all([self.client_id, self.client_secret, self.refresh_token]):
             logger.error("Missing required environment variables")
             sys.exit(1)
         
         payload = {
             "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": client_id,
-            "client_secret": client_secret,
+            "refresh_token": self.refresh_token,
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
         }
         
         try:

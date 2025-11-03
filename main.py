@@ -164,7 +164,6 @@ def update_dashboard(results, config):
                     if attempt < max_retries - 1:
                         wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
                         logger.info(f"Retrying in {wait_time}s...")
-                        import time
                         time.sleep(wait_time)
                     
             except requests.exceptions.Timeout:
@@ -172,14 +171,12 @@ def update_dashboard(results, config):
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)
                     logger.info(f"Retrying in {wait_time}s...")
-                    import time
                     time.sleep(wait_time)
             except requests.exceptions.RequestException as e:
                 logger.warning(f"Dashboard request failed (attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)
                     logger.info(f"Retrying in {wait_time}s...")
-                    import time
                     time.sleep(wait_time)
         
         logger.error(f"Failed to update dashboard after {max_retries} attempts")
