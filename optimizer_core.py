@@ -44,7 +44,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Set, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
 import traceback
 
@@ -84,16 +83,31 @@ REQUEST_INTERVAL = 1.0 / MAX_REQUESTS_PER_SECOND
 # LOGGING SETUP
 # ============================================================================
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(f'ppc_automation_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Detect if running in Cloud Functions environment
+IS_CLOUD_FUNCTION = os.getenv('K_SERVICE') is not None or os.getenv('FUNCTION_TARGET') is not None
 
-logger = logging.getLogger(__name__)
+if IS_CLOUD_FUNCTION:
+    # Use only StreamHandler for Cloud Functions (logs go to Cloud Logging)
+    # File logging doesn't work in Cloud Functions (ephemeral filesystem)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    logger = logging.getLogger(__name__)
+    logger.info("Running in Cloud Functions environment - using Cloud Logging")
+else:
+    # For local development, use both console and file logging with log rotation
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(f'ppc_automation_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger(__name__)
+    logger.info("Running in local environment - using file and console logging")
 
 # ============================================================================
 # DATA CLASSES
@@ -243,32 +257,80 @@ def timing_logger(operation_name: str = None):
 # CONFIGURATION LOADER
 # ============================================================================
 
+class ConfigurationError(Exception):
+    """Custom exception for configuration errors"""
+    pass
+
+
 class Config:
-    """Configuration manager"""
+    """Configuration manager with enhanced error handling"""
     
     def __init__(self, config_path: str):
         self.config_path = config_path
         self.data = self._load_config()
     
     def _load_config(self) -> Dict:
-        """Load configuration from YAML file"""
+        """
+        Load configuration from YAML file
+        
+        Returns:
+            Configuration dictionary
+            
+        Raises:
+            ConfigurationError: If config file cannot be loaded or parsed
+        """
+        if not os.path.exists(self.config_path):
+            error_msg = f"Configuration file not found: {self.config_path}"
+            logger.error(error_msg)
+            raise ConfigurationError(error_msg)
+        
         try:
-            with open(self.config_path, 'r') as f:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
+            
+            if not isinstance(config, dict):
+                error_msg = f"Invalid configuration format: expected dictionary, got {type(config)}"
+                logger.error(error_msg)
+                raise ConfigurationError(error_msg)
+            
             logger.info(f"Configuration loaded from {self.config_path}")
             return config
+            
+        except yaml.YAMLError as e:
+            error_msg = f"Failed to parse YAML configuration: {e}"
+            logger.error(error_msg)
+            raise ConfigurationError(error_msg)
+            
+        except IOError as e:
+            error_msg = f"Failed to read configuration file: {e}"
+            logger.error(error_msg)
+            raise ConfigurationError(error_msg)
+            
         except Exception as e:
-            logger.error(f"Failed to load configuration: {e}")
-            sys.exit(1)
+            error_msg = f"Unexpected error loading configuration: {e}"
+            logger.error(error_msg)
+            raise ConfigurationError(error_msg)
     
     def get(self, key: str, default=None):
-        """Get configuration value with dot notation support"""
+        """
+        Get configuration value with dot notation support
+        
+        Args:
+            key: Configuration key (supports dot notation like 'section.subsection.key')
+            default: Default value to return if key not found
+            
+        Returns:
+            Configuration value or default
+        """
+        if not key:
+            return default
+        
         keys = key.split('.')
         value = self.data
         
         for k in keys:
             if isinstance(value, dict):
-                value = value.get(k)
+                value = value.get(k, None)
                 if value is None:
                     return default
             else:
@@ -342,68 +404,189 @@ class AuditLogger:
 # AMAZON ADS API CLIENT
 # ============================================================================
 
+class AuthenticationError(Exception):
+    """Custom exception for authentication failures"""
+    pass
+
+
 class AmazonAdsAPI:
     """Amazon Advertising API client with retry logic and rate limiting"""
     
-    def __init__(self, profile_id: str, region: str = "NA", max_requests_per_second: int = None, 
-                 session: requests.Session = None):
+    def __init__(self, profile_id: str, region: str = "NA"):
         self.profile_id = profile_id
         self.region = region.upper()
         self.base_url = ENDPOINTS.get(self.region, ENDPOINTS["NA"])
-        # Get credentials from environment
-        self.client_id = os.getenv("AMAZON_CLIENT_ID")
-        self.client_secret = os.getenv("AMAZON_CLIENT_SECRET")
-        self.refresh_token = os.getenv("AMAZON_REFRESH_TOKEN")
         self.auth = self._authenticate()
-        self.rate_limiter = RateLimiter(max_requests_per_second or MAX_REQUESTS_PER_SECOND)
-        self.session = session or requests.Session()
-        # Cache for campaigns and ad groups (lifetime of API instance)
-        self._campaigns_cache = None
-        self._ad_groups_cache = None
+        self.rate_limiter = RateLimiter()
+        self._auth_lock = False  # Simple lock to prevent concurrent refresh attempts
     
     def _authenticate(self) -> Auth:
-        """Authenticate and get access token"""
-        if not all([self.client_id, self.client_secret, self.refresh_token]):
-            logger.error("Missing required environment variables")
-            sys.exit(1)
+        """
+        Authenticate and get access token with retry logic
+        
+        Returns:
+            Auth object with access token and expiration
+            
+        Raises:
+            AuthenticationError: If authentication fails after retries
+        """
+        client_id = os.getenv("AMAZON_CLIENT_ID", "").strip()
+        client_secret = os.getenv("AMAZON_CLIENT_SECRET", "").strip()
+        refresh_token = os.getenv("AMAZON_REFRESH_TOKEN", "").strip()
+        
+        # Validate required environment variables
+        missing_vars = []
+        if not client_id:
+            missing_vars.append("AMAZON_CLIENT_ID")
+        if not client_secret:
+            missing_vars.append("AMAZON_CLIENT_SECRET")
+        if not refresh_token:
+            missing_vars.append("AMAZON_REFRESH_TOKEN")
+            
+        if missing_vars:
+            error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
+            logger.error(error_msg)
+            raise AuthenticationError(error_msg)
         
         payload = {
             "grant_type": "refresh_token",
-            "refresh_token": self.refresh_token,
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
         }
         
-        try:
-            response = requests.post(TOKEN_URL, data=payload, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            
-            auth = Auth(
-                access_token=data["access_token"],
-                token_type=data.get("token_type", "Bearer"),
-                expires_at=time.time() + int(data.get("expires_in", 3600))
-            )
-            logger.info("Successfully authenticated with Amazon Ads API")
-            return auth
-        except Exception as e:
-            logger.error(f"Authentication failed: {e}")
-            sys.exit(1)
+        # Retry logic with exponential backoff
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Authenticating with Amazon Ads API (attempt {attempt + 1}/{max_retries})...")
+                response = requests.post(TOKEN_URL, data=payload, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Validate response contains required fields
+                if "access_token" not in data:
+                    raise AuthenticationError("Response missing access_token field")
+                
+                auth = Auth(
+                    access_token=data["access_token"],
+                    token_type=data.get("token_type", "Bearer"),
+                    expires_at=time.time() + int(data.get("expires_in", 3600))
+                )
+                logger.info("Successfully authenticated with Amazon Ads API")
+                return auth
+                
+            except requests.exceptions.HTTPError as e:
+                error_detail = f"HTTP {e.response.status_code}: {e.response.text if hasattr(e.response, 'text') else str(e)}"
+                logger.error(f"Authentication HTTP error (attempt {attempt + 1}/{max_retries}): {error_detail}")
+                
+                if attempt < max_retries - 1:
+                    # Exponential backoff
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying authentication in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    raise AuthenticationError(f"Authentication failed after {max_retries} attempts: {error_detail}")
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Authentication network error (attempt {attempt + 1}/{max_retries}): {e}")
+                
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying authentication in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    raise AuthenticationError(f"Authentication failed after {max_retries} attempts: {e}")
+                    
+            except Exception as e:
+                logger.error(f"Unexpected authentication error (attempt {attempt + 1}/{max_retries}): {e}")
+                
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying authentication in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    raise AuthenticationError(f"Authentication failed after {max_retries} attempts: {e}")
+        
+        # Should never reach here, but just in case
+        raise AuthenticationError("Authentication failed for unknown reason")
     
-    def _refresh_auth_if_needed(self):
-        """Refresh authentication if token expired"""
-        if self.auth.is_expired():
+    def _refresh_auth_if_needed(self) -> None:
+        """
+        Refresh authentication if token expired with concurrent refresh protection
+        
+        Raises:
+            AuthenticationError: If token refresh fails
+        """
+        if not self.auth.is_expired():
+            return
+        
+        # Prevent concurrent refresh attempts with simple lock
+        if self._auth_lock:
+            logger.debug("Token refresh already in progress, waiting...")
+            # Wait for ongoing refresh to complete (max 10 seconds)
+            max_wait = 10
+            wait_interval = 0.5
+            waited = 0
+            while self._auth_lock and waited < max_wait:
+                time.sleep(wait_interval)
+                waited += wait_interval
+            
+            # Check if refresh completed successfully
+            if not self.auth.is_expired():
+                logger.debug("Token refresh completed by another thread")
+                return
+            else:
+                logger.warning("Token refresh timeout or failed, attempting refresh")
+        
+        try:
+            self._auth_lock = True
             logger.info("Access token expired, refreshing...")
-            self.auth = self._authenticate()
-
+            
+            # Attempt to refresh with fallback
+            try:
+                self.auth = self._authenticate()
+                logger.info("Token refresh successful")
+            except AuthenticationError as e:
+                logger.error(f"Token refresh failed: {e}")
+                # Reset auth to force re-authentication on next attempt
+                self.auth = None
+                raise
+                
+        finally:
+            self._auth_lock = False
+    
     def _headers(self) -> Dict[str, str]:
-        """Get API request headers"""
-        self._refresh_auth_if_needed()
-
+        """
+        Get API request headers with automatic token refresh
+        
+        Returns:
+            Dictionary of HTTP headers
+            
+        Raises:
+            AuthenticationError: If authentication/refresh fails
+        """
+        # Refresh auth if needed (with error handling)
+        try:
+            self._refresh_auth_if_needed()
+        except AuthenticationError as e:
+            logger.error(f"Failed to refresh authentication: {e}")
+            raise
+        
+        # Validate auth is available
+        if not self.auth or not self.auth.access_token:
+            raise AuthenticationError("No valid authentication available")
+        
+        client_id = os.getenv("AMAZON_CLIENT_ID", "").strip()
+        if not client_id:
+            raise AuthenticationError("AMAZON_CLIENT_ID environment variable not set")
+        
         return {
             "Authorization": f"{self.auth.token_type} {self.auth.access_token}",
             "Content-Type": "application/json",
-            "Amazon-Advertising-API-ClientId": self.client_id,
+            "Amazon-Advertising-API-ClientId": client_id,
             "Amazon-Advertising-API-Scope": self.profile_id,
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
@@ -488,13 +671,16 @@ class AmazonAdsAPI:
     # CAMPAIGNS
     # ========================================================================
     
-    def get_campaigns(self, state_filter: str = None, use_cache: bool = True) -> List[Campaign]:
-        """Get all campaigns with caching support"""
-        # Use cache if available and no state filter
-        if use_cache and self._campaigns_cache is not None and state_filter is None:
-            logger.debug(f"Using cached campaigns ({len(self._campaigns_cache)} items)")
-            return self._campaigns_cache
+    def get_campaigns(self, state_filter: Optional[str] = None) -> List[Campaign]:
+        """
+        Get all campaigns
         
+        Args:
+            state_filter: Optional state filter (e.g., 'enabled', 'paused')
+            
+        Returns:
+            List of Campaign objects
+        """
         try:
             params = {}
             if state_filter:
@@ -503,13 +689,20 @@ class AmazonAdsAPI:
             response = self._request('GET', '/v2/sp/campaigns', params=params)
             campaigns_data = response.json()
             
+            if not isinstance(campaigns_data, list):
+                logger.warning(f"Unexpected campaigns response format: {type(campaigns_data)}")
+                return []
+            
             campaigns = []
             for c in campaigns_data:
+                if not isinstance(c, dict):
+                    continue
+                    
                 campaign = Campaign(
-                    campaign_id=str(c.get('campaignId')),
+                    campaign_id=str(c.get('campaignId', '')),
                     name=c.get('name', ''),
                     state=c.get('state', ''),
-                    daily_budget=float(c.get('dailyBudget', 0)),
+                    daily_budget=float(c.get('dailyBudget', 0.0)),
                     targeting_type=c.get('targetingType', ''),
                     campaign_type='sponsoredProducts'
                 )
@@ -1567,17 +1760,28 @@ class NegativeKeywordManager:
 # ============================================================================
 
 class PPCAutomation:
-    """Main automation orchestrator"""
+    """Main automation orchestrator with comprehensive error handling"""
     
     def __init__(self, config_path: str, profile_id: str, dry_run: bool = False):
+        """
+        Initialize PPC Automation
+        
+        Args:
+            config_path: Path to YAML configuration file
+            profile_id: Amazon Ads profile ID
+            dry_run: If True, no actual changes will be made
+            
+        Raises:
+            ConfigurationError: If configuration is invalid
+            AuthenticationError: If API authentication fails
+        """
         self.config = Config(config_path)
         self.profile_id = profile_id
         self.dry_run = dry_run
         
-        # Initialize API client with configurable rate limit
+        # Initialize API client (may raise AuthenticationError)
         region = self.config.get('api.region', 'NA')
-        max_requests_per_second = self.config.get('api.max_requests_per_second', MAX_REQUESTS_PER_SECOND)
-        self.api = AmazonAdsAPI(profile_id, region, max_requests_per_second=max_requests_per_second)
+        self.api = AmazonAdsAPI(profile_id, region)
         
         # Initialize audit logger
         audit_output_dir = self.config.get('logging.output_dir', './logs')
@@ -1590,8 +1794,16 @@ class PPCAutomation:
         self.keyword_discovery = KeywordDiscovery(self.config, self.api, self.audit)
         self.negative_keywords = NegativeKeywordManager(self.config, self.api, self.audit)
     
-    def run(self, features: List[str] = None):
-        """Run automation with specified features"""
+    def run(self, features: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Run automation with specified features
+        
+        Args:
+            features: List of features to run (None = use config defaults)
+            
+        Returns:
+            Dictionary of results for each feature
+        """
         logger.info("=" * 80)
         logger.info("AMAZON PPC AUTOMATION SUITE")
         logger.info("=" * 80)
@@ -1603,42 +1815,74 @@ class PPCAutomation:
         if features is None:
             features = self.config.get('features.enabled', [])
         
-        logger.info(f"Enabled features: {', '.join(features)}")
+        # Ensure features is a list
+        if not isinstance(features, list):
+            logger.warning(f"Invalid features type: {type(features)}, using default features")
+            features = []
+        
+        logger.info(f"Enabled features: {', '.join(features) if features else 'None'}")
         
         results = {}
         
         try:
-            # Run each feature
+            # Run each feature with error handling
             if 'bid_optimization' in features:
-                results['bid_optimization'] = self.bid_optimizer.optimize(self.dry_run)
+                try:
+                    results['bid_optimization'] = self.bid_optimizer.optimize(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Bid optimization failed: {e}")
+                    results['bid_optimization'] = {'error': str(e)}
             
             if 'dayparting' in features:
-                results['dayparting'] = self.dayparting.apply_dayparting(self.dry_run)
+                try:
+                    results['dayparting'] = self.dayparting.apply_dayparting(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Dayparting failed: {e}")
+                    results['dayparting'] = {'error': str(e)}
             
             if 'campaign_management' in features:
-                results['campaign_management'] = self.campaign_manager.manage_campaigns(self.dry_run)
+                try:
+                    results['campaign_management'] = self.campaign_manager.manage_campaigns(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Campaign management failed: {e}")
+                    results['campaign_management'] = {'error': str(e)}
             
             if 'keyword_discovery' in features:
-                results['keyword_discovery'] = self.keyword_discovery.discover_keywords(self.dry_run)
+                try:
+                    results['keyword_discovery'] = self.keyword_discovery.discover_keywords(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Keyword discovery failed: {e}")
+                    results['keyword_discovery'] = {'error': str(e)}
             
             if 'negative_keywords' in features:
-                results['negative_keywords'] = self.negative_keywords.add_negative_keywords(self.dry_run)
+                try:
+                    results['negative_keywords'] = self.negative_keywords.add_negative_keywords(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Negative keywords management failed: {e}")
+                    results['negative_keywords'] = {'error': str(e)}
             
         except Exception as e:
-            logger.error(f"Automation failed: {e}")
+            logger.error(f"Automation failed with unexpected error: {e}")
             logger.error(traceback.format_exc())
+            results['error'] = str(e)
         finally:
             # Save audit trail
-            self.audit.save()
+            try:
+                self.audit.save()
+            except Exception as e:
+                logger.error(f"Failed to save audit trail: {e}")
         
         # Print summary
         logger.info("=" * 80)
         logger.info("AUTOMATION SUMMARY")
         logger.info("=" * 80)
         for feature, result in results.items():
-            logger.info(f"\n{feature.upper().replace('_', ' ')}:")
-            for key, value in result.items():
-                logger.info(f"  {key}: {value}")
+            if isinstance(result, dict):
+                logger.info(f"\n{feature.upper().replace('_', ' ')}:")
+                for key, value in result.items():
+                    logger.info(f"  {key}: {value}")
+            else:
+                logger.info(f"\n{feature.upper().replace('_', ' ')}: {result}")
         logger.info("=" * 80)
         
         return results
