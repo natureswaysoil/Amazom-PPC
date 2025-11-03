@@ -1146,8 +1146,8 @@ class DaypartingManager:
             logger.info("Dayparting is disabled in config")
             return {}
         
-        # Get timezone from config (default to US/Pacific for Amazon sellers)
-        timezone_str = self.config.get('dayparting.timezone', 'US/Pacific')
+        # Get timezone from config (default to US/Eastern for Amazon sellers)
+        timezone_str = self.config.get('dayparting.timezone', 'US/Eastern')
         
         if pytz:
             try:

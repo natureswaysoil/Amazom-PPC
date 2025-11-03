@@ -69,7 +69,7 @@ This document describes the performance optimizations implemented in the Amazon 
 
 **Changes**:
 - Uses `pytz` for timezone conversion
-- Configurable timezone (defaults to US/Pacific)
+- Configurable timezone (defaults to US/Eastern)
 - Timezone logged in audit trail
 - Falls back to UTC if pytz unavailable
 
@@ -77,14 +77,14 @@ This document describes the performance optimizations implemented in the Amazon 
 ```json
 {
   "dayparting": {
-    "timezone": "US/Pacific"
+    "timezone": "US/Eastern"
   }
 }
 ```
 
 **Common Timezones**:
+- `US/Eastern` - Eastern Time (EST/EDT) - **Default**
 - `US/Pacific` - Pacific Time (PST/PDT)
-- `US/Eastern` - Eastern Time (EST/EDT)
 - `US/Central` - Central Time (CST/CDT)
 - `US/Mountain` - Mountain Time (MST/MDT)
 - `UTC` - Coordinated Universal Time
@@ -276,7 +276,7 @@ Add these to your `config.json`:
   },
   "dayparting": {
     "enabled": true,
-    "timezone": "US/Pacific"
+    "timezone": "US/Eastern"
   }
 }
 ```
