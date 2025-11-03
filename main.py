@@ -323,9 +323,16 @@ def run_verify_connection(request) -> Tuple[Dict[str, Any], int]:
         set_environment_variables(config)
         validate_credentials(config)
         
-        # Get sample size from query params
-        sample_size = int(request.args.get('verify_sample_size', '5'))
-        sample_size = min(max(1, sample_size), 100)  # Clamp between 1 and 100
+        # Get sample size from query params with validation
+        try:
+            sample_size = int(request.args.get('verify_sample_size', '5'))
+            sample_size = min(max(1, sample_size), 100)  # Clamp between 1 and 100
+        except ValueError:
+            return {
+                'status': 'error',
+                'message': 'Invalid verify_sample_size parameter. Must be a number between 1 and 100.',
+                'timestamp': datetime.now().isoformat()
+            }, 400
         
         # Import optimizer to test connection
         from optimizer_core import PPCAutomation
@@ -411,6 +418,11 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     
     logger.info(f"=== Amazon PPC Optimizer Started at {start_time} ===")
     
+    # Initialize variables for error handler scope
+    config = None
+    dashboard_client = None
+    dry_run = False
+    
     try:
         # Parse request JSON if available
         request_json = {}
@@ -472,9 +484,12 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         
-        # Send results to dashboard with enhanced payload
+        # Send results to dashboard with enhanced payload (non-blocking)
         logger.info("Sending results to dashboard...")
-        dashboard_client.send_results(results, config, duration, dry_run)
+        try:
+            dashboard_client.send_results(results, config, duration, dry_run)
+        except Exception as dashboard_err:
+            logger.warning(f"Dashboard update failed (non-blocking): {dashboard_err}")
         
         # Prepare summary
         summary = format_results_summary(results, duration, dry_run)
@@ -503,25 +518,24 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
         logger.error(f"Optimization failed: {error_msg}")
         logger.error(error_trace)
         
-        # Send error to dashboard
-        try:
-            config = load_config()
-            dashboard_client = DashboardClient(config)
-            context = {
-                'function': 'run_optimizer',
-                'timestamp': datetime.now().isoformat(),
-                'dry_run': request.args.get('dry_run', 'false').lower() == 'true'
-            }
-            dashboard_client.send_error(e, context)
-        except Exception as dashboard_err:
-            logger.warning(f"Failed to send error to dashboard: {dashboard_err}")
+        # Send error to dashboard (if dashboard_client was initialized)
+        if dashboard_client:
+            try:
+                context = {
+                    'function': 'run_optimizer',
+                    'timestamp': datetime.now().isoformat(),
+                    'dry_run': dry_run
+                }
+                dashboard_client.send_error(e, context)
+            except Exception as dashboard_err:
+                logger.warning(f"Failed to send error to dashboard: {dashboard_err}")
         
-        # Send error notification
-        try:
-            config = load_config()
-            if config.get('email_notifications', {}).get('send_on_error', True):
-                subject = "Amazon PPC Optimization FAILED"
-                body = f"""
+        # Send error notification (if config was loaded)
+        if config:
+            try:
+                if config.get('email_notifications', {}).get('send_on_error', True):
+                    subject = "Amazon PPC Optimization FAILED"
+                    body = f"""
 Optimization Run Failed
 
 Error: {error_msg}
@@ -532,10 +546,10 @@ Stack Trace:
 {error_trace}
 
 Please check the Cloud Functions logs for more details.
-                """
-                send_email_notification(subject, body, config)
-        except Exception as notification_err:
-            logger.warning(f"Failed to send error notification: {notification_err}")
+                    """
+                    send_email_notification(subject, body, config)
+            except Exception as notification_err:
+                logger.warning(f"Failed to send error notification: {notification_err}")
         
         return {
             'status': 'error',
