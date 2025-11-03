@@ -239,6 +239,36 @@ Dashboard communication is designed to be non-blocking:
 - Comprehensive logging of all interactions
 - Graceful degradation if dashboard is unavailable
 
+### Verification & Testing
+
+The optimizer includes built-in verification endpoints:
+
+**Health Check** (lightweight, no optimization):
+```bash
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  "https://YOUR-FUNCTION-URL?health=true"
+```
+
+**Verify Amazon Ads Connection** (test API without full optimization):
+```bash
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  "https://YOUR-FUNCTION-URL?verify_connection=true&verify_sample_size=3"
+```
+
+**Dry Run** (full optimization without making changes):
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" \
+  -d '{"dry_run": true, "features": ["bid_optimization"]}' \
+  "https://YOUR-FUNCTION-URL"
+```
+
+For complete verification procedures, see:
+- **[VERIFICATION_GUIDE.md](VERIFICATION_GUIDE.md)**: Comprehensive verification guide
+- **[DATA_FLOW_SUMMARY.md](DATA_FLOW_SUMMARY.md)**: Complete data flow documentation
+- **[DASHBOARD_INTEGRATION.md](DASHBOARD_INTEGRATION.md)**: Dashboard integration details
+
 ## 🏥 Automated Health Check Workflow
 
 The repository includes an automated health check workflow (`.github/workflows/health-check.yml`) that runs after each deployment to ensure the Cloud Function is healthy and ready to use.
@@ -393,6 +423,18 @@ curl "https://YOUR-FUNCTION-URL?health=true"
 
 Or configure less frequent checks (e.g., every 5-10 minutes instead of every 5-6 seconds)
 
+## 📚 Documentation Index
+
+| Document | Description |
+|----------|-------------|
+| [README.md](README.md) | Main project documentation (this file) |
+| [VERIFICATION_GUIDE.md](VERIFICATION_GUIDE.md) | Complete verification procedures and testing guide |
+| [DATA_FLOW_SUMMARY.md](DATA_FLOW_SUMMARY.md) | Data flow from optimizer to dashboard with examples |
+| [DASHBOARD_INTEGRATION.md](DASHBOARD_INTEGRATION.md) | Detailed dashboard integration documentation |
+| [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) | Step-by-step deployment instructions |
+| [DEPLOY_NOW.md](DEPLOY_NOW.md) | Quick deployment commands |
+| [DEPLOYMENT_COMPLETE.md](DEPLOYMENT_COMPLETE.md) | Post-deployment verification checklist |
+
 ## 📝 License
 
 MIT License - see LICENSE file for details
@@ -401,5 +443,6 @@ MIT License - see LICENSE file for details
 
 For issues or questions:
 - Check Cloud Function logs
-- Review the DEPLOYMENT_GUIDE.md
+- Review the [VERIFICATION_GUIDE.md](VERIFICATION_GUIDE.md) for troubleshooting
+- Review the [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for deployment help
 - Contact: james@natureswaysoil.com
