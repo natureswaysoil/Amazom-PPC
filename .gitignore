@@ -62,3 +62,7 @@ config.local.json
 secrets.json
 API_SECRETS_CONFIGURATION.md
 API_SECRETS_CONFIGURATION.pdf
+
+# Test files
+test_*.py
+*_test.py

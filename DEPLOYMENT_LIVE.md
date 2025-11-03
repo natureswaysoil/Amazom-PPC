@@ -32,6 +32,10 @@ Your Amazon PPC Optimizer has been successfully deployed to Google Cloud Functio
 - **Timeout**: 9 minutes (540 seconds)
 - **Entry Point**: `run_optimizer`
 
+> **Note**: This is a Gen2 Cloud Function, which uses Cloud Run URLs (format: `https://FUNCTION_NAME-HASH-REGION.a.run.app`). 
+> Gen1 Cloud Functions use the format `https://REGION-PROJECT.cloudfunctions.net/FUNCTION_NAME`.
+> The actual deployed URL is the Cloud Run format shown above, NOT `https://us-central1-amazon-ppc-474902.cloudfunctions.net/amazon-ppc-optimizer`.
+
 ### GitHub Repository
 - **Repository**: [natureswaysoil/Amazom-PPC](https://github.com/natureswaysoil/Amazom-PPC)
 - **Branch**: `main`

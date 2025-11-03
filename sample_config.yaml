@@ -1,0 +1,99 @@
+amazon_api:
+  region: NA
+  profile_id: YOUR_PROFILE_ID
+  client_id: amzn1.application-oa2-client.xxxxx
+  client_secret: amzn1.oa2-cs.v1.xxxxx
+  refresh_token: Atzr|IwEBIxxxxx
+
+dashboard:
+  url: https://ppc-dashboard.abacusai.app
+  api_key: YOUR_DASHBOARD_API_KEY
+  enabled: true
+  send_real_time_updates: true
+  timeout: 30
+
+email_notifications:
+  enabled: false
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+  smtp_user: YOUR_SMTP_USER_HERE
+  smtp_password: YOUR_SMTP_PASSWORD_HERE
+  from_email: YOUR_EMAIL_HERE
+  to_email: alerts@example.com
+  send_on_completion: true
+  send_on_error: true
+
+bid_optimization:
+  lookback_days: 14
+  min_clicks: 10
+  min_spend: 5.0
+  target_acos: 0.45
+  high_acos: 0.6
+  low_acos: 0.25
+  min_ctr: 0.003
+  up_pct: 0.15
+  down_pct: 0.2
+  min_bid: 0.25
+  max_bid: 5.0
+
+dayparting:
+  enabled: true
+  peak_hours: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+  peak_multiplier: 1.2
+  off_peak_multiplier: 0.85
+  day_multipliers:
+    MONDAY: 1.0
+    TUESDAY: 1.0
+    WEDNESDAY: 1.0
+    THURSDAY: 1.0
+    FRIDAY: 1.1
+    SATURDAY: 1.2
+    SUNDAY: 1.15
+  min_multiplier: 0.4
+  max_multiplier: 1.8
+
+campaign_management:
+  enabled: true
+  acos_threshold: 0.45
+  min_spend: 20.0
+  auto_activate: true
+  auto_pause: true
+
+keyword_discovery:
+  enabled: true
+  min_clicks: 5
+  max_acos: 0.4
+  initial_bid: 0.75
+  max_keywords_per_run: 50
+
+negative_keywords:
+  enabled: true
+  min_spend: 10.0
+  max_acos: 1.0
+  auto_add: true
+
+budget_optimization:
+  enabled: true
+  increase_threshold_acos: 0.3
+  decrease_threshold_acos: 0.6
+  budget_change_pct: 0.2
+  min_daily_budget: 5.0
+  max_daily_budget: 100.0
+
+placement_bids:
+  enabled: true
+  top_of_search_multiplier: 1.5
+  product_pages_multiplier: 0.8
+
+features:
+  enabled:
+    - bid_optimization
+    - dayparting
+    - campaign_management
+    - keyword_discovery
+    - negative_keywords
+
+logging:
+  level: INFO
+  output_dir: ./logs
+  audit_trail: true

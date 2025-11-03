@@ -1,16 +1,6 @@
-"""
-Google Cloud Function Entry Point for Amazon PPC Optimizer
-Triggered by Cloud Scheduler via HTTP request
-
-This function automatically refreshes Amazon Advertising API tokens before making API calls.
-Token refresh is handled automatically by the optimizer_core module.
-"""
-
 import json
 import logging
 import os
-import sys
-import traceback
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime
@@ -22,8 +12,8 @@ from email.mime.multipart import MIMEMultipart
 import requests
 import yaml
 
-# Add parent directory to path to import optimizer
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from optimizer_core import PPCAutomation
+from dashboard_client import DashboardClient
 
 # Configure logging for Cloud Functions
 # Detect if running in Cloud Functions environment
@@ -94,6 +84,12 @@ def create_config_file(config_dict: Dict) -> str:
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp file {temp_file.name}: {e}")
 
+def _resolve_config_path(request_data: Dict[str, Any]) -> str:
+    request_path = request_data.get("config_path")
+    if request_path:
+        if os.path.exists(request_path):
+            return request_path
+        logger.warning("Requested config_path '%s' was not found; falling back to defaults", request_path)
 
 def send_email_notification(subject: str, body: str, config: Dict) -> bool:
     """
@@ -336,6 +332,9 @@ Please check the Cloud Functions logs for more details.
             'timestamp': datetime.now().isoformat()
         }, 500
 
+    if not isinstance(request_json, dict):
+        logger.warning("Request JSON body is not an object; ignoring payload")
+        request_json = {}
 
 def load_config() -> Dict[str, Any]:
     """
