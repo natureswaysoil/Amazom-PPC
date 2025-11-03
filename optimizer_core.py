@@ -44,6 +44,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Set, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
 import traceback
 
@@ -54,6 +55,13 @@ try:
 except ImportError:
     print("ERROR: pyyaml is required. Install with: pip install pyyaml")
     sys.exit(1)
+
+try:
+    import pytz
+except ImportError:
+    print("WARNING: pytz is not installed. Dayparting will use server timezone (UTC).")
+    print("Install with: pip install pytz")
+    pytz = None
 
 # ============================================================================
 # CONSTANTS
@@ -68,8 +76,8 @@ ENDPOINTS = {
 TOKEN_URL = "https://api.amazon.com/auth/o2/token"
 USER_AGENT = "NWS-PPC-Automation/2.0"
 
-# Rate limiting
-MAX_REQUESTS_PER_SECOND = 5
+# Rate limiting - Amazon Advertising API supports 10 requests/second
+MAX_REQUESTS_PER_SECOND = 10
 REQUEST_INTERVAL = 1.0 / MAX_REQUESTS_PER_SECOND
 
 # ============================================================================
@@ -179,23 +187,56 @@ class AuditEntry:
 # ============================================================================
 
 class RateLimiter:
-    """Simple rate limiter for API calls"""
+    """Rate limiter for API calls with burst support"""
     
-    def __init__(self, max_per_second: int = MAX_REQUESTS_PER_SECOND):
+    def __init__(self, max_per_second: int = MAX_REQUESTS_PER_SECOND, burst_size: int = 3):
         self.max_per_second = max_per_second
         self.interval = 1.0 / max_per_second
-        self.last_request_time = 0.0
+        self.burst_size = burst_size
+        self.tokens = burst_size
+        self.last_update_time = time.time()
     
     def wait_if_needed(self):
-        """Wait if necessary to respect rate limits"""
+        """Wait if necessary to respect rate limits with token bucket algorithm"""
         current_time = time.time()
-        time_since_last = current_time - self.last_request_time
+        time_elapsed = current_time - self.last_update_time
         
-        if time_since_last < self.interval:
-            sleep_time = self.interval - time_since_last
+        # Refill tokens based on time elapsed
+        self.tokens = min(self.burst_size, self.tokens + time_elapsed * self.max_per_second)
+        self.last_update_time = current_time
+        
+        # If no tokens available, wait
+        if self.tokens < 1:
+            sleep_time = (1 - self.tokens) / self.max_per_second
             time.sleep(sleep_time)
+            self.tokens = 1
         
-        self.last_request_time = time.time()
+        # Consume one token
+        self.tokens -= 1
+
+
+# ============================================================================
+# PERFORMANCE TIMING DECORATOR
+# ============================================================================
+
+def timing_logger(operation_name: str = None):
+    """Decorator to log execution time of operations"""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            op_name = operation_name or func.__name__
+            start_time = time.time()
+            logger.info(f"Starting {op_name}...")
+            try:
+                result = func(*args, **kwargs)
+                elapsed = time.time() - start_time
+                logger.info(f"✓ {op_name} completed in {elapsed:.2f}s")
+                return result
+            except Exception as e:
+                elapsed = time.time() - start_time
+                logger.error(f"✗ {op_name} failed after {elapsed:.2f}s: {e}")
+                raise
+        return wrapper
+    return decorator
 
 
 # ============================================================================
@@ -303,29 +344,29 @@ class AuditLogger:
 
 class AmazonAdsAPI:
     """Amazon Advertising API client with retry logic and rate limiting"""
-
-    def __init__(self, profile_id: str, region: str = "NA",
-                 client_id: Optional[str] = None,
-                 client_secret: Optional[str] = None,
-                 refresh_token: Optional[str] = None):
+    
+    def __init__(self, profile_id: str, region: str = "NA", max_requests_per_second: int = None, 
+                 session: requests.Session = None):
         self.profile_id = profile_id
         self.region = region.upper()
         self.base_url = ENDPOINTS.get(self.region, ENDPOINTS["NA"])
-        self.client_id = client_id or os.getenv("AMAZON_CLIENT_ID")
-        self.client_secret = client_secret or os.getenv("AMAZON_CLIENT_SECRET")
-        self.refresh_token = refresh_token or os.getenv("AMAZON_REFRESH_TOKEN")
+        # Get credentials from environment
+        self.client_id = os.getenv("AMAZON_CLIENT_ID")
+        self.client_secret = os.getenv("AMAZON_CLIENT_SECRET")
+        self.refresh_token = os.getenv("AMAZON_REFRESH_TOKEN")
         self.auth = self._authenticate()
-        self.rate_limiter = RateLimiter()
-
+        self.rate_limiter = RateLimiter(max_requests_per_second or MAX_REQUESTS_PER_SECOND)
+        self.session = session or requests.Session()
+        # Cache for campaigns and ad groups (lifetime of API instance)
+        self._campaigns_cache = None
+        self._ad_groups_cache = None
+    
     def _authenticate(self) -> Auth:
         """Authenticate and get access token"""
         if not all([self.client_id, self.client_secret, self.refresh_token]):
-            logger.error(
-                "Missing Amazon Ads API credentials. Set environment variables or"
-                " provide them in the configuration file."
-            )
+            logger.error("Missing required environment variables")
             sys.exit(1)
-
+        
         payload = {
             "grant_type": "refresh_token",
             "refresh_token": self.refresh_token,
@@ -369,7 +410,7 @@ class AmazonAdsAPI:
         }
     
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
-        """Make API request with retry logic and rate limiting"""
+        """Make API request with retry logic and rate limiting using connection pooling"""
         self.rate_limiter.wait_if_needed()
         
         url = f"{self.base_url}{endpoint}"
@@ -378,7 +419,7 @@ class AmazonAdsAPI:
         
         for attempt in range(max_retries):
             try:
-                response = requests.request(
+                response = self.session.request(
                     method=method,
                     url=url,
                     headers=self._headers(),
@@ -447,8 +488,13 @@ class AmazonAdsAPI:
     # CAMPAIGNS
     # ========================================================================
     
-    def get_campaigns(self, state_filter: str = None) -> List[Campaign]:
-        """Get all campaigns"""
+    def get_campaigns(self, state_filter: str = None, use_cache: bool = True) -> List[Campaign]:
+        """Get all campaigns with caching support"""
+        # Use cache if available and no state filter
+        if use_cache and self._campaigns_cache is not None and state_filter is None:
+            logger.debug(f"Using cached campaigns ({len(self._campaigns_cache)} items)")
+            return self._campaigns_cache
+        
         try:
             params = {}
             if state_filter:
@@ -470,10 +516,19 @@ class AmazonAdsAPI:
                 campaigns.append(campaign)
             
             logger.info(f"Retrieved {len(campaigns)} campaigns")
+            
+            # Cache if no state filter
+            if state_filter is None:
+                self._campaigns_cache = campaigns
+            
             return campaigns
         except Exception as e:
             logger.error(f"Failed to get campaigns: {e}")
             return []
+    
+    def invalidate_campaigns_cache(self):
+        """Invalidate campaigns cache after updates"""
+        self._campaigns_cache = None
     
     def update_campaign(self, campaign_id: str, updates: Dict) -> bool:
         """Update campaign settings"""
@@ -484,6 +539,7 @@ class AmazonAdsAPI:
                 json=updates
             )
             logger.info(f"Updated campaign {campaign_id}")
+            self.invalidate_campaigns_cache()  # Invalidate cache after update
             return True
         except Exception as e:
             logger.error(f"Failed to update campaign {campaign_id}: {e}")
@@ -508,8 +564,13 @@ class AmazonAdsAPI:
     # AD GROUPS
     # ========================================================================
     
-    def get_ad_groups(self, campaign_id: str = None) -> List[AdGroup]:
-        """Get ad groups"""
+    def get_ad_groups(self, campaign_id: str = None, use_cache: bool = True) -> List[AdGroup]:
+        """Get ad groups with caching support"""
+        # Use cache if available and no campaign_id filter
+        if use_cache and self._ad_groups_cache is not None and campaign_id is None:
+            logger.debug(f"Using cached ad groups ({len(self._ad_groups_cache)} items)")
+            return self._ad_groups_cache
+        
         try:
             params = {}
             if campaign_id:
@@ -530,10 +591,19 @@ class AmazonAdsAPI:
                 ad_groups.append(ad_group)
             
             logger.info(f"Retrieved {len(ad_groups)} ad groups")
+            
+            # Cache if no campaign_id filter
+            if campaign_id is None:
+                self._ad_groups_cache = ad_groups
+            
             return ad_groups
         except Exception as e:
             logger.error(f"Failed to get ad groups: {e}")
             return []
+    
+    def invalidate_ad_groups_cache(self):
+        """Invalidate ad groups cache after updates"""
+        self._ad_groups_cache = None
     
     def create_ad_group(self, ad_group_data: Dict) -> Optional[str]:
         """Create new ad group"""
@@ -586,7 +656,7 @@ class AmazonAdsAPI:
             return []
     
     def update_keyword_bid(self, keyword_id: str, bid: float, state: str = None) -> bool:
-        """Update keyword bid"""
+        """Update keyword bid (single keyword - consider using batch_update_keywords for multiple updates)"""
         try:
             updates = {'keywordId': int(keyword_id), 'bid': round(bid, 2)}
             if state:
@@ -598,6 +668,36 @@ class AmazonAdsAPI:
         except Exception as e:
             logger.error(f"Failed to update keyword {keyword_id}: {e}")
             return False
+    
+    def batch_update_keywords(self, updates: List[Dict]) -> Dict:
+        """Batch update keywords (up to 100 at a time)"""
+        results = {
+            'total': len(updates),
+            'success': 0,
+            'failed': 0
+        }
+        
+        batch_size = 100
+        for i in range(0, len(updates), batch_size):
+            batch = updates[i:i+batch_size]
+            try:
+                response = self._request('PUT', '/v2/sp/keywords', json=batch)
+                result = response.json()
+                
+                for r in result:
+                    if r.get('code') == 'SUCCESS':
+                        results['success'] += 1
+                    else:
+                        results['failed'] += 1
+                        logger.warning(f"Failed to update keyword {r.get('keywordId')}: {r.get('details')}")
+                
+                logger.info(f"Batch updated {len(batch)} keywords (batch {i//batch_size + 1})")
+            except Exception as e:
+                logger.error(f"Failed to batch update keywords: {e}")
+                results['failed'] += len(batch)
+        
+        logger.info(f"Batch update complete: {results['success']}/{results['total']} successful")
+        return results
     
     def create_keywords(self, keywords_data: List[Dict]) -> List[str]:
         """Create new keywords"""
@@ -719,23 +819,116 @@ class AmazonAdsAPI:
             return []
     
     def wait_for_report(self, report_id: str, timeout: int = 300) -> Optional[str]:
-        """Wait for report to be ready and return download URL"""
+        """Wait for report to be ready with adaptive polling (exponential backoff)"""
         start_time = time.time()
+        poll_interval = 2  # Start with 2 seconds
+        max_poll_interval = 10  # Cap at 10 seconds
         
         while time.time() - start_time < timeout:
             status_data = self.get_report_status(report_id)
             status = status_data.get('status')
             
             if status == 'SUCCESS':
+                elapsed = time.time() - start_time
+                logger.info(f"Report {report_id} ready in {elapsed:.1f}s")
                 return status_data.get('location')
             elif status in ['FAILURE', 'CANCELLED']:
                 logger.error(f"Report {report_id} failed: {status}")
                 return None
             
-            time.sleep(5)
+            # Adaptive polling: gradually increase wait time
+            time.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, max_poll_interval)
         
-        logger.error(f"Report {report_id} timeout")
+        logger.error(f"Report {report_id} timeout after {timeout}s")
         return None
+    
+    def create_and_download_reports_parallel(self, report_configs: List[Dict], 
+                                            max_workers: int = 3) -> Dict[str, List[Dict]]:
+        """
+        Create multiple reports and download them in parallel for faster processing.
+        
+        Args:
+            report_configs: List of dicts with 'name', 'report_type', 'metrics', etc.
+            max_workers: Number of parallel workers (default 3 to avoid rate limits)
+            
+        Returns:
+            Dict mapping report names to their downloaded data
+        """
+        start_time = time.time()
+        logger.info(f"Creating {len(report_configs)} reports in parallel...")
+        
+        # Step 1: Create all reports
+        report_ids = {}
+        for config in report_configs:
+            name = config.get('name', 'unnamed')
+            report_id = self.create_report(
+                report_type=config['report_type'],
+                metrics=config['metrics'],
+                report_date=config.get('report_date'),
+                segment=config.get('segment')
+            )
+            if report_id:
+                report_ids[name] = report_id
+                logger.info(f"Created report '{name}': {report_id}")
+        
+        if not report_ids:
+            logger.error("No reports were created successfully")
+            return {}
+        
+        # Step 2: Wait for all reports in parallel using ThreadPoolExecutor
+        logger.info(f"Waiting for {len(report_ids)} reports in parallel...")
+        report_urls = {}
+        
+        def wait_for_single_report(name_and_id):
+            name, report_id = name_and_id
+            url = self.wait_for_report(report_id)
+            return name, url
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_name = {
+                executor.submit(wait_for_single_report, (name, rid)): name 
+                for name, rid in report_ids.items()
+            }
+            
+            for future in as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    result_name, url = future.result()
+                    if url:
+                        report_urls[result_name] = url
+                        logger.info(f"Report '{result_name}' ready for download")
+                except Exception as e:
+                    logger.error(f"Error waiting for report '{name}': {e}")
+        
+        # Step 3: Download all reports in parallel
+        logger.info(f"Downloading {len(report_urls)} reports in parallel...")
+        results = {}
+        
+        def download_single_report(name_and_url):
+            name, url = name_and_url
+            data = self.download_report(url)
+            return name, data
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_name = {
+                executor.submit(download_single_report, (name, url)): name 
+                for name, url in report_urls.items()
+            }
+            
+            for future in as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    result_name, data = future.result()
+                    results[result_name] = data
+                    logger.info(f"Downloaded report '{result_name}': {len(data)} records")
+                except Exception as e:
+                    logger.error(f"Error downloading report '{name}': {e}")
+        
+        elapsed = time.time() - start_time
+        logger.info(f"Parallel report processing complete in {elapsed:.1f}s (saved ~{len(report_configs)*5-elapsed:.1f}s)")
+        
+        return results
     
     # ========================================================================
     # KEYWORD SUGGESTIONS
@@ -782,7 +975,8 @@ class BidOptimizer:
         self.audit = audit_logger
     
     def optimize(self, dry_run: bool = False) -> Dict:
-        """Run bid optimization"""
+        """Run bid optimization with performance timing"""
+        start_time = time.time()
         logger.info("=== Starting Bid Optimization ===")
         
         results = {
@@ -812,12 +1006,18 @@ class BidOptimizer:
         
         report_data = self.api.download_report(report_url)
         
+        # Process keywords in batches to optimize memory usage
+        batch_size = 100
+        keyword_updates = []  # Collect all updates for batch processing
+        
         # Get current keywords
         keywords = self.api.get_keywords()
         keyword_map = {kw.keyword_id: kw for kw in keywords}
         
+        logger.info(f"Processing {len(report_data)} performance records in batches of {batch_size}")
+        
         # Analyze each keyword
-        for row in report_data:
+        for idx, row in enumerate(report_data):
             keyword_id = row.get('keywordId')
             if not keyword_id or keyword_id not in keyword_map:
                 continue
@@ -855,12 +1055,27 @@ class BidOptimizer:
                     dry_run
                 )
                 
-                if not dry_run:
-                    self.api.update_keyword_bid(keyword_id, new_bid)
+                # Collect updates for batch processing
+                keyword_updates.append({
+                    'keywordId': int(keyword_id),
+                    'bid': round(new_bid, 2)
+                })
             else:
                 results['no_change'] += 1
+            
+            # Log progress every batch_size records
+            if (idx + 1) % batch_size == 0:
+                logger.info(f"Processed {idx + 1}/{len(report_data)} records...")
         
-        logger.info(f"Bid optimization complete: {results}")
+        # Apply batch updates
+        if keyword_updates and not dry_run:
+            logger.info(f"Applying {len(keyword_updates)} bid updates in batches...")
+            batch_results = self.api.batch_update_keywords(keyword_updates)
+            logger.info(f"Batch update results: {batch_results}")
+        
+        elapsed = time.time() - start_time
+        logger.info(f"Bid optimization complete in {elapsed:.2f}s: {results}")
+        results['execution_time_seconds'] = round(elapsed, 2)
         return results
     
     def _calculate_new_bid(self, keyword: Keyword, metrics: PerformanceMetrics) -> Optional[float]:
@@ -923,7 +1138,7 @@ class DaypartingManager:
         self.base_bids: Dict[str, float] = {}  # Store original bids
     
     def apply_dayparting(self, dry_run: bool = False) -> Dict:
-        """Apply dayparting bid adjustments"""
+        """Apply dayparting bid adjustments with timezone awareness"""
         logger.info("=== Applying Dayparting ===")
         
         # Check if dayparting is enabled
@@ -931,13 +1146,29 @@ class DaypartingManager:
             logger.info("Dayparting is disabled in config")
             return {}
         
-        current_hour = datetime.now().hour
-        current_day = datetime.now().strftime('%A').upper()
+        # Get timezone from config (default to US/Eastern for Amazon sellers)
+        timezone_str = self.config.get('dayparting.timezone', 'US/Eastern')
+        
+        if pytz:
+            try:
+                tz = pytz.timezone(timezone_str)
+                current_time = datetime.now(tz)
+                logger.info(f"Using timezone: {timezone_str}")
+            except Exception as e:
+                logger.warning(f"Invalid timezone '{timezone_str}', using UTC: {e}")
+                current_time = datetime.now(pytz.UTC)
+        else:
+            # Fallback to server time if pytz not available
+            current_time = datetime.now()
+            logger.warning("pytz not available, using server timezone (UTC)")
+        
+        current_hour = current_time.hour
+        current_day = current_time.strftime('%A').upper()
         
         # Get multiplier for current hour
         multiplier = self._get_multiplier(current_hour, current_day)
         
-        logger.info(f"Current time: {current_day} {current_hour}:00, Multiplier: {multiplier:.2f}")
+        logger.info(f"Current time ({timezone_str}): {current_day} {current_hour}:00, Multiplier: {multiplier:.2f}")
         
         results = {
             'keywords_updated': 0,
@@ -970,7 +1201,7 @@ class DaypartingManager:
                     keyword.keyword_id,
                     f"${keyword.bid:.2f}",
                     f"${new_bid:.2f}",
-                    f"Dayparting: {current_day} {current_hour}:00 ({multiplier:.2f}x)",
+                    f"Dayparting: {current_day} {current_hour}:00 {timezone_str} ({multiplier:.2f}x)",
                     dry_run
                 )
                 
@@ -1011,7 +1242,8 @@ class CampaignManager:
         self.audit = audit_logger
     
     def manage_campaigns(self, dry_run: bool = False) -> Dict:
-        """Activate/deactivate campaigns based on ACOS"""
+        """Activate/deactivate campaigns based on ACOS with performance timing"""
+        start_time = time.time()
         logger.info("=== Managing Campaigns ===")
         
         results = {
@@ -1099,7 +1331,9 @@ class CampaignManager:
             else:
                 results['no_change'] += 1
         
-        logger.info(f"Campaign management complete: {results}")
+        elapsed = time.time() - start_time
+        logger.info(f"Campaign management complete in {elapsed:.2f}s: {results}")
+        results['execution_time_seconds'] = round(elapsed, 2)
         return results
 
 
@@ -1112,7 +1346,8 @@ class KeywordDiscovery:
         self.audit = audit_logger
     
     def discover_keywords(self, dry_run: bool = False) -> Dict:
-        """Discover and add new keywords"""
+        """Discover and add new keywords with performance timing"""
+        start_time = time.time()
         logger.info("=== Discovering Keywords ===")
         
         results = {
@@ -1140,10 +1375,22 @@ class KeywordDiscovery:
         
         # Get existing keywords to avoid duplicates
         existing_keywords = self.api.get_keywords()
-        existing_keyword_texts = {
+        
+        # Use frozenset for immutable data (good for lookups)
+        existing_keyword_texts = frozenset(
             (kw.ad_group_id, kw.keyword_text.lower(), kw.match_type) 
             for kw in existing_keywords
-        }
+        )
+        
+        # Create keyword_id index for faster lookups
+        keyword_by_id = {kw.keyword_id: kw for kw in existing_keywords}
+        
+        # Create campaign_id index for faster filtering
+        keywords_by_campaign = defaultdict(list)
+        for kw in existing_keywords:
+            keywords_by_campaign[kw.campaign_id].append(kw)
+        
+        logger.debug(f"Indexed {len(existing_keywords)} keywords across {len(keywords_by_campaign)} campaigns")
         
         # Analyze search terms
         min_clicks = self.config.get('keyword_discovery.min_clicks', 5)
@@ -1210,7 +1457,9 @@ class KeywordDiscovery:
         elif dry_run:
             results['keywords_added'] = len(new_keywords_to_add)
         
-        logger.info(f"Keyword discovery complete: {results}")
+        elapsed = time.time() - start_time
+        logger.info(f"Keyword discovery complete in {elapsed:.2f}s: {results}")
+        results['execution_time_seconds'] = round(elapsed, 2)
         return results
 
 
@@ -1322,23 +1571,13 @@ class PPCAutomation:
     
     def __init__(self, config_path: str, profile_id: str, dry_run: bool = False):
         self.config = Config(config_path)
-        config_profile_id = self.config.get('amazon_api.profile_id')
-        self.profile_id = profile_id or str(config_profile_id or '')
-        if not self.profile_id:
-            logger.error("Amazon Ads profile ID is required. Provide --profile-id or set it in the configuration file.")
-            sys.exit(1)
+        self.profile_id = profile_id
         self.dry_run = dry_run
-
-        # Initialize API client
-        amazon_cfg = self.config.get('amazon_api', {}) or {}
-        region = amazon_cfg.get('region', 'NA')
-        self.api = AmazonAdsAPI(
-            self.profile_id,
-            region,
-            client_id=amazon_cfg.get('client_id'),
-            client_secret=amazon_cfg.get('client_secret'),
-            refresh_token=amazon_cfg.get('refresh_token'),
-        )
+        
+        # Initialize API client with configurable rate limit
+        region = self.config.get('api.region', 'NA')
+        max_requests_per_second = self.config.get('api.max_requests_per_second', MAX_REQUESTS_PER_SECOND)
+        self.api = AmazonAdsAPI(profile_id, region, max_requests_per_second=max_requests_per_second)
         
         # Initialize audit logger
         audit_output_dir = self.config.get('logging.output_dir', './logs')
