@@ -191,7 +191,7 @@ AMAZON_REFRESH_TOKEN=Atzr|IwEBIxxxxx
 **OR** a single combined variable:
 
 ```bash
-PPC_CONFIG='{"amazon_api": {...}, "optimization_rules": {...}}'
+PPC_CONFIG='{"amazon_api": {...}, "bid_optimization": {...}}'
 ```
 
 ### Updating Environment Variables
@@ -226,26 +226,34 @@ gcloud functions add-iam-policy-binding amazon-ppc-optimizer \
 Run the optimizer automatically on a schedule with proper authentication:
 
 ```bash
+# First, get the actual function URL (Gen2 functions use Cloud Run URLs)
+FUNCTION_URL=$(gcloud functions describe amazon-ppc-optimizer \
+  --region=us-central1 \
+  --gen2 \
+  --format='value(serviceConfig.uri)')
+
 # Create a Cloud Scheduler job (runs daily at 3 AM) with authentication
 gcloud scheduler jobs create http amazon-ppc-optimizer-daily \
   --location=us-central1 \
   --schedule="0 3 * * *" \
-  --uri="https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer" \
+  --uri="${FUNCTION_URL}" \
   --http-method=GET \
   --time-zone="America/New_York" \
   --oidc-service-account-email="ppc-scheduler@YOUR-PROJECT.iam.gserviceaccount.com" \
-  --oidc-token-audience="https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer"
+  --oidc-token-audience="${FUNCTION_URL}"
 
 # For dry-run mode (testing without changes)
 gcloud scheduler jobs create http amazon-ppc-optimizer-dryrun \
   --location=us-central1 \
   --schedule="0 */4 * * *" \
-  --uri="https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer?dry_run=true" \
+  --uri="${FUNCTION_URL}?dry_run=true" \
   --http-method=GET \
   --time-zone="America/New_York" \
   --oidc-service-account-email="ppc-scheduler@YOUR-PROJECT.iam.gserviceaccount.com" \
-  --oidc-token-audience="https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer"
+  --oidc-token-audience="${FUNCTION_URL}"
 ```
+
+> **Note**: Gen2 Cloud Functions use Cloud Run URLs (format: `https://FUNCTION_NAME-HASH-REGION.a.run.app`), not the Gen1 format (`https://REGION-PROJECT.cloudfunctions.net/FUNCTION_NAME`). Always retrieve the actual URL using the `gcloud functions describe` command.
 
 **Important**: The `--oidc-service-account-email` and `--oidc-token-audience` flags are required when the function uses `--no-allow-unauthenticated`.
 
@@ -263,8 +271,14 @@ gcloud scheduler jobs create http amazon-ppc-optimizer-dryrun \
 gcloud scheduler jobs run amazon-ppc-optimizer-daily --location=us-central1
 
 # Or via authenticated curl (requires token)
+# First get the function URL
+FUNCTION_URL=$(gcloud functions describe amazon-ppc-optimizer \
+  --region=us-central1 \
+  --gen2 \
+  --format='value(serviceConfig.uri)')
+
 curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-  "https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer"
+  "${FUNCTION_URL}"
 ```
 
 ### Health Check Endpoint
@@ -273,8 +287,13 @@ The function includes a lightweight health check endpoint for monitoring:
 
 ```bash
 # Use health check (doesn't trigger optimization)
+FUNCTION_URL=$(gcloud functions describe amazon-ppc-optimizer \
+  --region=us-central1 \
+  --gen2 \
+  --format='value(serviceConfig.uri)')
+
 curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-  "https://us-central1-YOUR-PROJECT.cloudfunctions.net/amazon-ppc-optimizer?health=true"
+  "${FUNCTION_URL}?health=true"
 
 # Response: {"status": "healthy", "service": "amazon-ppc-optimizer", "timestamp": "..."}
 ```

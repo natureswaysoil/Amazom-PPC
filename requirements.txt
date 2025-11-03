@@ -12,3 +12,6 @@ PyYAML==6.0.1
 
 # Email support
 # (smtplib is built-in)
+
+requests
+gunicorn

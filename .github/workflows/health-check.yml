@@ -1,0 +1,200 @@
+name: Health Check and Notifications
+
+on:
+  # Triggered after the Deploy workflow completes
+  workflow_run:
+    workflows: ["Deploy to Google Cloud"]
+    types: [completed]
+
+  # Manual trigger with configurable inputs
+  workflow_dispatch:
+    inputs:
+      function_url:
+        description: "Cloud Function URL (overrides secrets.FUNCTION_URL)"
+        required: false
+        type: string
+      require_auth:
+        description: "Use identity token auth (true/false)"
+        required: false
+        default: true
+        type: boolean
+      region:
+        description: "Region for gcloud discovery (optional)"
+        required: false
+        type: string
+      function_name:
+        description: "Function name for gcloud discovery (optional)"
+        required: false
+        type: string
+
+jobs:
+  health-check-and-notify:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+
+    env:
+      INPUT_FUNCTION_URL: ${{ inputs.function_url }}
+      SECRET_FUNCTION_URL: ${{ secrets.FUNCTION_URL }}
+      REQUIRE_AUTH: ${{ inputs.require_auth || secrets.HEALTH_REQUIRE_AUTH || true }}
+      REGION_INPUT: ${{ inputs.region }}
+      FUNCTION_NAME_INPUT: ${{ inputs.function_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup gcloud (if auth required)
+        if: ${{ env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true }}
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: '>= 471.0.0'
+
+      - name: Auth to Google Cloud (if configured)
+        if: ${{ env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true }}
+        uses: google-github-actions/auth@v2
+        with:
+          # Prefer workload identity federation
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          # Fallback to JSON key if provided (less secure)
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Resolve FUNCTION_URL
+        id: resolve_url
+        shell: bash
+        run: |
+          set -e
+          if [ -n "$INPUT_FUNCTION_URL" ]; then
+            echo "Using function URL from workflow input"
+            echo "function_url=$INPUT_FUNCTION_URL" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [ -n "$SECRET_FUNCTION_URL" ]; then
+            echo "Using function URL from repository secret"
+            echo "function_url=$SECRET_FUNCTION_URL" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [ -n "$FUNCTION_NAME_INPUT" ] && [ -n "$REGION_INPUT" ]; then
+            echo "Discovering Cloud Run URL via gcloud..."
+            URL=$(gcloud functions describe "$FUNCTION_NAME_INPUT" --region="$REGION_INPUT" --gen2 --format='value(serviceConfig.uri)' || true)
+            if [ -n "$URL" ]; then
+              echo "function_url=$URL" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          echo "::error::FUNCTION_URL not provided. Set inputs.function_url or secrets.FUNCTION_URL, or provide function_name+region with gcloud auth."
+          exit 1
+
+      - name: Wait for deployment to be ready
+        run: |
+          echo "Waiting 30 seconds for Cloud Function to be fully available..."
+          sleep 30
+
+      - name: Run Health Check
+        id: health_check
+        env:
+          FUNCTION_URL: ${{ steps.resolve_url.outputs.function_url }}
+        run: |
+          echo "Running health check on Cloud Function..."
+          HEALTH_URL="${FUNCTION_URL%/}?health=true"
+          if [[ "${{ env.REQUIRE_AUTH }}" == "true" || "${{ env.REQUIRE_AUTH }}" == true ]]; then
+            TOKEN=$(gcloud auth print-identity-token)
+            RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" "$HEALTH_URL" || echo "000")
+          else
+            RESPONSE=$(curl -s -w "\n%{http_code}" "$HEALTH_URL" || echo "000")
+          fi
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response Body: $BODY"
+          echo "http_code=$HTTP_CODE" >> $GITHUB_OUTPUT
+          echo "response_body=$BODY" >> $GITHUB_OUTPUT
+          if [ "$HTTP_CODE" = "200" ] && echo "$BODY" | grep -q "healthy"; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "✅ Health check passed!"
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "❌ Health check failed!"
+            exit 1
+          fi
+
+      - name: Send Email Notification
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_PASS }}
+          subject: "Amazon PPC Optimizer - Deployment Health Check ${{ steps.health_check.outputs.status == 'success' && '✅ PASSED' || '❌ FAILED' }}"
+          to: natureswaysoil@gmail.com
+          from: ${{ secrets.GMAIL_USER }}
+          body: |
+            Amazon PPC Optimizer Cloud Function - Health Check Report
+
+            Repository: ${{ github.repository }}
+            Run ID: ${{ github.run_id }}
+            Triggered by: ${{ github.event_name }}
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+
+            Status: ${{ steps.health_check.outputs.status == 'success' && '✅ SUCCESS' || '❌ FAILED' }}
+            HTTP Status Code: ${{ steps.health_check.outputs.http_code }}
+            Response: ${{ steps.health_check.outputs.response_body }}
+            Function URL: ${{ steps.resolve_url.outputs.function_url }}
+            Health Endpoint: ${{ steps.resolve_url.outputs.function_url }}?health=true
+
+      - name: Post to Dashboard API
+        if: steps.health_check.outputs.status == 'success'
+        env:
+          FUNCTION_URL: ${{ steps.resolve_url.outputs.function_url }}
+        run: |
+          echo "Posting health check results to dashboard..."
+          if [ -z "${{ secrets.DASHBOARD_API_ENDPOINT }}" ]; then
+            echo "⚠️ DASHBOARD_API_ENDPOINT secret not configured (optional)."
+            exit 0
+          fi
+          PAYLOAD=$(cat <<EOF
+          {
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "status": "${{ steps.health_check.outputs.status }}",
+            "http_code": "${{ steps.health_check.outputs.http_code }}",
+            "response": ${{ toJSON(steps.health_check.outputs.response_body) }},
+            "deployment": {
+              "repository": "${{ github.repository }}",
+              "commit": "${{ github.sha }}",
+              "branch": "${{ github.ref_name }}",
+              "workflow_run_id": "${{ github.run_id }}"
+            },
+            "cloud_function": {
+              "url": "${FUNCTION_URL}",
+              "health_endpoint": "${FUNCTION_URL%/}?health=true"
+            }
+          }
+          EOF
+          )
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.DASHBOARD_API_KEY }}" \
+            -d "$PAYLOAD" \
+            "${{ secrets.DASHBOARD_API_ENDPOINT }}" || echo "000")
+          API_HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          API_BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "Dashboard API Response: $API_HTTP_CODE"
+          echo "$API_BODY"
+
+      - name: Summary
+        if: always()
+        env:
+          FUNCTION_URL: ${{ steps.resolve_url.outputs.function_url }}
+        run: |
+          echo "## Health Check Summary" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.health_check.outputs.status }}" = "success" ]; then
+            echo "✅ **Status**: PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Status**: FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "\n**HTTP Status Code**: ${{ steps.health_check.outputs.http_code }}" >> $GITHUB_STEP_SUMMARY
+          echo "\n**Response**: \`${{ steps.health_check.outputs.response_body }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "\n**Cloud Function URL**: ${FUNCTION_URL}" >> $GITHUB_STEP_SUMMARY
+          echo "\n**Dashboard**: https://ppc-dashboard.abacusai.app" >> $GITHUB_STEP_SUMMARY
