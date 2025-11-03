@@ -37,7 +37,7 @@ All 10 performance optimizations have been successfully implemented and tested. 
 
 ### 4. ✅ Timezone Awareness
 - Uses pytz for timezone conversion
-- Configurable timezone (default: US/Eastern)
+- Configurable timezone (default: US/Pacific)
 - Timezone logged in audit trail
 - **Impact**: Accurate dayparting
 
@@ -135,14 +135,14 @@ Add to your `config.json`:
   },
   "dayparting": {
     "enabled": true,
-    "timezone": "US/Eastern"
+    "timezone": "US/Pacific"
   }
 }
 ```
 
 ### Timezone Options
-- `US/Eastern` - Eastern Time (EST/EDT) - **Default**
 - `US/Pacific` - Pacific Time (PST/PDT)
+- `US/Eastern` - Eastern Time (EST/EDT)
 - `US/Central` - Central Time (CST/CDT)
 - `US/Mountain` - Mountain Time (MST/MDT)
 - `UTC` - Coordinated Universal Time

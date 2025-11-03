@@ -43,7 +43,8 @@ import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Set, Any
+from typing import Dict, List, Optional, Tuple, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
 import traceback
 
@@ -404,49 +405,30 @@ class AuditLogger:
 # AMAZON ADS API CLIENT
 # ============================================================================
 
-class AuthenticationError(Exception):
-    """Custom exception for authentication failures"""
-    pass
-
-
 class AmazonAdsAPI:
     """Amazon Advertising API client with retry logic and rate limiting"""
     
-    def __init__(self, profile_id: str, region: str = "NA"):
+    def __init__(self, profile_id: str, region: str = "NA", max_requests_per_second: int = None, 
+                 session: requests.Session = None):
         self.profile_id = profile_id
         self.region = region.upper()
         self.base_url = ENDPOINTS.get(self.region, ENDPOINTS["NA"])
         self.auth = self._authenticate()
-        self.rate_limiter = RateLimiter()
-        self._auth_lock = False  # Simple lock to prevent concurrent refresh attempts
+        self.rate_limiter = RateLimiter(max_requests_per_second or MAX_REQUESTS_PER_SECOND)
+        self.session = session or requests.Session()
+        # Cache for campaigns and ad groups (lifetime of API instance)
+        self._campaigns_cache = None
+        self._ad_groups_cache = None
     
     def _authenticate(self) -> Auth:
-        """
-        Authenticate and get access token with retry logic
+        """Authenticate and get access token"""
+        client_id = os.getenv("AMAZON_CLIENT_ID")
+        client_secret = os.getenv("AMAZON_CLIENT_SECRET")
+        refresh_token = os.getenv("AMAZON_REFRESH_TOKEN")
         
-        Returns:
-            Auth object with access token and expiration
-            
-        Raises:
-            AuthenticationError: If authentication fails after retries
-        """
-        client_id = os.getenv("AMAZON_CLIENT_ID", "").strip()
-        client_secret = os.getenv("AMAZON_CLIENT_SECRET", "").strip()
-        refresh_token = os.getenv("AMAZON_REFRESH_TOKEN", "").strip()
-        
-        # Validate required environment variables
-        missing_vars = []
-        if not client_id:
-            missing_vars.append("AMAZON_CLIENT_ID")
-        if not client_secret:
-            missing_vars.append("AMAZON_CLIENT_SECRET")
-        if not refresh_token:
-            missing_vars.append("AMAZON_REFRESH_TOKEN")
-            
-        if missing_vars:
-            error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
-            logger.error(error_msg)
-            raise AuthenticationError(error_msg)
+        if not all([client_id, client_secret, refresh_token]):
+            logger.error("Missing required environment variables")
+            sys.exit(1)
         
         payload = {
             "grant_type": "refresh_token",
@@ -454,92 +436,6 @@ class AmazonAdsAPI:
             "client_id": client_id,
             "client_secret": client_secret,
         }
-        
-        # Retry logic with exponential backoff
-        max_retries = 3
-        retry_delay = 2  # seconds
-        
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Authenticating with Amazon Ads API (attempt {attempt + 1}/{max_retries})...")
-                response = requests.post(TOKEN_URL, data=payload, timeout=30)
-                response.raise_for_status()
-                data = response.json()
-                
-                # Validate response contains required fields
-                if "access_token" not in data:
-                    raise AuthenticationError("Response missing access_token field")
-                
-                auth = Auth(
-                    access_token=data["access_token"],
-                    token_type=data.get("token_type", "Bearer"),
-                    expires_at=time.time() + int(data.get("expires_in", 3600))
-                )
-                logger.info("Successfully authenticated with Amazon Ads API")
-                return auth
-                
-            except requests.exceptions.HTTPError as e:
-                error_detail = f"HTTP {e.response.status_code}: {e.response.text if hasattr(e.response, 'text') else str(e)}"
-                logger.error(f"Authentication HTTP error (attempt {attempt + 1}/{max_retries}): {error_detail}")
-                
-                if attempt < max_retries - 1:
-                    # Exponential backoff
-                    wait_time = retry_delay * (2 ** attempt)
-                    logger.info(f"Retrying authentication in {wait_time} seconds...")
-                    time.sleep(wait_time)
-                else:
-                    raise AuthenticationError(f"Authentication failed after {max_retries} attempts: {error_detail}")
-                    
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Authentication network error (attempt {attempt + 1}/{max_retries}): {e}")
-                
-                if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2 ** attempt)
-                    logger.info(f"Retrying authentication in {wait_time} seconds...")
-                    time.sleep(wait_time)
-                else:
-                    raise AuthenticationError(f"Authentication failed after {max_retries} attempts: {e}")
-                    
-            except Exception as e:
-                logger.error(f"Unexpected authentication error (attempt {attempt + 1}/{max_retries}): {e}")
-                
-                if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2 ** attempt)
-                    logger.info(f"Retrying authentication in {wait_time} seconds...")
-                    time.sleep(wait_time)
-                else:
-                    raise AuthenticationError(f"Authentication failed after {max_retries} attempts: {e}")
-        
-        # Should never reach here, but just in case
-        raise AuthenticationError("Authentication failed for unknown reason")
-    
-    def _refresh_auth_if_needed(self) -> None:
-        """
-        Refresh authentication if token expired with concurrent refresh protection
-        
-        Raises:
-            AuthenticationError: If token refresh fails
-        """
-        if not self.auth.is_expired():
-            return
-        
-        # Prevent concurrent refresh attempts with simple lock
-        if self._auth_lock:
-            logger.debug("Token refresh already in progress, waiting...")
-            # Wait for ongoing refresh to complete (max 10 seconds)
-            max_wait = 10
-            wait_interval = 0.5
-            waited = 0
-            while self._auth_lock and waited < max_wait:
-                time.sleep(wait_interval)
-                waited += wait_interval
-            
-            # Check if refresh completed successfully
-            if not self.auth.is_expired():
-                logger.debug("Token refresh completed by another thread")
-                return
-            else:
-                logger.warning("Token refresh timeout or failed, attempting refresh")
         
         try:
             self._auth_lock = True
@@ -558,35 +454,20 @@ class AmazonAdsAPI:
         finally:
             self._auth_lock = False
     
+    def _refresh_auth_if_needed(self):
+        """Refresh authentication if token expired"""
+        if self.auth.is_expired():
+            logger.info("Access token expired, refreshing...")
+            self.auth = self._authenticate()
+
     def _headers(self) -> Dict[str, str]:
-        """
-        Get API request headers with automatic token refresh
-        
-        Returns:
-            Dictionary of HTTP headers
-            
-        Raises:
-            AuthenticationError: If authentication/refresh fails
-        """
-        # Refresh auth if needed (with error handling)
-        try:
-            self._refresh_auth_if_needed()
-        except AuthenticationError as e:
-            logger.error(f"Failed to refresh authentication: {e}")
-            raise
-        
-        # Validate auth is available
-        if not self.auth or not self.auth.access_token:
-            raise AuthenticationError("No valid authentication available")
-        
-        client_id = os.getenv("AMAZON_CLIENT_ID", "").strip()
-        if not client_id:
-            raise AuthenticationError("AMAZON_CLIENT_ID environment variable not set")
-        
+        """Get API request headers"""
+        self._refresh_auth_if_needed()
+
         return {
             "Authorization": f"{self.auth.token_type} {self.auth.access_token}",
             "Content-Type": "application/json",
-            "Amazon-Advertising-API-ClientId": client_id,
+            "Amazon-Advertising-API-ClientId": self.client_id,
             "Amazon-Advertising-API-Scope": self.profile_id,
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
@@ -671,16 +552,13 @@ class AmazonAdsAPI:
     # CAMPAIGNS
     # ========================================================================
     
-    def get_campaigns(self, state_filter: Optional[str] = None) -> List[Campaign]:
-        """
-        Get all campaigns
+    def get_campaigns(self, state_filter: str = None, use_cache: bool = True) -> List[Campaign]:
+        """Get all campaigns with caching support"""
+        # Use cache if available and no state filter
+        if use_cache and self._campaigns_cache is not None and state_filter is None:
+            logger.debug(f"Using cached campaigns ({len(self._campaigns_cache)} items)")
+            return self._campaigns_cache
         
-        Args:
-            state_filter: Optional state filter (e.g., 'enabled', 'paused')
-            
-        Returns:
-            List of Campaign objects
-        """
         try:
             params = {}
             if state_filter:
@@ -1339,8 +1217,8 @@ class DaypartingManager:
             logger.info("Dayparting is disabled in config")
             return {}
         
-        # Get timezone from config (default to US/Eastern for Amazon sellers)
-        timezone_str = self.config.get('dayparting.timezone', 'US/Eastern')
+        # Get timezone from config (default to US/Pacific for Amazon sellers)
+        timezone_str = self.config.get('dayparting.timezone', 'US/Pacific')
         
         if pytz:
             try:
@@ -1763,25 +1641,14 @@ class PPCAutomation:
     """Main automation orchestrator with comprehensive error handling"""
     
     def __init__(self, config_path: str, profile_id: str, dry_run: bool = False):
-        """
-        Initialize PPC Automation
-        
-        Args:
-            config_path: Path to YAML configuration file
-            profile_id: Amazon Ads profile ID
-            dry_run: If True, no actual changes will be made
-            
-        Raises:
-            ConfigurationError: If configuration is invalid
-            AuthenticationError: If API authentication fails
-        """
         self.config = Config(config_path)
         self.profile_id = profile_id
         self.dry_run = dry_run
         
-        # Initialize API client (may raise AuthenticationError)
+        # Initialize API client with configurable rate limit
         region = self.config.get('api.region', 'NA')
-        self.api = AmazonAdsAPI(profile_id, region)
+        max_requests_per_second = self.config.get('api.max_requests_per_second', MAX_REQUESTS_PER_SECOND)
+        self.api = AmazonAdsAPI(profile_id, region, max_requests_per_second=max_requests_per_second)
         
         # Initialize audit logger
         audit_output_dir = self.config.get('logging.output_dir', './logs')
