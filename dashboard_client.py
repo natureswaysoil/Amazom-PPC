@@ -208,7 +208,7 @@ class DashboardClient:
         
         try:
             # Build enhanced payload
-            payload = self._build_results_payload(results, config, duration_seconds, dry_run)
+            payload = self.build_results_payload(results, config, duration_seconds, dry_run)
             
             # Send to dashboard
             response = self._make_request('/api/optimization-results', payload)
@@ -306,10 +306,13 @@ class DashboardClient:
             logger.error(f"Dashboard health check failed: {str(e)}")
             return False
     
-    def _build_results_payload(self, results: Dict, config: Dict, 
+    def build_results_payload(self, results: Dict, config: Dict, 
                                duration_seconds: float, dry_run: bool) -> Dict:
         """
         Build enhanced payload with detailed metrics
+        
+        This is a public method that can be used by external modules like
+        BigQueryClient to ensure consistent data formatting.
         
         Args:
             results: Raw results from optimization

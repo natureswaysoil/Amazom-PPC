@@ -16,6 +16,7 @@ import yaml
 
 from optimizer_core import PPCAutomation
 from dashboard_client import DashboardClient
+from bigquery_client import BigQueryClient
 
 # Configure logging for Cloud Functions
 # Detect if running in Cloud Functions environment
@@ -421,6 +422,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     # Initialize variables for error handler scope
     config = None
     dashboard_client = None
+    bigquery_client = None
     dry_run = False
     
     try:
@@ -446,6 +448,21 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
         
         # Initialize dashboard client
         dashboard_client = DashboardClient(config)
+        
+        # Initialize BigQuery client (if configured)
+        bigquery_config = config.get('bigquery', {})
+        if bigquery_config.get('enabled', False):
+            try:
+                project_id = bigquery_config.get('project_id') or os.getenv('GCP_PROJECT') or os.getenv('GOOGLE_CLOUD_PROJECT')
+                if project_id:
+                    dataset_id = bigquery_config.get('dataset_id', 'amazon_ppc')
+                    location = bigquery_config.get('location', 'us-east4')
+                    bigquery_client = BigQueryClient(project_id, dataset_id, location)
+                    logger.info(f"BigQuery client initialized for project {project_id}")
+                else:
+                    logger.warning("BigQuery enabled but no project_id configured")
+            except Exception as bq_err:
+                logger.warning(f"Failed to initialize BigQuery client (non-blocking): {bq_err}")
         
         # Start optimization run (generates unique run_id)
         run_id = dashboard_client.start_run(dry_run=dry_run)
@@ -490,6 +507,16 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
             dashboard_client.send_results(results, config, duration, dry_run)
         except Exception as dashboard_err:
             logger.warning(f"Dashboard update failed (non-blocking): {dashboard_err}")
+        
+        # Write results to BigQuery (non-blocking)
+        if bigquery_client:
+            logger.info("Writing results to BigQuery...")
+            try:
+                # Build the same payload that's sent to the dashboard
+                results_payload = dashboard_client.build_results_payload(results, config, duration, dry_run)
+                bigquery_client.write_optimization_results(results_payload)
+            except Exception as bq_err:
+                logger.warning(f"BigQuery write failed (non-blocking): {bq_err}")
         
         # Prepare summary
         summary = format_results_summary(results, duration, dry_run)

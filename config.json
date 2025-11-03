@@ -23,6 +23,13 @@
     "send_real_time_updates": true,
     "timeout": 30
   },
+  "bigquery": {
+    "enabled": true,
+    "project_id": "amazon-ppc-474902",
+    "dataset_id": "amazon_ppc",
+    "location": "us-east4",
+    "note": "BigQuery configuration for storing optimization data. Project ID can also be set via GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables."
+  },
   "email_notifications": {
     "enabled": false,
     "smtp_host": "smtp.gmail.com",
