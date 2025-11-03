@@ -3,24 +3,61 @@ import { BigQuery } from '@google-cloud/bigquery';
 
 export async function GET(request: NextRequest) {
   try {
-    // Get configuration from environment variables
-    const projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'amazon-ppc-474902';
+    // Get configuration from environment variables - no fallback values for security
+    const projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
     const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
     const location = process.env.BQ_LOCATION || 'us-east4';
+    
+    // Validate required configuration
+    if (!projectId) {
+      return NextResponse.json({ 
+        error: 'Configuration error',
+        message: 'GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set'
+      }, { status: 500 });
+    }
     
     // Initialize BigQuery client
     const bigquery = new BigQuery({
       projectId: projectId,
     });
     
-    // Get query parameters
+    // Get query parameters with validation
     const searchParams = request.nextUrl.searchParams;
     const table = searchParams.get('table') || 'optimization_results';
-    const limit = parseInt(searchParams.get('limit') || '10');
-    const days = parseInt(searchParams.get('days') || '7');
     
-    // Build query based on table
+    // Validate and sanitize limit parameter (max 100)
+    let limit = parseInt(searchParams.get('limit') || '10');
+    if (isNaN(limit) || limit < 1) {
+      limit = 10;
+    } else if (limit > 100) {
+      limit = 100;
+    }
+    
+    // Validate and sanitize days parameter (max 365)
+    let days = parseInt(searchParams.get('days') || '7');
+    if (isNaN(days) || days < 1) {
+      days = 7;
+    } else if (days > 365) {
+      days = 365;
+    }
+    
+    // Validate table parameter (whitelist approach)
+    const validTables = ['optimization_results', 'campaign_details', 'summary'];
+    if (!validTables.includes(table)) {
+      return NextResponse.json({ 
+        error: 'Invalid table parameter',
+        message: `Table must be one of: ${validTables.join(', ')}`
+      }, { status: 400 });
+    }
+    
+    // Build fully qualified table name (safely)
+    const fullTableName = `\`${projectId}.${datasetId}.optimization_results\``;
+    const campaignTableName = `\`${projectId}.${datasetId}.campaign_details\``;
+    
+    // Build query based on table with parameterized values
     let query = '';
+    let queryParams: any[] = [];
+    
     switch (table) {
       case 'optimization_results':
         query = `
@@ -39,11 +76,15 @@ export async function GET(request: NextRequest) {
             average_acos,
             total_spend,
             total_sales
-          FROM \`${projectId}.${datasetId}.optimization_results\`
-          WHERE DATE(timestamp) >= CURRENT_DATE() - ${days}
+          FROM ${fullTableName}
+          WHERE DATE(timestamp) >= CURRENT_DATE() - @days
           ORDER BY timestamp DESC
-          LIMIT ${limit}
+          LIMIT @limit
         `;
+        queryParams = [
+          { name: 'days', value: days },
+          { name: 'limit', value: limit }
+        ];
         break;
         
       case 'campaign_details':
@@ -61,11 +102,15 @@ export async function GET(request: NextRequest) {
             conversions,
             budget,
             status
-          FROM \`${projectId}.${datasetId}.campaign_details\`
-          WHERE DATE(timestamp) >= CURRENT_DATE() - ${days}
+          FROM ${campaignTableName}
+          WHERE DATE(timestamp) >= CURRENT_DATE() - @days
           ORDER BY timestamp DESC
-          LIMIT ${limit}
+          LIMIT @limit
         `;
+        queryParams = [
+          { name: 'days', value: days },
+          { name: 'limit', value: limit }
+        ];
         break;
         
       case 'summary':
@@ -79,23 +124,22 @@ export async function GET(request: NextRequest) {
             AVG(average_acos) as avg_acos,
             SUM(total_spend) as total_spend,
             SUM(total_sales) as total_sales
-          FROM \`${projectId}.${datasetId}.optimization_results\`
-          WHERE DATE(timestamp) >= CURRENT_DATE() - ${days}
+          FROM ${fullTableName}
+          WHERE DATE(timestamp) >= CURRENT_DATE() - @days
           GROUP BY DATE(timestamp)
           ORDER BY date DESC
         `;
+        queryParams = [
+          { name: 'days', value: days }
+        ];
         break;
-        
-      default:
-        return NextResponse.json({ 
-          error: 'Invalid table parameter' 
-        }, { status: 400 });
     }
     
-    // Execute query
+    // Execute query with parameters
     const [rows] = await bigquery.query({
       query: query,
       location: location,
+      params: queryParams,
     });
     
     return NextResponse.json({ 

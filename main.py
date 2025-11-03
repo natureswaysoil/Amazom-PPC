@@ -513,7 +513,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
             logger.info("Writing results to BigQuery...")
             try:
                 # Build the same payload that's sent to the dashboard
-                results_payload = dashboard_client._build_results_payload(results, config, duration, dry_run)
+                results_payload = dashboard_client.build_results_payload(results, config, duration, dry_run)
                 bigquery_client.write_optimization_results(results_payload)
             except Exception as bq_err:
                 logger.warning(f"BigQuery write failed (non-blocking): {bq_err}")

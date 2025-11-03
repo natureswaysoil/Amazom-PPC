@@ -124,6 +124,21 @@ class BigQueryClient:
             summary = results_data.get('summary', {})
             config = results_data.get('config_snapshot', {})
             
+            # Ensure REPEATED fields are properly formatted as lists
+            enabled_features = config.get('enabled_features', [])
+            if not isinstance(enabled_features, list):
+                enabled_features = [str(enabled_features)]
+            
+            errors = results_data.get('errors', [])
+            if not isinstance(errors, list):
+                errors = []
+            errors = [str(e) for e in errors]
+            
+            warnings = results_data.get('warnings', [])
+            if not isinstance(warnings, list):
+                warnings = []
+            warnings = [str(w) for w in warnings]
+            
             row = {
                 "timestamp": results_data.get('timestamp', datetime.now().isoformat()),
                 "run_id": results_data.get('run_id'),
@@ -142,9 +157,9 @@ class BigQueryClient:
                 "average_acos": summary.get('average_acos', 0.0),
                 "target_acos": config.get('target_acos', 0.0),
                 "lookback_days": config.get('lookback_days', 0),
-                "enabled_features": config.get('enabled_features', []),
-                "errors": [str(e) for e in results_data.get('errors', [])],
-                "warnings": [str(w) for w in results_data.get('warnings', [])],
+                "enabled_features": enabled_features,
+                "errors": errors,
+                "warnings": warnings,
             }
             
             # Insert row
