@@ -84,16 +84,31 @@ REQUEST_INTERVAL = 1.0 / MAX_REQUESTS_PER_SECOND
 # LOGGING SETUP
 # ============================================================================
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(f'ppc_automation_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Detect if running in Cloud Functions environment
+IS_CLOUD_FUNCTION = os.getenv('K_SERVICE') is not None or os.getenv('FUNCTION_TARGET') is not None
 
-logger = logging.getLogger(__name__)
+if IS_CLOUD_FUNCTION:
+    # Use only StreamHandler for Cloud Functions (logs go to Cloud Logging)
+    # File logging doesn't work in Cloud Functions (ephemeral filesystem)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    logger = logging.getLogger(__name__)
+    logger.info("Running in Cloud Functions environment - using Cloud Logging")
+else:
+    # For local development, use both console and file logging with log rotation
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(f'ppc_automation_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger(__name__)
+    logger.info("Running in local environment - using file and console logging")
 
 # ============================================================================
 # DATA CLASSES
@@ -243,32 +258,80 @@ def timing_logger(operation_name: str = None):
 # CONFIGURATION LOADER
 # ============================================================================
 
+class ConfigurationError(Exception):
+    """Custom exception for configuration errors"""
+    pass
+
+
 class Config:
-    """Configuration manager"""
+    """Configuration manager with enhanced error handling"""
     
     def __init__(self, config_path: str):
         self.config_path = config_path
         self.data = self._load_config()
     
     def _load_config(self) -> Dict:
-        """Load configuration from YAML file"""
+        """
+        Load configuration from YAML file
+        
+        Returns:
+            Configuration dictionary
+            
+        Raises:
+            ConfigurationError: If config file cannot be loaded or parsed
+        """
+        if not os.path.exists(self.config_path):
+            error_msg = f"Configuration file not found: {self.config_path}"
+            logger.error(error_msg)
+            raise ConfigurationError(error_msg)
+        
         try:
-            with open(self.config_path, 'r') as f:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
+            
+            if not isinstance(config, dict):
+                error_msg = f"Invalid configuration format: expected dictionary, got {type(config)}"
+                logger.error(error_msg)
+                raise ConfigurationError(error_msg)
+            
             logger.info(f"Configuration loaded from {self.config_path}")
             return config
+            
+        except yaml.YAMLError as e:
+            error_msg = f"Failed to parse YAML configuration: {e}"
+            logger.error(error_msg)
+            raise ConfigurationError(error_msg)
+            
+        except IOError as e:
+            error_msg = f"Failed to read configuration file: {e}"
+            logger.error(error_msg)
+            raise ConfigurationError(error_msg)
+            
         except Exception as e:
-            logger.error(f"Failed to load configuration: {e}")
-            sys.exit(1)
+            error_msg = f"Unexpected error loading configuration: {e}"
+            logger.error(error_msg)
+            raise ConfigurationError(error_msg)
     
     def get(self, key: str, default=None):
-        """Get configuration value with dot notation support"""
+        """
+        Get configuration value with dot notation support
+        
+        Args:
+            key: Configuration key (supports dot notation like 'section.subsection.key')
+            default: Default value to return if key not found
+            
+        Returns:
+            Configuration value or default
+        """
+        if not key:
+            return default
+        
         keys = key.split('.')
         value = self.data
         
         for k in keys:
             if isinstance(value, dict):
-                value = value.get(k)
+                value = value.get(k, None)
                 if value is None:
                     return default
             else:
@@ -375,20 +438,21 @@ class AmazonAdsAPI:
         }
         
         try:
-            response = requests.post(TOKEN_URL, data=payload, timeout=30)
-            response.raise_for_status()
-            data = response.json()
+            self._auth_lock = True
+            logger.info("Access token expired, refreshing...")
             
-            auth = Auth(
-                access_token=data["access_token"],
-                token_type=data.get("token_type", "Bearer"),
-                expires_at=time.time() + int(data.get("expires_in", 3600))
-            )
-            logger.info("Successfully authenticated with Amazon Ads API")
-            return auth
-        except Exception as e:
-            logger.error(f"Authentication failed: {e}")
-            sys.exit(1)
+            # Attempt to refresh with fallback
+            try:
+                self.auth = self._authenticate()
+                logger.info("Token refresh successful")
+            except AuthenticationError as e:
+                logger.error(f"Token refresh failed: {e}")
+                # Reset auth to force re-authentication on next attempt
+                self.auth = None
+                raise
+                
+        finally:
+            self._auth_lock = False
     
     def _refresh_auth_if_needed(self):
         """Refresh authentication if token expired"""
@@ -503,13 +567,20 @@ class AmazonAdsAPI:
             response = self._request('GET', '/v2/sp/campaigns', params=params)
             campaigns_data = response.json()
             
+            if not isinstance(campaigns_data, list):
+                logger.warning(f"Unexpected campaigns response format: {type(campaigns_data)}")
+                return []
+            
             campaigns = []
             for c in campaigns_data:
+                if not isinstance(c, dict):
+                    continue
+                    
                 campaign = Campaign(
-                    campaign_id=str(c.get('campaignId')),
+                    campaign_id=str(c.get('campaignId', '')),
                     name=c.get('name', ''),
                     state=c.get('state', ''),
-                    daily_budget=float(c.get('dailyBudget', 0)),
+                    daily_budget=float(c.get('dailyBudget', 0.0)),
                     targeting_type=c.get('targetingType', ''),
                     campaign_type='sponsoredProducts'
                 )
@@ -1567,7 +1638,7 @@ class NegativeKeywordManager:
 # ============================================================================
 
 class PPCAutomation:
-    """Main automation orchestrator"""
+    """Main automation orchestrator with comprehensive error handling"""
     
     def __init__(self, config_path: str, profile_id: str, dry_run: bool = False):
         self.config = Config(config_path)
@@ -1590,8 +1661,16 @@ class PPCAutomation:
         self.keyword_discovery = KeywordDiscovery(self.config, self.api, self.audit)
         self.negative_keywords = NegativeKeywordManager(self.config, self.api, self.audit)
     
-    def run(self, features: List[str] = None):
-        """Run automation with specified features"""
+    def run(self, features: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Run automation with specified features
+        
+        Args:
+            features: List of features to run (None = use config defaults)
+            
+        Returns:
+            Dictionary of results for each feature
+        """
         logger.info("=" * 80)
         logger.info("AMAZON PPC AUTOMATION SUITE")
         logger.info("=" * 80)
@@ -1603,42 +1682,74 @@ class PPCAutomation:
         if features is None:
             features = self.config.get('features.enabled', [])
         
-        logger.info(f"Enabled features: {', '.join(features)}")
+        # Ensure features is a list
+        if not isinstance(features, list):
+            logger.warning(f"Invalid features type: {type(features)}, using default features")
+            features = []
+        
+        logger.info(f"Enabled features: {', '.join(features) if features else 'None'}")
         
         results = {}
         
         try:
-            # Run each feature
+            # Run each feature with error handling
             if 'bid_optimization' in features:
-                results['bid_optimization'] = self.bid_optimizer.optimize(self.dry_run)
+                try:
+                    results['bid_optimization'] = self.bid_optimizer.optimize(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Bid optimization failed: {e}")
+                    results['bid_optimization'] = {'error': str(e)}
             
             if 'dayparting' in features:
-                results['dayparting'] = self.dayparting.apply_dayparting(self.dry_run)
+                try:
+                    results['dayparting'] = self.dayparting.apply_dayparting(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Dayparting failed: {e}")
+                    results['dayparting'] = {'error': str(e)}
             
             if 'campaign_management' in features:
-                results['campaign_management'] = self.campaign_manager.manage_campaigns(self.dry_run)
+                try:
+                    results['campaign_management'] = self.campaign_manager.manage_campaigns(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Campaign management failed: {e}")
+                    results['campaign_management'] = {'error': str(e)}
             
             if 'keyword_discovery' in features:
-                results['keyword_discovery'] = self.keyword_discovery.discover_keywords(self.dry_run)
+                try:
+                    results['keyword_discovery'] = self.keyword_discovery.discover_keywords(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Keyword discovery failed: {e}")
+                    results['keyword_discovery'] = {'error': str(e)}
             
             if 'negative_keywords' in features:
-                results['negative_keywords'] = self.negative_keywords.add_negative_keywords(self.dry_run)
+                try:
+                    results['negative_keywords'] = self.negative_keywords.add_negative_keywords(self.dry_run)
+                except Exception as e:
+                    logger.error(f"Negative keywords management failed: {e}")
+                    results['negative_keywords'] = {'error': str(e)}
             
         except Exception as e:
-            logger.error(f"Automation failed: {e}")
+            logger.error(f"Automation failed with unexpected error: {e}")
             logger.error(traceback.format_exc())
+            results['error'] = str(e)
         finally:
             # Save audit trail
-            self.audit.save()
+            try:
+                self.audit.save()
+            except Exception as e:
+                logger.error(f"Failed to save audit trail: {e}")
         
         # Print summary
         logger.info("=" * 80)
         logger.info("AUTOMATION SUMMARY")
         logger.info("=" * 80)
         for feature, result in results.items():
-            logger.info(f"\n{feature.upper().replace('_', ' ')}:")
-            for key, value in result.items():
-                logger.info(f"  {key}: {value}")
+            if isinstance(result, dict):
+                logger.info(f"\n{feature.upper().replace('_', ' ')}:")
+                for key, value in result.items():
+                    logger.info(f"  {key}: {value}")
+            else:
+                logger.info(f"\n{feature.upper().replace('_', ' ')}: {result}")
         logger.info("=" * 80)
         
         return results
