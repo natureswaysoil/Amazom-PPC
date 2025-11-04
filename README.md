@@ -173,7 +173,17 @@ The token refresh logic is built into `optimizer_core.py`:
 
 The optimizer includes comprehensive dashboard integration with real-time updates:
 
-**Dashboard URL**: https://ppc-dashboard.abacusai.app
+**Dashboard URL**: https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app
+
+### CrewAI BigQuery Sync
+
+The optimizer now uses **CrewAI** to intelligently orchestrate data synchronization from BigQuery to the dashboard. AI agents work together to:
+- Query optimization data from BigQuery
+- Transform and validate data
+- Reliably deliver data to the dashboard
+- Verify successful delivery
+
+See [CREWAI_INTEGRATION.md](CREWAI_INTEGRATION.md) for complete documentation.
 
 ### Features
 
@@ -428,6 +438,8 @@ Or configure less frequent checks (e.g., every 5-10 minutes instead of every 5-6
 | Document | Description |
 |----------|-------------|
 | [README.md](README.md) | Main project documentation (this file) |
+| [CREWAI_INTEGRATION.md](CREWAI_INTEGRATION.md) | CrewAI BigQuery to dashboard sync documentation |
+| [BIGQUERY_INTEGRATION.md](BIGQUERY_INTEGRATION.md) | BigQuery setup and usage guide |
 | [VERIFICATION_GUIDE.md](VERIFICATION_GUIDE.md) | Complete verification procedures and testing guide |
 | [DATA_FLOW_SUMMARY.md](DATA_FLOW_SUMMARY.md) | Data flow from optimizer to dashboard with examples |
 | [DASHBOARD_INTEGRATION.md](DASHBOARD_INTEGRATION.md) | Detailed dashboard integration documentation |
