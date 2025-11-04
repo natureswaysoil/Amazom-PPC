@@ -456,11 +456,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
                 project_id = bigquery_config.get('project_id') or os.getenv('GCP_PROJECT') or os.getenv('GOOGLE_CLOUD_PROJECT')
                 if project_id:
                     # Set environment variables for BigQuery client and dashboard
-                    # The BigQuery client library and dashboard both expect these to be set
-                    if not os.getenv('GCP_PROJECT'):
-                        os.environ['GCP_PROJECT'] = project_id
-                    if not os.getenv('GOOGLE_CLOUD_PROJECT'):
-                        os.environ['GOOGLE_CLOUD_PROJECT'] = project_id
+                    set_bigquery_env_vars(project_id)
                     
                     dataset_id = bigquery_config.get('dataset_id', 'amazon_ppc')
                     location = bigquery_config.get('location', 'us-east4')
@@ -651,6 +647,26 @@ def set_environment_variables(config: Dict[str, Any]) -> None:
     os.environ['AMAZON_REFRESH_TOKEN'] = amazon_api.get('refresh_token', '')
     
     logger.info("Environment variables set for optimizer")
+
+
+def set_bigquery_env_vars(project_id: str) -> None:
+    """
+    Set GCP project environment variables for BigQuery client and dashboard
+    
+    Both the BigQuery client library and the dashboard API endpoints expect
+    these environment variables to be set. This function ensures they are
+    available without overwriting any existing values.
+    
+    Args:
+        project_id: Google Cloud project ID
+    """
+    if not os.getenv('GCP_PROJECT'):
+        os.environ['GCP_PROJECT'] = project_id
+        logger.debug(f"Set GCP_PROJECT to {project_id}")
+    
+    if not os.getenv('GOOGLE_CLOUD_PROJECT'):
+        os.environ['GOOGLE_CLOUD_PROJECT'] = project_id
+        logger.debug(f"Set GOOGLE_CLOUD_PROJECT to {project_id}")
 
 
 def validate_credentials(config: Dict[str, Any]) -> None:
