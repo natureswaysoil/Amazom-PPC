@@ -425,9 +425,7 @@ class DashboardClient:
             total_spend += camp_data.get('total_spend', 0.0)
             total_sales += camp_data.get('total_sales', 0.0)
             # If module already calculated ACOS, prefer that value
-            if camp_data.get('average_acos') is not None:
-                summary['average_acos'] = camp_data['average_acos']
-
+            pass  # Removed logic that overwrites average_acos; always use aggregate calculation
         # Populate totals and derived averages
         summary['total_spend'] = total_spend
         summary['total_sales'] = total_sales
