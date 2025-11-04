@@ -383,25 +383,57 @@ class DashboardClient:
             'total_sales': 0.0,
             'average_acos': 0.0
         }
-        
+
+        total_spend = 0.0
+        total_sales = 0.0
+
         # Extract from bid_optimization
         if 'bid_optimization' in results:
             bid_data = results['bid_optimization']
-            summary['keywords_optimized'] = bid_data.get('keywords_optimized', 0)
-            summary['bids_increased'] = bid_data.get('bids_increased', 0)
-            summary['bids_decreased'] = bid_data.get('bids_decreased', 0)
-        
+            summary['bids_increased'] += bid_data.get('bids_increased', 0)
+            summary['bids_decreased'] += bid_data.get('bids_decreased', 0)
+            summary['keywords_optimized'] += bid_data.get(
+                'keywords_optimized',
+                bid_data.get('bids_increased', 0) + bid_data.get('bids_decreased', 0)
+            )
+            total_spend += bid_data.get('total_spend', 0.0)
+            total_sales += bid_data.get('total_sales', 0.0)
+
         # Extract from negative_keywords
         if 'negative_keywords' in results:
             neg_data = results['negative_keywords']
-            summary['negative_keywords_added'] = neg_data.get('keywords_added', 0)
-        
+            summary['negative_keywords_added'] += neg_data.get(
+                'negative_keywords_added',
+                neg_data.get('keywords_added', 0)
+            )
+
         # Extract from campaign_management
         if 'campaign_management' in results:
             camp_data = results['campaign_management']
-            summary['campaigns_analyzed'] = camp_data.get('campaigns_analyzed', 0)
-            summary['budget_changes'] = camp_data.get('budget_changes', 0)
-        
+            campaigns_analyzed = camp_data.get('campaigns_analyzed')
+            if campaigns_analyzed is None:
+                campaigns_analyzed = (
+                    camp_data.get('campaigns_paused', 0)
+                    + camp_data.get('campaigns_activated', 0)
+                    + camp_data.get('no_change', 0)
+                )
+            summary['campaigns_analyzed'] += campaigns_analyzed
+            summary['budget_changes'] += camp_data.get(
+                'budget_changes',
+                camp_data.get('campaigns_paused', 0) + camp_data.get('campaigns_activated', 0)
+            )
+            total_spend += camp_data.get('total_spend', 0.0)
+            total_sales += camp_data.get('total_sales', 0.0)
+            # If module already calculated ACOS, prefer that value
+            if camp_data.get('average_acos') is not None:
+                summary['average_acos'] = camp_data['average_acos']
+
+        # Populate totals and derived averages
+        summary['total_spend'] = total_spend
+        summary['total_sales'] = total_sales
+        if total_sales > 0:
+            summary['average_acos'] = total_spend / total_sales
+
         return summary
     
     def _extract_campaigns(self, results: Dict) -> List[Dict]:

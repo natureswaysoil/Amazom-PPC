@@ -1054,7 +1054,9 @@ class BidOptimizer:
             'keywords_analyzed': 0,
             'bids_increased': 0,
             'bids_decreased': 0,
-            'no_change': 0
+            'no_change': 0,
+            # Keep track of how many keywords actually received a bid change
+            'keywords_optimized': 0
         }
         
         # Get performance data
@@ -1133,10 +1135,15 @@ class BidOptimizer:
                 })
             else:
                 results['no_change'] += 1
-            
+
             # Log progress every batch_size records
             if (idx + 1) % batch_size == 0:
                 logger.info(f"Processed {idx + 1}/{len(report_data)} records...")
+
+        # Total keywords optimized equals all bid increases and decreases
+        results['keywords_optimized'] = (
+            results['bids_increased'] + results['bids_decreased']
+        )
         
         # Apply batch updates
         if keyword_updates and not dry_run:
@@ -1320,7 +1327,13 @@ class CampaignManager:
         results = {
             'campaigns_activated': 0,
             'campaigns_paused': 0,
-            'no_change': 0
+            'no_change': 0,
+            # Additional metrics used by the dashboard summary
+            'campaigns_analyzed': 0,
+            'total_spend': 0.0,
+            'total_sales': 0.0,
+            'average_acos': 0.0,
+            'budget_changes': 0
         }
         
         # Get performance data
@@ -1362,9 +1375,14 @@ class CampaignManager:
             if cost < min_spend:
                 results['no_change'] += 1
                 continue
-            
+
             acos = (cost / sales) if sales > 0 else float('inf')
-            
+
+            # Track aggregated metrics for dashboard reporting
+            results['campaigns_analyzed'] += 1
+            results['total_spend'] += cost
+            results['total_sales'] += sales
+
             # Determine action
             if acos < acos_threshold and campaign.state != 'enabled':
                 # Activate campaign
@@ -1401,7 +1419,15 @@ class CampaignManager:
                 results['campaigns_paused'] += 1
             else:
                 results['no_change'] += 1
-        
+
+        # Budget changes reflect any pacing adjustments
+        results['budget_changes'] = (
+            results['campaigns_activated'] + results['campaigns_paused']
+        )
+
+        if results['total_sales'] > 0:
+            results['average_acos'] = results['total_spend'] / results['total_sales']
+
         elapsed = time.time() - start_time
         logger.info(f"Campaign management complete in {elapsed:.2f}s: {results}")
         results['execution_time_seconds'] = round(elapsed, 2)
