@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { loadBigQueryConfigFromFile } from '../../config/bigqueryConfig';
 
 /**
  * Configuration check endpoint
@@ -6,22 +7,32 @@ import { NextRequest, NextResponse } from 'next/server';
  * Returns non-sensitive information about what's configured
  */
 export async function GET(request: NextRequest) {
+  const fileConfig = loadBigQueryConfigFromFile();
+  const projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || fileConfig.projectId;
+  const projectSource = process.env.GCP_PROJECT
+    ? 'GCP_PROJECT'
+    : process.env.GOOGLE_CLOUD_PROJECT
+      ? 'GOOGLE_CLOUD_PROJECT'
+      : fileConfig.projectId
+        ? 'config.json'
+        : 'none';
+
   const checks = {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'unknown',
     configuration: {
       gcp_project: {
-        set: !!(process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT),
-        source: process.env.GCP_PROJECT ? 'GCP_PROJECT' : process.env.GOOGLE_CLOUD_PROJECT ? 'GOOGLE_CLOUD_PROJECT' : 'none',
-        value: process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || null,
+        set: !!projectId,
+        source: projectSource,
+        value: projectId || null,
       },
       bq_dataset_id: {
-        set: !!process.env.BQ_DATASET_ID,
-        value: process.env.BQ_DATASET_ID || 'amazon_ppc (default)',
+        set: !!(process.env.BQ_DATASET_ID || fileConfig.datasetId),
+        value: process.env.BQ_DATASET_ID || fileConfig.datasetId || 'amazon_ppc (default)',
       },
       bq_location: {
-        set: !!process.env.BQ_LOCATION,
-        value: process.env.BQ_LOCATION || 'us-east4 (default)',
+        set: !!(process.env.BQ_LOCATION || fileConfig.location),
+        value: process.env.BQ_LOCATION || fileConfig.location || 'us-east4 (default)',
       },
       credentials: {
         gcp_service_account_key: {
@@ -61,6 +72,9 @@ export async function GET(request: NextRequest) {
   if (!checks.configuration.gcp_project.set) {
     checks.diagnosis.push('❌ GCP_PROJECT or GOOGLE_CLOUD_PROJECT is not set');
     checks.recommendations.push('Set GCP_PROJECT and GOOGLE_CLOUD_PROJECT environment variables to your Google Cloud project ID (e.g., amazon-ppc-474902)');
+  } else if (projectSource === 'config.json') {
+    checks.diagnosis.push('⚠️  Using BigQuery project ID from config.json (set environment variables for production)');
+    checks.recommendations.push('Add GCP_PROJECT and GOOGLE_CLOUD_PROJECT environment variables to avoid relying on config.json in production.');
   } else {
     checks.diagnosis.push('✅ GCP project ID is configured');
   }

@@ -1,19 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
+import { loadBigQueryConfigFromFile } from '../../config/bigqueryConfig';
 
 export async function GET(request: NextRequest) {
   try {
+    const fileConfig = loadBigQueryConfigFromFile();
+
     // Get configuration from environment variables - no fallback values for security
-    const projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
-    const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
-    const location = process.env.BQ_LOCATION || 'us-east4';
-    
+    const projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || fileConfig.projectId;
+    const datasetId = process.env.BQ_DATASET_ID || fileConfig.datasetId || 'amazon_ppc';
+    const location = process.env.BQ_LOCATION || fileConfig.location || 'us-east4';
+
     // Validate required configuration
     if (!projectId) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Configuration error',
         message: 'GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set',
-        details: 'To fix this: 1) Add GCP_PROJECT and GOOGLE_CLOUD_PROJECT to your Vercel project environment variables, 2) Set both to your Google Cloud project ID (e.g., amazon-ppc-474902), 3) Also add GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials, 4) Redeploy the application',
+        details: 'To fix this: 1) Add GCP_PROJECT and GOOGLE_CLOUD_PROJECT to your Vercel project environment variables, 2) Set both to your Google Cloud project ID (e.g., amazon-ppc-474902), 3) Also add GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials, 4) Redeploy the application. (For local development the value can be pulled from config.json.)',
         documentation: 'See DEPLOYMENT.md Step 3 for detailed configuration instructions. Visit https://vercel.com/docs/concepts/projects/environment-variables for help with Vercel environment variables.',
         vercelSetupUrl: 'https://vercel.com/<your-team>/<your-project>/settings/environment-variables'
       }, { status: 500 });
