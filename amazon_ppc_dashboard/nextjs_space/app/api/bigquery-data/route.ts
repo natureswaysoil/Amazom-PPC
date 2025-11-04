@@ -12,7 +12,9 @@ export async function GET(request: NextRequest) {
     if (!projectId) {
       return NextResponse.json({ 
         error: 'Configuration error',
-        message: 'GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set'
+        message: 'GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set',
+        details: 'To fix this: 1) Add GCP_PROJECT and GOOGLE_CLOUD_PROJECT to your deployment environment variables, 2) Set both to your Google Cloud project ID (e.g., amazon-ppc-474902), 3) Redeploy the application',
+        documentation: 'See DEPLOYMENT.md Step 3 for detailed configuration instructions'
       }, { status: 500 });
     }
     

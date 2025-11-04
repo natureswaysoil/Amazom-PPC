@@ -198,6 +198,27 @@ curl "https://your-dashboard.vercel.app/api/health"
 
 ## Troubleshooting
 
+### Error: "GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set"
+
+**Solution**: This error occurs when the required environment variables are not configured in your deployment.
+
+1. **In Vercel**, go to Project Settings → Environment Variables and add:
+   ```
+   GCP_PROJECT=amazon-ppc-474902
+   GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
+   BQ_DATASET_ID=amazon_ppc
+   BQ_LOCATION=us-east4
+   ```
+
+2. **Redeploy** the application after adding these variables
+
+3. **Verify** the configuration:
+   ```bash
+   curl "https://your-dashboard.vercel.app/api/bigquery-data?table=optimization_results&limit=1"
+   ```
+
+For detailed deployment instructions, see [DEPLOYMENT.md](./DEPLOYMENT.md).
+
 ### Error: "Dataset not found"
 
 **Solution**: Run the BigQuery setup script:
