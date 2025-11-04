@@ -87,12 +87,22 @@ def create_config_file(config_dict: Dict) -> str:
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp file {temp_file.name}: {e}")
 
-def _resolve_config_path(request_data: Dict[str, Any]) -> str:
+def _resolve_config_path(request_data: Dict[str, Any]) -> Optional[str]:
+    """
+    Resolve configuration file path from request data
+    
+    Args:
+        request_data: Request data dictionary
+        
+    Returns:
+        Path to config file if found, None otherwise
+    """
     request_path = request_data.get("config_path")
     if request_path:
         if os.path.exists(request_path):
             return request_path
         logger.warning("Requested config_path '%s' was not found; falling back to defaults", request_path)
+    return None
 
 def send_email_notification(subject: str, body: str, config: Dict) -> bool:
     """
