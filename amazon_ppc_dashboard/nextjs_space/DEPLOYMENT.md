@@ -90,23 +90,38 @@ gcloud iam service-accounts keys create vercel-key.json \
 
 2. **Add service account credentials to Vercel:**
 
-In Vercel environment variables, add:
+**Recommended method - Use GCP_SERVICE_ACCOUNT_KEY:**
 
+In Vercel project settings → Environment Variables, add a new variable:
+
+- **Name:** `GCP_SERVICE_ACCOUNT_KEY`
+- **Value:** Paste the **entire contents** of `vercel-key.json` file (the full JSON object)
+- **Environment:** Production, Preview, and Development (select all)
+
+Example of what to paste (your actual file will have real values):
+```json
+{
+  "type": "service_account",
+  "project_id": "amazon-ppc-474902",
+  "private_key_id": "abc123...",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+  "client_email": "vercel-dashboard@amazon-ppc-474902.iam.gserviceaccount.com",
+  "client_id": "123456789",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://..."
+}
+```
+
+**Alternative method - Use GOOGLE_APPLICATION_CREDENTIALS:**
+
+If you prefer, you can use `GOOGLE_APPLICATION_CREDENTIALS` instead:
 ```
 GOOGLE_APPLICATION_CREDENTIALS=<paste the entire contents of vercel-key.json here>
 ```
 
-**Alternative method:** Instead of pasting the JSON directly, you can base64 encode it:
-```bash
-cat vercel-key.json | base64 -w 0
-```
-
-Then add to Vercel as:
-```
-GCP_SERVICE_ACCOUNT_KEY=<base64-encoded-key>
-```
-
-And update your code to decode it (if using this method).
+⚠️ **Important:** Do NOT use a file path (e.g., `/path/to/key.json`) on Vercel - it won't work. Always paste the JSON content directly.
 
 ### Step 4: Deploy
 
@@ -218,26 +233,89 @@ To fix:
 
 ### BigQuery Error: "GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set"
 
-**Problem:** Dashboard displays an error about missing GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables.
+**Problem:** Dashboard displays an error about missing GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables, even after following the deployment steps.
 
-**Solution:**
-1. Ensure you have added the BigQuery environment variables in Vercel project settings:
-   - `GCP_PROJECT=amazon-ppc-474902`
-   - `GOOGLE_CLOUD_PROJECT=amazon-ppc-474902`
-   - `BQ_DATASET_ID=amazon_ppc`
-   - `BQ_LOCATION=us-east4`
-2. Add the Google Cloud service account credentials as `GOOGLE_APPLICATION_CREDENTIALS` (see Step 3a)
-3. Verify the service account has the required BigQuery permissions:
+**Root Cause:** This error occurs when the environment variables are not properly set in Vercel. Note that setting these in the optimizer's Cloud Function does NOT affect the dashboard - the dashboard needs its own environment variable configuration.
+
+**Step-by-Step Solution:**
+
+1. **Check Current Configuration:**
+   ```bash
+   # Use the new config-check endpoint to diagnose issues
+   curl "https://your-dashboard.vercel.app/api/config-check"
+   ```
+   This will show you exactly what's configured and what's missing.
+
+2. **Set Required Environment Variables in Vercel:**
+   
+   Go to your Vercel project → Settings → Environment Variables, and add:
+   
+   ```
+   GCP_PROJECT=amazon-ppc-474902
+   GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
+   BQ_DATASET_ID=amazon_ppc
+   BQ_LOCATION=us-east4
+   ```
+   
+   Make sure to select **Production**, **Preview**, and **Development** for each variable.
+
+3. **Add Google Cloud Service Account Credentials:**
+   
+   You MUST add credentials for BigQuery authentication. Choose one method:
+   
+   **Method A (Recommended):** Use `GCP_SERVICE_ACCOUNT_KEY`:
+   - In Vercel, add a new environment variable named `GCP_SERVICE_ACCOUNT_KEY`
+   - Paste the entire JSON content from your `vercel-key.json` file
+   - Example: `{"type":"service_account","project_id":"amazon-ppc-474902",...}`
+   
+   **Method B:** Use `GOOGLE_APPLICATION_CREDENTIALS`:
+   - Add environment variable named `GOOGLE_APPLICATION_CREDENTIALS`
+   - Paste the entire JSON content (NOT a file path!)
+   - ⚠️ Do NOT use a file path like `/path/to/key.json` - it won't work on Vercel
+
+4. **Verify Service Account Permissions:**
+   ```bash
+   # Check if service account has required roles
+   gcloud projects get-iam-policy amazon-ppc-474902 \
+     --flatten="bindings[].members" \
+     --filter="bindings.members:vercel-dashboard@amazon-ppc-474902.iam.gserviceaccount.com"
+   ```
+   
+   The service account needs:
    - `roles/bigquery.dataViewer`
    - `roles/bigquery.jobUser`
-4. Redeploy the dashboard after adding the environment variables
-5. Check that the BigQuery dataset and tables were created by running `../../setup-bigquery.sh`
 
-**To verify the configuration:**
-```bash
-# Test the BigQuery API endpoint
-curl "https://your-dashboard.vercel.app/api/bigquery-data?table=optimization_results&limit=1"
-```
+5. **Redeploy the Dashboard:**
+   
+   After adding/updating environment variables, you MUST redeploy:
+   - Go to Vercel → Deployments
+   - Click "..." menu on latest deployment
+   - Select "Redeploy"
+   - OR: Push a new commit to trigger automatic deployment
+
+6. **Verify the Fix:**
+   ```bash
+   # Check configuration status
+   curl "https://your-dashboard.vercel.app/api/config-check"
+   
+   # Test BigQuery connection
+   curl "https://your-dashboard.vercel.app/api/bigquery-data?table=optimization_results&limit=1"
+   ```
+
+**Common Mistakes:**
+
+- ❌ **Using a file path for credentials:** Vercel doesn't have access to local files. Always paste JSON content.
+- ❌ **Not redeploying after adding variables:** New environment variables only take effect after redeployment.
+- ❌ **Only setting variables in Cloud Function:** The optimizer and dashboard are separate deployments with separate environment variables.
+- ❌ **Forgetting to select all environments:** Make sure to check Production, Preview, and Development when adding variables.
+- ❌ **Invalid JSON format:** Ensure the service account JSON is valid (use a JSON validator if unsure).
+
+**Still Having Issues?**
+
+1. Check Vercel function logs for detailed error messages
+2. Verify your service account JSON is valid: https://jsonlint.com/
+3. Ensure the BigQuery dataset was created: `bq ls amazon-ppc-474902:amazon_ppc`
+4. Contact support with the output from `/api/config-check`
 
 ## Viewing Logs
 
