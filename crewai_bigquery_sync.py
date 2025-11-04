@@ -464,13 +464,28 @@ class BigQueryDashboardSync:
             
             data = None
             for row in results:
-                data = dict(row)
-                # Convert timestamps and decimals to JSON-serializable types
-                for key, value in data.items():
-                    if hasattr(value, 'isoformat'):
+                # Convert BigQuery row to dictionary with proper type handling
+                data = {}
+                for key, value in row.items():
+                    if value is None:
+                        data[key] = None
+                    elif hasattr(value, 'isoformat'):
+                        # Handle DATETIME, DATE, TIME, TIMESTAMP
                         data[key] = value.isoformat()
-                    elif isinstance(value, (float, int)):
+                    elif isinstance(value, (int, bool)):
                         data[key] = value
+                    elif hasattr(value, '__float__'):
+                        # Handle DECIMAL/NUMERIC types
+                        data[key] = float(value)
+                    elif isinstance(value, (list, dict)):
+                        # Handle ARRAY and STRUCT types
+                        data[key] = value
+                    elif isinstance(value, bytes):
+                        # Handle BYTES type
+                        data[key] = value.decode('utf-8', errors='ignore')
+                    else:
+                        # Handle STRING and other types
+                        data[key] = str(value)
             
             if not data:
                 return {

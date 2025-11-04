@@ -18,13 +18,15 @@ from optimizer_core import PPCAutomation
 from dashboard_client import DashboardClient
 from bigquery_client import BigQueryClient
 
+# Configure logger at module level
+logger = logging.getLogger(__name__)
+
 # Import crewAI sync module (optional - will gracefully degrade if not available)
 try:
     from crewai_bigquery_sync import BigQueryDashboardSync
     CREWAI_SYNC_AVAILABLE = True
 except ImportError:
     CREWAI_SYNC_AVAILABLE = False
-    logger = logging.getLogger(__name__)
     logger.warning("crewAI BigQuery sync not available")
 
 # Configure logging for Cloud Functions

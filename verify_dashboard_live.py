@@ -104,7 +104,7 @@ def test_dashboard_api():
             try:
                 response_data = response.json()
                 logger.info(f"  Response: {json.dumps(response_data, indent=2)}")
-            except:
+            except (json.JSONDecodeError, ValueError) as e:
                 logger.info(f"  Response: {response.text[:200]}")
             return True
         elif response.status_code == 404:
@@ -147,7 +147,7 @@ def test_dashboard_health():
             try:
                 health_data = response.json()
                 logger.info(f"  Health data: {json.dumps(health_data, indent=2)}")
-            except:
+            except (json.JSONDecodeError, ValueError) as e:
                 logger.info(f"  Response: {response.text[:200]}")
             return True
         elif response.status_code == 404:
