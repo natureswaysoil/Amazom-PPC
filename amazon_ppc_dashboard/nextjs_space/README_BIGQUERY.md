@@ -200,9 +200,19 @@ curl "https://your-dashboard.vercel.app/api/health"
 
 ### Error: "GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set"
 
-**Solution**: This error occurs when the required environment variables are not configured in your deployment.
+**Solution**: This error occurs when the required environment variables are not configured in your Vercel deployment.
 
-1. **In Vercel**, go to Project Settings → Environment Variables and add:
+**Quick Diagnosis:**
+```bash
+# Check what's actually configured
+curl "https://your-dashboard.vercel.app/api/config-check"
+```
+
+**Steps to Fix:**
+
+1. **Go to Vercel** → Your Project → Settings → Environment Variables
+
+2. **Add Project ID variables:**
    ```
    GCP_PROJECT=amazon-ppc-474902
    GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
@@ -210,12 +220,34 @@ curl "https://your-dashboard.vercel.app/api/health"
    BQ_LOCATION=us-east4
    ```
 
-2. **Redeploy** the application after adding these variables
+3. **Add Service Account Credentials** (choose one method):
+   
+   **Method A (Recommended):**
+   ```
+   GCP_SERVICE_ACCOUNT_KEY={"type":"service_account","project_id":"amazon-ppc-474902",...}
+   ```
+   Paste the entire JSON from your service account key file.
+   
+   **Method B:**
+   ```
+   GOOGLE_APPLICATION_CREDENTIALS={"type":"service_account",...}
+   ```
+   Also paste the entire JSON content (NOT a file path).
 
-3. **Verify** the configuration:
+4. **Important:** Select **Production, Preview, and Development** for all variables
+
+5. **Redeploy** the application (Vercel → Deployments → Redeploy)
+
+6. **Verify** the fix:
    ```bash
+   curl "https://your-dashboard.vercel.app/api/config-check"
    curl "https://your-dashboard.vercel.app/api/bigquery-data?table=optimization_results&limit=1"
    ```
+
+**Common Mistakes:**
+- Using a file path for credentials (won't work on Vercel)
+- Forgetting to redeploy after adding variables
+- Not selecting all environments (Production/Preview/Development)
 
 For detailed deployment instructions, see [DEPLOYMENT.md](./DEPLOYMENT.md).
 

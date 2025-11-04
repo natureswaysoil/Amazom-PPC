@@ -13,14 +13,44 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ 
         error: 'Configuration error',
         message: 'GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set',
-        details: 'To fix this: 1) Add GCP_PROJECT and GOOGLE_CLOUD_PROJECT to your deployment environment variables, 2) Set both to your Google Cloud project ID (e.g., amazon-ppc-474902), 3) Redeploy the application',
-        documentation: 'See DEPLOYMENT.md Step 3 for detailed configuration instructions'
+        details: 'To fix this: 1) Add GCP_PROJECT and GOOGLE_CLOUD_PROJECT to your Vercel project environment variables, 2) Set both to your Google Cloud project ID (e.g., amazon-ppc-474902), 3) Also add GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials, 4) Redeploy the application',
+        documentation: 'See DEPLOYMENT.md Step 3 for detailed configuration instructions. Visit https://vercel.com/docs/concepts/projects/environment-variables for help with Vercel environment variables.',
+        vercelSetupUrl: 'https://vercel.com/<your-team>/<your-project>/settings/environment-variables'
       }, { status: 500 });
     }
     
-    // Initialize BigQuery client
+    // Handle Google Cloud credentials
+    // In Vercel, credentials can be provided as:
+    // 1. GCP_SERVICE_ACCOUNT_KEY (JSON string of service account key)
+    // 2. GOOGLE_APPLICATION_CREDENTIALS (JSON string, though typically a file path locally)
+    // 3. Default application credentials (if running in GCP)
+    let credentials = undefined;
+    
+    if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
+      try {
+        credentials = JSON.parse(process.env.GCP_SERVICE_ACCOUNT_KEY);
+      } catch (e) {
+        return NextResponse.json({ 
+          error: 'Configuration error',
+          message: 'GCP_SERVICE_ACCOUNT_KEY is not valid JSON',
+          details: 'The GCP_SERVICE_ACCOUNT_KEY environment variable must contain a valid JSON string. Please check the format and redeploy.',
+        }, { status: 500 });
+      }
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      // Try to parse as JSON string (Vercel pattern)
+      try {
+        credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+      } catch (e) {
+        // If not JSON, assume it's a file path (local development)
+        // BigQuery client will handle file path automatically
+        credentials = undefined;
+      }
+    }
+    
+    // Initialize BigQuery client with explicit credentials if provided
     const bigquery = new BigQuery({
       projectId: projectId,
+      ...(credentials && { credentials }),
     });
     
     // Get query parameters with validation

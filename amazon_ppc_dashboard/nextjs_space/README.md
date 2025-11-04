@@ -9,6 +9,8 @@ amazon_ppc_dashboard/nextjs_space/
 ├── app/
 │   ├── api/
 │   │   ├── health/route.ts                  - Health check endpoint
+│   │   ├── config-check/route.ts            - Configuration diagnostics
+│   │   ├── bigquery-data/route.ts           - BigQuery data queries
 │   │   ├── optimization-status/route.ts     - Real-time progress updates
 │   │   ├── optimization-results/route.ts    - Final optimization results
 │   │   └── optimization-error/route.ts      - Error reporting
@@ -19,7 +21,9 @@ amazon_ppc_dashboard/nextjs_space/
 ├── next.config.js                           - Next.js configuration
 ├── package.json                             - Dependencies and scripts
 ├── tsconfig.json                            - TypeScript configuration
-└── README.md                                - This file
+├── README.md                                - This file
+├── README_BIGQUERY.md                       - BigQuery integration guide
+└── DEPLOYMENT.md                            - Deployment instructions
 ```
 
 ## Getting Started
@@ -82,6 +86,45 @@ Response:
   "service": "Amazon PPC Dashboard"
 }
 ```
+
+### Configuration Check (NEW)
+**GET** `/api/config-check`
+
+Diagnoses configuration issues and shows what environment variables are set.
+
+Response:
+```json
+{
+  "status": "ok|warning|error",
+  "message": "Configuration appears correct",
+  "checks": {
+    "configuration": {
+      "gcp_project": {
+        "set": true,
+        "source": "GCP_PROJECT",
+        "value": "amazon-ppc-474902"
+      },
+      "credentials": {
+        "gcp_service_account_key": {
+          "set": true,
+          "valid_json": true,
+          "has_required_fields": true
+        }
+      }
+    },
+    "diagnosis": [
+      "✅ GCP project ID is configured",
+      "✅ GCP_SERVICE_ACCOUNT_KEY is valid and contains required fields"
+    ],
+    "recommendations": []
+  },
+  "next_steps": [
+    "Test BigQuery connection: GET /api/bigquery-data?table=optimization_results&limit=1"
+  ]
+}
+```
+
+**Use this endpoint to troubleshoot "GCP_PROJECT must be set" errors.**
 
 ### Optimization Status
 **POST** `/api/optimization-status`
