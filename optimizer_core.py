@@ -430,8 +430,8 @@ class AmazonAdsAPI:
     def _authenticate(self) -> Auth:
         """Authenticate and get access token"""
         if not all([self.client_id, self.client_secret, self.refresh_token]):
-            logger.error("Missing required environment variables")
-            raise ValueError("Missing required Amazon API credentials")
+            logger.error("Missing required Amazon API credentials in environment variables")
+            raise ValueError("Missing required Amazon API credentials in environment variables (AMAZON_CLIENT_ID, AMAZON_CLIENT_SECRET, AMAZON_REFRESH_TOKEN)")
         
         payload = {
             "grant_type": "refresh_token",
@@ -462,9 +462,17 @@ class AmazonAdsAPI:
     
     def _refresh_auth_if_needed(self):
         """Refresh authentication if token expired"""
-        # Prevent concurrent refresh attempts
+        # Prevent concurrent refresh attempts - wait for ongoing refresh
         if self._auth_lock:
             logger.debug("Token refresh already in progress, waiting...")
+            # Wait for refresh to complete (up to 5 seconds)
+            import time
+            wait_time = 0
+            while self._auth_lock and wait_time < 5:
+                time.sleep(0.1)
+                wait_time += 0.1
+            if self._auth_lock:
+                logger.warning("Token refresh wait timeout - proceeding anyway")
             return
             
         if self.auth.is_expired():
