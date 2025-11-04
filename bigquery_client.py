@@ -16,10 +16,12 @@ Version: 1.0.0
 
 import logging
 import json
+import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
+from google.oauth2 import service_account
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,7 @@ class BigQueryClient:
     - Provides error handling and retry logic
     """
     
-    def __init__(self, project_id: str, dataset_id: str = 'amazon_ppc', 
+    def __init__(self, project_id: str, dataset_id: str = 'amazon_ppc',
                  location: str = 'us-east4'):
         """
         Initialize BigQuery client
@@ -48,11 +50,61 @@ class BigQueryClient:
         self.project_id = project_id
         self.dataset_id = dataset_id
         self.location = location
-        self.client = bigquery.Client(project=project_id)
+
+        credentials = self._resolve_credentials()
+        if credentials:
+            logger.info("Using explicit service account credentials for BigQuery client")
+            self.client = bigquery.Client(project=project_id, credentials=credentials)
+        else:
+            logger.debug("Using Application Default Credentials for BigQuery client")
+            self.client = bigquery.Client(project=project_id)
         self.dataset_ref = f"{project_id}.{dataset_id}"
-        
+
         # Ensure dataset exists
         self._ensure_dataset_exists()
+
+    def _resolve_credentials(self) -> Optional[service_account.Credentials]:
+        """Attempt to load service account credentials from environment variables."""
+
+        # Prefer dedicated JSON credential environment variable used by deployment scripts
+        credential_sources = [
+            ("GCP_SERVICE_ACCOUNT_KEY", os.environ.get("GCP_SERVICE_ACCOUNT_KEY")),
+            ("GOOGLE_APPLICATION_CREDENTIALS", os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")),
+        ]
+
+        for source_name, raw_value in credential_sources:
+            if not raw_value:
+                continue
+
+            # If the environment variable points to a file path, let google-auth handle it
+            if os.path.isfile(raw_value):
+                try:
+                    logger.debug(f"Loading BigQuery credentials from file path in {source_name}")
+                    return service_account.Credentials.from_service_account_file(raw_value)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to load service account credentials from %s path: %s", source_name, exc
+                    )
+                    continue
+
+            # Otherwise treat the value as JSON credentials
+            try:
+                logger.debug(f"Attempting to parse service account JSON from {source_name}")
+                credentials_info = json.loads(raw_value)
+                if isinstance(credentials_info, dict) and credentials_info.get("type") == "service_account":
+                    return service_account.Credentials.from_service_account_info(credentials_info)
+                logger.warning(
+                    "Environment variable %s did not contain valid service account credentials", source_name
+                )
+            except json.JSONDecodeError:
+                logger.debug(
+                    "Value in %s is not JSON; assuming Application Default Credentials will be used",
+                    source_name,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Failed to load service account credentials from %s: %s", source_name, exc)
+
+        return None
     
     def _ensure_dataset_exists(self):
         """Create dataset if it doesn't exist"""
