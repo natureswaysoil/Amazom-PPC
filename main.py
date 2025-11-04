@@ -455,6 +455,13 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
             try:
                 project_id = bigquery_config.get('project_id') or os.getenv('GCP_PROJECT') or os.getenv('GOOGLE_CLOUD_PROJECT')
                 if project_id:
+                    # Set environment variables for BigQuery client and dashboard
+                    # The BigQuery client library and dashboard both expect these to be set
+                    if not os.getenv('GCP_PROJECT'):
+                        os.environ['GCP_PROJECT'] = project_id
+                    if not os.getenv('GOOGLE_CLOUD_PROJECT'):
+                        os.environ['GOOGLE_CLOUD_PROJECT'] = project_id
+                    
                     dataset_id = bigquery_config.get('dataset_id', 'amazon_ppc')
                     location = bigquery_config.get('location', 'us-east4')
                     bigquery_client = BigQueryClient(project_id, dataset_id, location)
