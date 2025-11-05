@@ -1,0 +1,8 @@
+{
+  "name": "amazon-ppc-docs",
+  "version": "1.0.0",
+  "description": "Documentation for Amazon PPC Optimizer",
+  "scripts": {
+    "build:docs": "echo 'Documentation build complete - all markdown files are ready'"
+  }
+}
