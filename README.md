@@ -312,7 +312,7 @@ To enable dashboard API integration, add these GitHub Secrets:
 
 | Secret Name | Description | Example |
 |------------|-------------|---------|
-| `DASHBOARD_API_ENDPOINT` | Dashboard API URL | `https://ppc-dashboard.abacusai.app/api/health-check` |
+| `DASHBOARD_API_ENDPOINT` | Dashboard API URL | `https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app/api/health-check` |
 | `DASHBOARD_API_KEY` | Authentication token | Your dashboard API key |
 
 The workflow will automatically post health check results to the dashboard if these secrets are configured. If not configured, the workflow will still complete successfully - dashboard integration is optional.
