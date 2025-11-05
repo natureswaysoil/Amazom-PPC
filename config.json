@@ -17,7 +17,7 @@
     }
   },
   "dashboard": {
-    "url": "https://ppc-dashboard.abacusai.app",
+    "url": "https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app",
     "api_key": "YOUR_DASHBOARD_API_KEY",
     "enabled": true,
     "send_real_time_updates": true,

@@ -197,4 +197,4 @@ jobs:
           echo "\n**HTTP Status Code**: ${{ steps.health_check.outputs.http_code }}" >> $GITHUB_STEP_SUMMARY
           echo "\n**Response**: \`${{ steps.health_check.outputs.response_body }}\`" >> $GITHUB_STEP_SUMMARY
           echo "\n**Cloud Function URL**: ${FUNCTION_URL}" >> $GITHUB_STEP_SUMMARY
-          echo "\n**Dashboard**: https://ppc-dashboard.abacusai.app" >> $GITHUB_STEP_SUMMARY
+          echo "\n**Dashboard**: https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app" >> $GITHUB_STEP_SUMMARY
