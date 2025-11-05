@@ -412,6 +412,35 @@ gcloud functions logs read amazon-ppc-optimizer --limit=10
 - Automatic retry with exponential backoff
 - Cloud Function rate limits: use authenticated deployment to avoid issues
 
+### BigQuery "Dataset Not Found" Error
+
+If you see errors like "Dataset amazon-ppc-474902:amazon_ppc was not found in location us-east4":
+
+**Solution**:
+1. Run the BigQuery setup script:
+   ```bash
+   ./setup-bigquery.sh amazon-ppc-474902 amazon_ppc us-east4
+   ```
+
+2. Grant permissions to your service account:
+   ```bash
+   PROJECT_NUMBER=$(gcloud projects describe amazon-ppc-474902 --format='value(projectNumber)')
+   SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+   gcloud projects add-iam-policy-binding amazon-ppc-474902 \
+     --member="serviceAccount:${SERVICE_ACCOUNT}" \
+     --role="roles/bigquery.dataEditor"
+   gcloud projects add-iam-policy-binding amazon-ppc-474902 \
+     --member="serviceAccount:${SERVICE_ACCOUNT}" \
+     --role="roles/bigquery.jobUser"
+   ```
+
+3. Verify the setup:
+   ```bash
+   bq ls amazon-ppc-474902:amazon_ppc
+   ```
+
+See [BIGQUERY_INTEGRATION.md](BIGQUERY_INTEGRATION.md) for complete BigQuery setup and troubleshooting.
+
 ### Uptime Check Configuration
 
 To avoid triggering the main optimization logic with uptime checks:

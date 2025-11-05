@@ -297,6 +297,35 @@ Estimated costs for typical usage:
 
 ## Troubleshooting
 
+### Error: "Failed to load BigQuery data" / "Dataset not found in location us-east4"
+
+This error occurs when the BigQuery dataset and tables haven't been created yet, or were created in a different location than expected.
+
+**Solution:**
+
+1. Run the setup script to create the dataset and tables:
+```bash
+./setup-bigquery.sh amazon-ppc-474902 amazon_ppc us-east4
+```
+
+2. Verify the dataset was created in the correct location:
+```bash
+bq show amazon-ppc-474902:amazon_ppc
+```
+
+3. If the dataset exists in a different location, you have two options:
+   - **Option A (Recommended)**: Update your configuration to use the existing location
+   - **Option B**: Delete the old dataset and recreate it in us-east4:
+     ```bash
+     bq rm -r -f -d amazon-ppc-474902:amazon_ppc
+     ./setup-bigquery.sh amazon-ppc-474902 amazon_ppc us-east4
+     ```
+
+4. Ensure all environment variables are correctly configured:
+   - `GCP_PROJECT=amazon-ppc-474902`
+   - `BQ_DATASET_ID=amazon_ppc`
+   - `BQ_LOCATION=us-east4`
+
 ### Error: "Dataset not found"
 
 Run the setup script:
