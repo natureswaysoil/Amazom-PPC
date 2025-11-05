@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
+import { readFileSync, existsSync } from 'fs';
 
 export async function GET(request: NextRequest) {
   try {
@@ -39,24 +40,36 @@ export async function GET(request: NextRequest) {
         // Type-safe check for project_id property
         if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
           projectId = credentials.project_id;
-          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS');
+          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS JSON');
         }
       } catch (e) {
         // If not JSON, assume it's a file path (local development)
-        // BigQuery client will handle file path automatically
+        // Try to read the file and extract project_id
+        const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        if (credPath && existsSync(credPath)) {
+          try {
+            const fileContent = readFileSync(credPath, 'utf8');
+            try {
+              const fileCreds = JSON.parse(fileContent);
+              if (!projectId && fileCreds && typeof fileCreds === 'object' && fileCreds.project_id) {
+                projectId = fileCreds.project_id;
+                console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS file');
+              }
+            } catch (jsonErr) {
+              console.warn('GOOGLE_APPLICATION_CREDENTIALS file contains invalid JSON:', jsonErr);
+            }
+          } catch (readErr) {
+            console.warn('Could not read GOOGLE_APPLICATION_CREDENTIALS file:', readErr);
+          }
+        }
+        // Don't set credentials - let BigQuery client handle file path
         credentials = undefined;
       }
     }
     
     // Validate required configuration after attempting to extract from credentials
     if (!projectId) {
-      return NextResponse.json({ 
-        error: 'Configuration error',
-        message: 'Project ID not found: Set GCP_PROJECT/GOOGLE_CLOUD_PROJECT or provide service account credentials',
-        details: 'To fix this: 1) Provide GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials (includes project_id), OR 2) Set GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables to your Google Cloud project ID (e.g., amazon-ppc-474902), then 3) Redeploy the application',
-        documentation: 'See README_BIGQUERY.md and DEPLOYMENT.md for detailed configuration instructions. Visit https://vercel.com/docs/concepts/projects/environment-variables for help with Vercel environment variables.',
-        vercelSetupUrl: 'https://vercel.com/<your-team>/<your-project>/settings/environment-variables'
-      }, { status: 500 });
+      return buildProjectIdErrorResponse();
     }
     
     // Initialize BigQuery client with explicit credentials if provided
@@ -214,4 +227,41 @@ export async function GET(request: NextRequest) {
       message: error.message || 'Unknown error'
     }, { status: 500 });
   }
+}
+
+/**
+ * Helper function to build a detailed error response when project ID is not found
+ */
+function buildProjectIdErrorResponse() {
+  // Build helpful error message based on what's configured
+  const configStatus = {
+    GCP_PROJECT: !!process.env.GCP_PROJECT,
+    GOOGLE_CLOUD_PROJECT: !!process.env.GOOGLE_CLOUD_PROJECT,
+    GCP_SERVICE_ACCOUNT_KEY: !!process.env.GCP_SERVICE_ACCOUNT_KEY,
+    GOOGLE_APPLICATION_CREDENTIALS: !!process.env.GOOGLE_APPLICATION_CREDENTIALS
+  };
+  
+  const fixOptions = [
+    'Option 1 (Recommended for Vercel/Cloud deployments):',
+    '  • Set GCP_SERVICE_ACCOUNT_KEY environment variable to your service account JSON',
+    '  • The JSON must include "project_id" field (e.g., {"type":"service_account","project_id":"amazon-ppc-474902",...})',
+    '',
+    'Option 2 (Simple approach):',
+    '  • Set GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable to your project ID',
+    '  • Example: GCP_PROJECT=amazon-ppc-474902',
+    '',
+    'Option 3 (Local development):',
+    '  • Set GOOGLE_APPLICATION_CREDENTIALS to point to your service account JSON file',
+    '  • Example: GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json',
+    '',
+    'After setting environment variables, redeploy the application.'
+  ].join('\n');
+  
+  return NextResponse.json({ 
+    error: 'Configuration error',
+    message: 'Project ID not found: Set GCP_PROJECT/GOOGLE_CLOUD_PROJECT or provide service account credentials',
+    details: `To fix this error, choose ONE of these options:\n\n${fixOptions}`,
+    configStatus,
+    documentation: 'See .env.example file for configuration templates. Visit https://vercel.com/docs/concepts/projects/environment-variables for Vercel setup.',
+  }, { status: 500 });
 }
