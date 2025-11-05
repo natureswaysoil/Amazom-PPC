@@ -18,6 +18,17 @@ from optimizer_core import PPCAutomation
 from dashboard_client import DashboardClient
 from bigquery_client import BigQueryClient
 
+# Configure logger at module level
+logger = logging.getLogger(__name__)
+
+# Import crewAI sync module (optional - will gracefully degrade if not available)
+try:
+    from crewai_bigquery_sync import BigQueryDashboardSync
+    CREWAI_SYNC_AVAILABLE = True
+except ImportError:
+    CREWAI_SYNC_AVAILABLE = False
+    logger.warning("crewAI BigQuery sync not available")
+
 # Configure logging for Cloud Functions
 # Detect if running in Cloud Functions environment
 IS_CLOUD_FUNCTION = os.getenv('K_SERVICE') is not None or os.getenv('FUNCTION_TARGET') is not None
@@ -386,6 +397,69 @@ def run_verify_connection(request) -> Tuple[Dict[str, Any], int]:
         }, 500
 
 
+def run_bigquery_sync(request) -> Tuple[Dict[str, Any], int]:
+    """
+    Sync BigQuery data to dashboard using crewAI
+    
+    Query parameter:
+    - run_id: (optional) Sync specific run, otherwise syncs last 7 days
+    
+    Args:
+        request: HTTP request object
+        
+    Returns:
+        Sync status dictionary and HTTP status code
+    """
+    logger.info("=== BigQuery to Dashboard Sync Requested ===")
+    
+    if not CREWAI_SYNC_AVAILABLE:
+        return {
+            'status': 'error',
+            'message': 'crewAI sync module not available',
+            'timestamp': datetime.now().isoformat()
+        }, 503
+    
+    try:
+        # Load configuration
+        config = load_config()
+        
+        # Get run_id if specified
+        run_id = request.args.get('run_id')
+        
+        # Initialize crewAI sync
+        crewai_sync = BigQueryDashboardSync(config)
+        
+        if run_id:
+            logger.info(f"Syncing specific run: {run_id}")
+            result = crewai_sync.sync_latest_run(run_id)
+        else:
+            logger.info("Syncing last 7 days of data")
+            result = crewai_sync.sync_data()
+        
+        if result.get('success'):
+            return {
+                'status': 'success',
+                'message': 'BigQuery data synced to dashboard',
+                'result': result,
+                'timestamp': datetime.now().isoformat()
+            }, 200
+        else:
+            return {
+                'status': 'error',
+                'message': 'Sync completed with errors',
+                'result': result,
+                'timestamp': datetime.now().isoformat()
+            }, 500
+            
+    except Exception as e:
+        logger.error(f"BigQuery sync failed: {str(e)}")
+        return {
+            'status': 'error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }, 500
+
+
 @functions_framework.http
 def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     """
@@ -394,6 +468,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     Supports multiple modes via query parameters:
     - ?health=true: Quick health check without running optimization
     - ?verify_connection=true: Verify Amazon Ads API connection with small sample
+    - ?sync_bigquery=true: Sync BigQuery data to dashboard using crewAI
     - ?dry_run=true: Run optimization without making actual changes
     - Normal execution: Full optimization run
     
@@ -416,6 +491,10 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     # Check for verify connection endpoint
     if request.args.get('verify_connection', '').lower() == 'true':
         return run_verify_connection(request)
+    
+    # Check for BigQuery sync endpoint
+    if request.args.get('sync_bigquery', '').lower() == 'true':
+        return run_bigquery_sync(request)
     
     logger.info(f"=== Amazon PPC Optimizer Started at {start_time} ===")
     
@@ -520,6 +599,19 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
                 bigquery_client.write_optimization_results(results_payload)
             except Exception as bq_err:
                 logger.warning(f"BigQuery write failed (non-blocking): {bq_err}")
+        
+        # Sync BigQuery data to dashboard using crewAI (non-blocking)
+        if CREWAI_SYNC_AVAILABLE and config.get('dashboard', {}).get('sync_bigquery_data', False):
+            logger.info("Syncing BigQuery data to dashboard with crewAI...")
+            try:
+                crewai_sync = BigQueryDashboardSync(config)
+                sync_result = crewai_sync.sync_latest_run(run_id)
+                if sync_result.get('success'):
+                    logger.info("crewAI sync completed successfully")
+                else:
+                    logger.warning(f"crewAI sync completed with issues: {sync_result.get('error')}")
+            except Exception as crew_err:
+                logger.warning(f"crewAI sync failed (non-blocking): {crew_err}")
         
         # Prepare summary
         summary = format_results_summary(results, duration, dry_run)
