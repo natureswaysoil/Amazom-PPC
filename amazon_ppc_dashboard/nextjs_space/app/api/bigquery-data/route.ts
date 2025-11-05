@@ -13,13 +13,14 @@ export async function GET(request: NextRequest) {
     // 1. GCP_SERVICE_ACCOUNT_KEY (JSON string of service account key)
     // 2. GOOGLE_APPLICATION_CREDENTIALS (JSON string, though typically a file path locally)
     // 3. Default application credentials (if running in GCP)
-    let credentials = undefined;
+    let credentials: any = undefined;
     
     if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
       try {
         credentials = JSON.parse(process.env.GCP_SERVICE_ACCOUNT_KEY);
         // Extract project ID from service account credentials if not already set
-        if (!projectId && credentials.project_id) {
+        // Type-safe check for project_id property
+        if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
           projectId = credentials.project_id;
           console.log('Using project ID from GCP_SERVICE_ACCOUNT_KEY:', projectId);
         }
@@ -35,7 +36,8 @@ export async function GET(request: NextRequest) {
       try {
         credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
         // Extract project ID from service account credentials if not already set
-        if (!projectId && credentials.project_id) {
+        // Type-safe check for project_id property
+        if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
           projectId = credentials.project_id;
           console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS:', projectId);
         }
@@ -50,9 +52,9 @@ export async function GET(request: NextRequest) {
     if (!projectId) {
       return NextResponse.json({ 
         error: 'Configuration error',
-        message: 'GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set',
-        details: 'To fix this: 1) Add GCP_PROJECT or GOOGLE_CLOUD_PROJECT to your Vercel project environment variables, 2) Set it to your Google Cloud project ID (e.g., amazon-ppc-474902), OR provide GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials (which includes the project_id), 3) Redeploy the application',
-        documentation: 'See BIGQUERY_INTEGRATION.md for detailed configuration instructions. Visit https://vercel.com/docs/concepts/projects/environment-variables for help with Vercel environment variables.',
+        message: 'Project ID not found: Set GCP_PROJECT/GOOGLE_CLOUD_PROJECT or provide service account credentials',
+        details: 'To fix this: 1) Provide GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials (includes project_id), OR 2) Set GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables to your Google Cloud project ID (e.g., amazon-ppc-474902), then 3) Redeploy the application',
+        documentation: 'See README_BIGQUERY.md and DEPLOYMENT.md for detailed configuration instructions. Visit https://vercel.com/docs/concepts/projects/environment-variables for help with Vercel environment variables.',
         vercelSetupUrl: 'https://vercel.com/<your-team>/<your-project>/settings/environment-variables'
       }, { status: 500 });
     }
