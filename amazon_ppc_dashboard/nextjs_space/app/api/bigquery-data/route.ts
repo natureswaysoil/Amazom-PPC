@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
+import * as fs from 'fs';
 
 export async function GET(request: NextRequest) {
   try {
@@ -39,23 +40,56 @@ export async function GET(request: NextRequest) {
         // Type-safe check for project_id property
         if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
           projectId = credentials.project_id;
-          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS');
+          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS JSON');
         }
       } catch (e) {
         // If not JSON, assume it's a file path (local development)
-        // BigQuery client will handle file path automatically
-        credentials = undefined;
+        // Try to read the file and extract project_id
+        try {
+          const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+          if (credPath && fs.existsSync(credPath)) {
+            const fileContent = fs.readFileSync(credPath, 'utf8');
+            const fileCreds = JSON.parse(fileContent);
+            if (!projectId && fileCreds && typeof fileCreds === 'object' && fileCreds.project_id) {
+              projectId = fileCreds.project_id;
+              console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS file');
+            }
+            // Don't set credentials here - let BigQuery client handle file path
+            credentials = undefined;
+          }
+        } catch (fileErr) {
+          console.warn('Could not read GOOGLE_APPLICATION_CREDENTIALS file:', fileErr);
+          credentials = undefined;
+        }
       }
     }
     
     // Validate required configuration after attempting to extract from credentials
     if (!projectId) {
+      // Build helpful error message based on what's configured
+      const configStatus = {
+        GCP_PROJECT: !!process.env.GCP_PROJECT,
+        GOOGLE_CLOUD_PROJECT: !!process.env.GOOGLE_CLOUD_PROJECT,
+        GCP_SERVICE_ACCOUNT_KEY: !!process.env.GCP_SERVICE_ACCOUNT_KEY,
+        GOOGLE_APPLICATION_CREDENTIALS: !!process.env.GOOGLE_APPLICATION_CREDENTIALS
+      };
+      
       return NextResponse.json({ 
         error: 'Configuration error',
         message: 'Project ID not found: Set GCP_PROJECT/GOOGLE_CLOUD_PROJECT or provide service account credentials',
-        details: 'To fix this: 1) Provide GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials (includes project_id), OR 2) Set GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables to your Google Cloud project ID (e.g., amazon-ppc-474902), then 3) Redeploy the application',
-        documentation: 'See README_BIGQUERY.md and DEPLOYMENT.md for detailed configuration instructions. Visit https://vercel.com/docs/concepts/projects/environment-variables for help with Vercel environment variables.',
-        vercelSetupUrl: 'https://vercel.com/<your-team>/<your-project>/settings/environment-variables'
+        details: 'To fix this error, choose ONE of these options:\n\n' +
+                 'Option 1 (Recommended for Vercel/Cloud deployments):\n' +
+                 '  • Set GCP_SERVICE_ACCOUNT_KEY environment variable to your service account JSON\n' +
+                 '  • The JSON must include "project_id" field (e.g., {"type":"service_account","project_id":"amazon-ppc-474902",...})\n\n' +
+                 'Option 2 (Simple approach):\n' +
+                 '  • Set GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable to your project ID\n' +
+                 '  • Example: GCP_PROJECT=amazon-ppc-474902\n\n' +
+                 'Option 3 (Local development):\n' +
+                 '  • Set GOOGLE_APPLICATION_CREDENTIALS to point to your service account JSON file\n' +
+                 '  • Example: GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json\n\n' +
+                 'After setting environment variables, redeploy the application.',
+        configStatus,
+        documentation: 'See .env.example file for configuration templates. Visit https://vercel.com/docs/concepts/projects/environment-variables for Vercel setup.',
       }, { status: 500 });
     }
     
