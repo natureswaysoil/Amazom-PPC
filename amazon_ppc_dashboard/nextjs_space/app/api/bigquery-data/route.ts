@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
         // Type-safe check for project_id property
         if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
           projectId = credentials.project_id;
-          console.log('Using project ID from GCP_SERVICE_ACCOUNT_KEY:', projectId);
+          console.log('Using project ID from GCP_SERVICE_ACCOUNT_KEY');
         }
       } catch (e) {
         return NextResponse.json({ 
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
         // Type-safe check for project_id property
         if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
           projectId = credentials.project_id;
-          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS:', projectId);
+          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS');
         }
       } catch (e) {
         // If not JSON, assume it's a file path (local development)
