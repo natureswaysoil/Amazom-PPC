@@ -3,32 +3,27 @@ import { BigQuery } from '@google-cloud/bigquery';
 
 export async function GET(request: NextRequest) {
   try {
-    // Get configuration from environment variables - no fallback values for security
-    const projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+    // Get configuration from environment variables
+    let projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
     const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
     const location = process.env.BQ_LOCATION || 'us-east4';
-    
-    // Validate required configuration
-    if (!projectId) {
-      return NextResponse.json({ 
-        error: 'Configuration error',
-        message: 'GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set',
-        details: 'To fix this: 1) Add GCP_PROJECT and GOOGLE_CLOUD_PROJECT to your Vercel project environment variables, 2) Set both to your Google Cloud project ID (e.g., amazon-ppc-474902), 3) Also add GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials, 4) Redeploy the application',
-        documentation: 'See DEPLOYMENT.md Step 3 for detailed configuration instructions. Visit https://vercel.com/docs/concepts/projects/environment-variables for help with Vercel environment variables.',
-        vercelSetupUrl: 'https://vercel.com/<your-team>/<your-project>/settings/environment-variables'
-      }, { status: 500 });
-    }
     
     // Handle Google Cloud credentials
     // In Vercel, credentials can be provided as:
     // 1. GCP_SERVICE_ACCOUNT_KEY (JSON string of service account key)
     // 2. GOOGLE_APPLICATION_CREDENTIALS (JSON string, though typically a file path locally)
     // 3. Default application credentials (if running in GCP)
-    let credentials = undefined;
+    let credentials: any = undefined;
     
     if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
       try {
         credentials = JSON.parse(process.env.GCP_SERVICE_ACCOUNT_KEY);
+        // Extract project ID from service account credentials if not already set
+        // Type-safe check for project_id property
+        if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
+          projectId = credentials.project_id;
+          console.log('Using project ID from GCP_SERVICE_ACCOUNT_KEY');
+        }
       } catch (e) {
         return NextResponse.json({ 
           error: 'Configuration error',
@@ -40,11 +35,28 @@ export async function GET(request: NextRequest) {
       // Try to parse as JSON string (Vercel pattern)
       try {
         credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+        // Extract project ID from service account credentials if not already set
+        // Type-safe check for project_id property
+        if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
+          projectId = credentials.project_id;
+          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS');
+        }
       } catch (e) {
         // If not JSON, assume it's a file path (local development)
         // BigQuery client will handle file path automatically
         credentials = undefined;
       }
+    }
+    
+    // Validate required configuration after attempting to extract from credentials
+    if (!projectId) {
+      return NextResponse.json({ 
+        error: 'Configuration error',
+        message: 'Project ID not found: Set GCP_PROJECT/GOOGLE_CLOUD_PROJECT or provide service account credentials',
+        details: 'To fix this: 1) Provide GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials (includes project_id), OR 2) Set GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables to your Google Cloud project ID (e.g., amazon-ppc-474902), then 3) Redeploy the application',
+        documentation: 'See README_BIGQUERY.md and DEPLOYMENT.md for detailed configuration instructions. Visit https://vercel.com/docs/concepts/projects/environment-variables for help with Vercel environment variables.',
+        vercelSetupUrl: 'https://vercel.com/<your-team>/<your-project>/settings/environment-variables'
+      }, { status: 500 });
     }
     
     // Initialize BigQuery client with explicit credentials if provided

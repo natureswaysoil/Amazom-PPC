@@ -40,10 +40,14 @@ DASHBOARD_API_KEY=your_dashboard_api_key_here
 
 **Required for BigQuery Integration:**
 ```
-GCP_PROJECT=amazon-ppc-474902
-GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
 BQ_DATASET_ID=amazon_ppc
 BQ_LOCATION=us-east4
+```
+
+**Optional (auto-extracted from service account if not provided):**
+```
+GCP_PROJECT=amazon-ppc-474902
+GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
 ```
 
 **Optional (if needed for future features):**
@@ -55,9 +59,9 @@ DATABASE_URL=your_database_url_here
 
 **Notes:**
 - The `DASHBOARD_API_KEY` must match the key configured in the Google Cloud Function's Secret Manager.
-- The `GCP_PROJECT` and `GOOGLE_CLOUD_PROJECT` should be set to your Google Cloud project ID (e.g., `amazon-ppc-474902`).
+- The `GCP_PROJECT` and `GOOGLE_CLOUD_PROJECT` are optional if you provide service account credentials (they will be auto-extracted from the service account JSON).
 - The `BQ_DATASET_ID` should match the BigQuery dataset created by `setup-bigquery.sh` (default: `amazon_ppc`).
-- For Google Cloud authentication, you'll also need to configure `GOOGLE_APPLICATION_CREDENTIALS` (see Step 3a below).
+- For Google Cloud authentication, you'll need to configure `GCP_SERVICE_ACCOUNT_KEY` or `GOOGLE_APPLICATION_CREDENTIALS` (see Step 3a below).
 
 ### Step 3a: Configure Google Cloud Service Account (for BigQuery)
 
@@ -233,9 +237,11 @@ To fix:
 
 ### BigQuery Error: "GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set"
 
-**Problem:** Dashboard displays an error about missing GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables, even after following the deployment steps.
+**Problem:** Dashboard displays an error about missing GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables.
 
-**Root Cause:** This error occurs when the environment variables are not properly set in Vercel. Note that setting these in the optimizer's Cloud Function does NOT affect the dashboard - the dashboard needs its own environment variable configuration.
+**Root Cause:** This error occurs when neither the environment variables are set NOR service account credentials are provided in Vercel. Note that setting these in the optimizer's Cloud Function does NOT affect the dashboard - the dashboard needs its own configuration.
+
+**Quick Fix (Recommended):** The dashboard can automatically extract the project ID from your service account credentials, so you only need to provide the credentials:
 
 **Step-by-Step Solution:**
 
@@ -246,7 +252,25 @@ To fix:
    ```
    This will show you exactly what's configured and what's missing.
 
-2. **Set Required Environment Variables in Vercel:**
+2. **Add Google Cloud Service Account Credentials (REQUIRED):**
+   
+   Choose one method:
+   
+   **Method A (Recommended):** Use `GCP_SERVICE_ACCOUNT_KEY`:
+   - In Vercel, add a new environment variable named `GCP_SERVICE_ACCOUNT_KEY`
+   - Paste the entire JSON content from your `vercel-key.json` file
+   - Example: `{"type":"service_account","project_id":"amazon-ppc-474902",...}`
+   - **The dashboard will automatically extract the project_id from this JSON**
+   
+   **Method B:** Use `GOOGLE_APPLICATION_CREDENTIALS`:
+   - Add environment variable named `GOOGLE_APPLICATION_CREDENTIALS`
+   - Paste the entire JSON content (NOT a file path!)
+   - ⚠️ Do NOT use a file path like `/path/to/key.json` - it won't work on Vercel
+   - **The dashboard will automatically extract the project_id from this JSON**
+
+3. **Optional: Set Environment Variables Explicitly in Vercel:**
+   
+   If you prefer to set the project ID explicitly (not required if using service account credentials):
    
    Go to your Vercel project → Settings → Environment Variables, and add:
    
@@ -258,20 +282,6 @@ To fix:
    ```
    
    Make sure to select **Production**, **Preview**, and **Development** for each variable.
-
-3. **Add Google Cloud Service Account Credentials:**
-   
-   You MUST add credentials for BigQuery authentication. Choose one method:
-   
-   **Method A (Recommended):** Use `GCP_SERVICE_ACCOUNT_KEY`:
-   - In Vercel, add a new environment variable named `GCP_SERVICE_ACCOUNT_KEY`
-   - Paste the entire JSON content from your `vercel-key.json` file
-   - Example: `{"type":"service_account","project_id":"amazon-ppc-474902",...}`
-   
-   **Method B:** Use `GOOGLE_APPLICATION_CREDENTIALS`:
-   - Add environment variable named `GOOGLE_APPLICATION_CREDENTIALS`
-   - Paste the entire JSON content (NOT a file path!)
-   - ⚠️ Do NOT use a file path like `/path/to/key.json` - it won't work on Vercel
 
 4. **Verify Service Account Permissions:**
    ```bash
@@ -309,6 +319,7 @@ To fix:
 - ❌ **Only setting variables in Cloud Function:** The optimizer and dashboard are separate deployments with separate environment variables.
 - ❌ **Forgetting to select all environments:** Make sure to check Production, Preview, and Development when adding variables.
 - ❌ **Invalid JSON format:** Ensure the service account JSON is valid (use a JSON validator if unsure).
+- ✅ **Good News:** You no longer need to set both GCP_PROJECT/GOOGLE_CLOUD_PROJECT AND service account credentials separately - the project ID is automatically extracted from the service account JSON!
 
 **Still Having Issues?**
 
@@ -340,8 +351,9 @@ Before going to production, ensure:
 
 - [ ] Root directory is correctly set to `amazon_ppc_dashboard/nextjs_space`
 - [ ] Environment variables are configured (especially `DASHBOARD_API_KEY`)
-- [ ] BigQuery environment variables are set (`GCP_PROJECT`, `GOOGLE_CLOUD_PROJECT`, `BQ_DATASET_ID`, `BQ_LOCATION`)
-- [ ] Google Cloud service account credentials are configured (`GOOGLE_APPLICATION_CREDENTIALS`)
+- [ ] BigQuery environment variables are set (`BQ_DATASET_ID`, `BQ_LOCATION`)
+- [ ] Google Cloud service account credentials are configured (`GCP_SERVICE_ACCOUNT_KEY` or `GOOGLE_APPLICATION_CREDENTIALS`)
+- [ ] (Optional) Project ID environment variables are set (`GCP_PROJECT`, `GOOGLE_CLOUD_PROJECT`) - auto-extracted from service account if not provided
 - [ ] Service account has BigQuery permissions (`roles/bigquery.dataViewer`, `roles/bigquery.jobUser`)
 - [ ] BigQuery dataset and tables are created (run `../../setup-bigquery.sh` if needed)
 - [ ] Health endpoint is accessible
