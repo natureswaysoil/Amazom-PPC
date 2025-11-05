@@ -35,6 +35,25 @@ if ! command -v bq &> /dev/null; then
     exit 1
 fi
 
+# Helper function for creating tables with better error handling
+create_table_with_error_handling() {
+    local output
+    output=$(bq mk "$@" 2>&1)
+    local status=$?
+    
+    if [ $status -eq 0 ]; then
+        echo "Table created successfully"
+        return 0
+    elif echo "$output" | grep -q "Already Exists"; then
+        echo "Table already exists"
+        return 0
+    else
+        echo "Warning: Table creation failed"
+        echo "$output"
+        return 1
+    fi
+}
+
 # Set the project
 echo "Setting project to $PROJECT_ID..."
 gcloud config set project "$PROJECT_ID"
@@ -53,7 +72,7 @@ echo "Creating table: optimization_results..."
 # Note: For REPEATED fields, we need to use a schema file or create via Python
 # The bq command line doesn't support inline REPEATED field definitions well
 # So we'll use a secure temporary schema file (already created at top of script)
-cat > "$SCHEMA_FILE" << 'EOF'
+if ! cat > "$SCHEMA_FILE" << 'EOF'
 [
   {"name": "timestamp", "type": "TIMESTAMP", "mode": "REQUIRED"},
   {"name": "run_id", "type": "STRING", "mode": "REQUIRED"},
@@ -77,47 +96,48 @@ cat > "$SCHEMA_FILE" << 'EOF'
   {"name": "warnings", "type": "STRING", "mode": "REPEATED"}
 ]
 EOF
+then
+    echo "Error: Failed to write schema file"
+    exit 1
+fi
 
-bq mk --table \
+# Create the table with better error handling
+create_table_with_error_handling --table \
     --time_partitioning_field=timestamp \
     --time_partitioning_type=DAY \
     --description="Optimization run results and summary metrics" \
     "$PROJECT_ID:$DATASET_ID.optimization_results" \
-    "$SCHEMA_FILE" \
-    2>/dev/null || echo "Table already exists"
+    "$SCHEMA_FILE"
 
 # Create campaign_details table
 echo ""
 echo "Creating table: campaign_details..."
-bq mk --table \
+create_table_with_error_handling --table \
     --time_partitioning_field=timestamp \
     --time_partitioning_type=DAY \
     --description="Campaign-level performance details" \
     "$PROJECT_ID:$DATASET_ID.campaign_details" \
-    timestamp:TIMESTAMP,run_id:STRING,campaign_id:STRING,campaign_name:STRING,spend:FLOAT,sales:FLOAT,acos:FLOAT,impressions:INTEGER,clicks:INTEGER,conversions:INTEGER,budget:FLOAT,status:STRING \
-    2>/dev/null || echo "Table already exists"
+    timestamp:TIMESTAMP,run_id:STRING,campaign_id:STRING,campaign_name:STRING,spend:FLOAT,sales:FLOAT,acos:FLOAT,impressions:INTEGER,clicks:INTEGER,conversions:INTEGER,budget:FLOAT,status:STRING
 
 # Create optimization_progress table
 echo ""
 echo "Creating table: optimization_progress..."
-bq mk --table \
+create_table_with_error_handling --table \
     --time_partitioning_field=timestamp \
     --time_partitioning_type=DAY \
     --description="Real-time optimization progress updates" \
     "$PROJECT_ID:$DATASET_ID.optimization_progress" \
-    timestamp:TIMESTAMP,run_id:STRING,status:STRING,message:STRING,percent_complete:FLOAT,profile_id:STRING \
-    2>/dev/null || echo "Table already exists"
+    timestamp:TIMESTAMP,run_id:STRING,status:STRING,message:STRING,percent_complete:FLOAT,profile_id:STRING
 
 # Create optimization_errors table
 echo ""
 echo "Creating table: optimization_errors..."
-bq mk --table \
+create_table_with_error_handling --table \
     --time_partitioning_field=timestamp \
     --time_partitioning_type=DAY \
     --description="Optimization errors and failures" \
     "$PROJECT_ID:$DATASET_ID.optimization_errors" \
-    timestamp:TIMESTAMP,run_id:STRING,status:STRING,profile_id:STRING,error_type:STRING,error_message:STRING,traceback:STRING,context:STRING \
-    2>/dev/null || echo "Table already exists"
+    timestamp:TIMESTAMP,run_id:STRING,status:STRING,profile_id:STRING,error_type:STRING,error_message:STRING,traceback:STRING,context:STRING
 
 # Cleanup handled by trap on EXIT
 
