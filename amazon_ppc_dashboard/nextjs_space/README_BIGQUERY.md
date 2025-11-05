@@ -32,10 +32,12 @@ Create a `.env.local` file:
 
 ```bash
 # BigQuery Configuration
-GCP_PROJECT=amazon-ppc-474902
-GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
 BQ_DATASET_ID=amazon_ppc
 BQ_LOCATION=us-east4
+
+# Optional: Project ID (auto-extracted from service account if not provided)
+# GCP_PROJECT=amazon-ppc-474902
+# GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
 
 # Dashboard API Key (optional for local dev)
 DASHBOARD_API_KEY=your_api_key_here
@@ -85,11 +87,13 @@ git push
 In Vercel project settings → Environment Variables, add:
 
 ```
-GCP_PROJECT=amazon-ppc-474902
-GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
 BQ_DATASET_ID=amazon_ppc
 BQ_LOCATION=us-east4
 DASHBOARD_API_KEY=your_api_key_here
+
+# Optional: Project ID (auto-extracted from service account credentials if not provided)
+# GCP_PROJECT=amazon-ppc-474902
+# GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
 ```
 
 ### 4. Add Google Cloud Service Account
@@ -119,9 +123,9 @@ gcloud iam service-accounts keys create vercel-key.json \
 Add the service account key to Vercel:
 
 1. Copy the contents of `vercel-key.json`
-2. In Vercel, add environment variable: `GOOGLE_APPLICATION_CREDENTIALS`
-3. Paste the JSON content as the value
-4. OR: Add as `GCP_SERVICE_ACCOUNT_KEY` and parse in code
+2. In Vercel, add environment variable: `GCP_SERVICE_ACCOUNT_KEY` (recommended) or `GOOGLE_APPLICATION_CREDENTIALS`
+3. Paste the entire JSON content as the value
+4. **The dashboard will automatically extract the project_id from the JSON**, so you don't need to set GCP_PROJECT/GOOGLE_CLOUD_PROJECT separately
 
 ### 5. Deploy
 
@@ -200,7 +204,7 @@ curl "https://your-dashboard.vercel.app/api/health"
 
 ### Error: "GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variable must be set"
 
-**Solution**: This error occurs when the required environment variables are not configured in your Vercel deployment.
+**Solution**: This error occurs when neither the project ID environment variables nor service account credentials are configured in your Vercel deployment.
 
 **Quick Diagnosis:**
 ```bash
@@ -208,37 +212,44 @@ curl "https://your-dashboard.vercel.app/api/health"
 curl "https://your-dashboard.vercel.app/api/config-check"
 ```
 
-**Steps to Fix:**
+**Quick Fix (Recommended):**
+
+The dashboard can now automatically extract the project ID from your service account credentials, so you only need to provide the credentials:
 
 1. **Go to Vercel** → Your Project → Settings → Environment Variables
 
-2. **Add Project ID variables:**
-   ```
-   GCP_PROJECT=amazon-ppc-474902
-   GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
-   BQ_DATASET_ID=amazon_ppc
-   BQ_LOCATION=us-east4
-   ```
-
-3. **Add Service Account Credentials** (choose one method):
+2. **Add Service Account Credentials** (choose one method):
    
    **Method A (Recommended):**
    ```
    GCP_SERVICE_ACCOUNT_KEY={"type":"service_account","project_id":"amazon-ppc-474902",...}
    ```
-   Paste the entire JSON from your service account key file.
+   Paste the entire JSON from your service account key file. **The dashboard will automatically extract the project_id from this JSON.**
    
    **Method B:**
    ```
    GOOGLE_APPLICATION_CREDENTIALS={"type":"service_account",...}
    ```
-   Also paste the entire JSON content (NOT a file path).
+   Also paste the entire JSON content (NOT a file path). **The project_id will be auto-extracted.**
 
-4. **Important:** Select **Production, Preview, and Development** for all variables
+3. **Add BigQuery Configuration:**
+   ```
+   BQ_DATASET_ID=amazon_ppc
+   BQ_LOCATION=us-east4
+   ```
 
-5. **Redeploy** the application (Vercel → Deployments → Redeploy)
+4. **(Optional) Explicitly Set Project ID:**
+   If you prefer to set it explicitly rather than relying on auto-extraction:
+   ```
+   GCP_PROJECT=amazon-ppc-474902
+   GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
+   ```
 
-6. **Verify** the fix:
+5. **Important:** Select **Production, Preview, and Development** for all variables
+
+6. **Redeploy** the application (Vercel → Deployments → Redeploy)
+
+7. **Verify** the fix:
    ```bash
    curl "https://your-dashboard.vercel.app/api/config-check"
    curl "https://your-dashboard.vercel.app/api/bigquery-data?table=optimization_results&limit=1"
@@ -248,6 +259,9 @@ curl "https://your-dashboard.vercel.app/api/config-check"
 - Using a file path for credentials (won't work on Vercel)
 - Forgetting to redeploy after adding variables
 - Not selecting all environments (Production/Preview/Development)
+- Missing service account credentials entirely
+
+**Good News:** You no longer need to set both the service account credentials AND the project ID separately - just provide the service account JSON and the project ID will be extracted automatically!
 
 For detailed deployment instructions, see [DEPLOYMENT.md](./DEPLOYMENT.md).
 
