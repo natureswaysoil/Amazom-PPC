@@ -9,6 +9,12 @@ PROJECT_ID="${1:-amazon-ppc-474902}"
 DATASET_ID="${2:-amazon_ppc}"
 LOCATION="${3:-us-east4}"
 
+# Create temporary file for schema
+SCHEMA_FILE=$(mktemp)
+
+# Ensure cleanup on exit
+trap 'rm -f "$SCHEMA_FILE"' EXIT
+
 echo "========================================="
 echo "BigQuery Setup for Amazon PPC Optimizer"
 echo "========================================="
@@ -46,8 +52,8 @@ echo ""
 echo "Creating table: optimization_results..."
 # Note: For REPEATED fields, we need to use a schema file or create via Python
 # The bq command line doesn't support inline REPEATED field definitions well
-# So we'll use a temporary schema file
-cat > /tmp/optimization_results_schema.json << 'EOF'
+# So we'll use a secure temporary schema file (already created at top of script)
+cat > "$SCHEMA_FILE" << 'EOF'
 [
   {"name": "timestamp", "type": "TIMESTAMP", "mode": "REQUIRED"},
   {"name": "run_id", "type": "STRING", "mode": "REQUIRED"},
@@ -77,7 +83,7 @@ bq mk --table \
     --time_partitioning_type=DAY \
     --description="Optimization run results and summary metrics" \
     "$PROJECT_ID:$DATASET_ID.optimization_results" \
-    /tmp/optimization_results_schema.json \
+    "$SCHEMA_FILE" \
     2>/dev/null || echo "Table already exists"
 
 # Create campaign_details table
@@ -113,8 +119,7 @@ bq mk --table \
     timestamp:TIMESTAMP,run_id:STRING,status:STRING,profile_id:STRING,error_type:STRING,error_message:STRING,traceback:STRING,context:STRING \
     2>/dev/null || echo "Table already exists"
 
-# Cleanup temporary schema file
-rm -f /tmp/optimization_results_schema.json
+# Cleanup handled by trap on EXIT
 
 echo ""
 echo "========================================="

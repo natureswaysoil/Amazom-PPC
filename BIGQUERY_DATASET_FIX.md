@@ -135,7 +135,7 @@ Once the dataset is created, the dashboard will automatically:
 3. Show recent optimization runs in a table
 4. Auto-refresh every 5 minutes
 
-Access the dashboard at: `https://amazonppcdashboard.vercel.app`
+The dashboard can be accessed at your deployed Vercel URL (e.g., `https://amazonppcdashboard.vercel.app`). See [DASHBOARD_DEPLOYMENT.md](DASHBOARD_DEPLOYMENT.md) for deployment instructions.
 
 ## Troubleshooting
 
