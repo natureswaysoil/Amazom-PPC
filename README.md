@@ -50,7 +50,7 @@ Use the `config.json` or `sample_config.yaml` files in the repository as **sanit
   },
   "bid_optimization": { ... },
   "dashboard": {
-    "url": "https://ppc-dashboard.abacusai.app"
+    "url": "https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app"
   }
 }
 ```
@@ -173,7 +173,7 @@ The token refresh logic is built into `optimizer_core.py`:
 
 The optimizer includes comprehensive dashboard integration with real-time updates:
 
-**Dashboard URL**: https://ppc-dashboard.abacusai.app
+**Dashboard URL**: https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app
 
 ### Features
 
@@ -192,7 +192,7 @@ Add to your `config.json`:
 ```json
 {
   "dashboard": {
-    "url": "https://ppc-dashboard.abacusai.app",
+    "url": "https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app",
     "api_key": "your_dashboard_api_key_here",
     "enabled": true,
     "send_real_time_updates": true,
