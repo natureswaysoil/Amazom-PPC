@@ -45,20 +45,44 @@ export default function Home() {
       // Fetch recent optimization results
       const resultsResponse = await fetch('/api/bigquery-data?table=optimization_results&limit=5&days=7');
       
-      if (!resultsResponse.ok) {
-        throw new Error(`Failed to fetch optimization results: ${resultsResponse.status} ${resultsResponse.statusText}`);
+      // Try to parse response body for detailed error message
+      let resultsData;
+      try {
+        resultsData = await resultsResponse.json();
+      } catch (jsonErr) {
+        // If JSON parsing fails, throw error with status code
+        if (!resultsResponse.ok) {
+          throw new Error(`Failed to fetch optimization results: ${resultsResponse.status} ${resultsResponse.statusText}`);
+        }
+        throw jsonErr;
       }
       
-      const resultsData = await resultsResponse.json();
+      if (!resultsResponse.ok) {
+        // Extract detailed error message from the response body
+        const errorMsg = resultsData.message || resultsData.error || resultsResponse.statusText || 'Unknown error';
+        throw new Error(`Failed to fetch optimization results: ${errorMsg}`);
+      }
 
       // Fetch summary data
       const summaryResponse = await fetch('/api/bigquery-data?table=summary&days=7');
       
-      if (!summaryResponse.ok) {
-        throw new Error(`Failed to fetch summary data: ${summaryResponse.status} ${summaryResponse.statusText}`);
+      // Try to parse response body for detailed error message
+      let summaryData;
+      try {
+        summaryData = await summaryResponse.json();
+      } catch (jsonErr) {
+        // If JSON parsing fails, throw error with status code
+        if (!summaryResponse.ok) {
+          throw new Error(`Failed to fetch summary data: ${summaryResponse.status} ${summaryResponse.statusText}`);
+        }
+        throw jsonErr;
       }
       
-      const summaryData = await summaryResponse.json();
+      if (!summaryResponse.ok) {
+        // Extract detailed error message from the response body
+        const errorMsg = summaryData.message || summaryData.error || summaryResponse.statusText || 'Unknown error';
+        throw new Error(`Failed to fetch summary data: ${errorMsg}`);
+      }
 
       if (resultsData.success) {
         setRecentResults(resultsData.data);
