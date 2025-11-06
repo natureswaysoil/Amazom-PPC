@@ -22,7 +22,7 @@ on:
         type: boolean
 
 env:
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID || 'amazon-ppc-474902' }}
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GCP_REGION: us-central1
   FUNCTION_NAME: amazon-ppc-optimizer
   BIGQUERY_DATASET: amazon_ppc
@@ -36,6 +36,20 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "❌ ERROR: GCP_PROJECT_ID secret is not configured"
+            echo "Please configure required secrets in repository settings"
+            echo "See GITHUB_SECRETS_SETUP.md for details"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "❌ ERROR: GCP_SA_KEY secret is not configured"
+            exit 1
+          fi
+          echo "✅ Required secrets validated"
       
       - name: Set up Python
         uses: actions/setup-python@v4

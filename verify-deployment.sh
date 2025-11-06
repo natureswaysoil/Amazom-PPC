@@ -13,10 +13,21 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration
-PROJECT_ID="${GCP_PROJECT:-amazon-ppc-474902}"
+# IMPORTANT: Set GCP_PROJECT environment variable or it will use current gcloud project
+PROJECT_ID="${GCP_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
 DATASET_ID="${DATASET_ID:-amazon_ppc}"
 FUNCTION_NAME="amazon-ppc-optimizer"
+
+# Validate project ID is set
+if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
+    echo -e "${RED}ERROR: No Google Cloud Project ID configured${NC}"
+    echo -e "${BLUE}Please set your project:${NC}"
+    echo "  export GCP_PROJECT=your-project-id"
+    echo "  OR"
+    echo "  gcloud config set project your-project-id"
+    exit 1
+fi
 
 # Test results tracking
 TOTAL_TESTS=0

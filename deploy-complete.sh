@@ -12,11 +12,22 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-PROJECT_ID="${GCP_PROJECT:-amazon-ppc-474902}"
+# IMPORTANT: Set GCP_PROJECT environment variable before running this script
+# Example: export GCP_PROJECT=your-project-id
+PROJECT_ID="${GCP_PROJECT:-}"
 REGION="${REGION:-us-central1}"
 BIGQUERY_LOCATION="${BIGQUERY_LOCATION:-us-east4}"
 DATASET_ID="${DATASET_ID:-amazon_ppc}"
 FUNCTION_NAME="amazon-ppc-optimizer"
+
+# Validate required configuration
+if [ -z "$PROJECT_ID" ]; then
+    print_error "GCP_PROJECT environment variable is not set"
+    print_info "Please set your Google Cloud Project ID:"
+    print_info "  export GCP_PROJECT=your-project-id"
+    print_info "  ./deploy-complete.sh"
+    exit 1
+fi
 
 # Function to print colored output
 print_header() {

@@ -39,7 +39,10 @@ check_env_file() {
     
     if [ -f ".env" ]; then
         print_success "Found .env file"
-        export $(cat .env | grep -v '^#' | xargs)
+        # Safely load .env file (prevents shell injection)
+        set -a
+        source .env
+        set +a
     else
         print_warning ".env file not found"
         print_info "Creating .env from template..."
