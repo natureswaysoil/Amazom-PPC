@@ -6,14 +6,18 @@ import { NextRequest, NextResponse } from 'next/server';
  * Returns non-sensitive information about what's configured
  */
 export async function GET(request: NextRequest) {
+  // Default project ID from config.json (same as bigquery-data route)
+  const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
+  
   const checks = {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'unknown',
     configuration: {
       gcp_project: {
         set: !!(process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT),
-        source: process.env.GCP_PROJECT ? 'GCP_PROJECT' : process.env.GOOGLE_CLOUD_PROJECT ? 'GOOGLE_CLOUD_PROJECT' : 'none',
-        value: process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || null,
+        source: process.env.GCP_PROJECT ? 'GCP_PROJECT' : process.env.GOOGLE_CLOUD_PROJECT ? 'GOOGLE_CLOUD_PROJECT' : 'default fallback',
+        value: process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || DEFAULT_PROJECT_ID,
+        using_default: !(process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT),
       },
       bq_dataset_id: {
         set: !!process.env.BQ_DATASET_ID,
@@ -59,8 +63,8 @@ export async function GET(request: NextRequest) {
 
   // Run diagnostics
   if (!checks.configuration.gcp_project.set) {
-    checks.diagnosis.push('❌ GCP_PROJECT or GOOGLE_CLOUD_PROJECT is not set');
-    checks.recommendations.push('Set GCP_PROJECT and GOOGLE_CLOUD_PROJECT environment variables to your Google Cloud project ID (e.g., amazon-ppc-474902)');
+    checks.diagnosis.push('⚠️  GCP_PROJECT or GOOGLE_CLOUD_PROJECT is not set - using default fallback');
+    checks.recommendations.push('For production, set GCP_PROJECT and GOOGLE_CLOUD_PROJECT environment variables to your Google Cloud project ID');
   } else {
     checks.diagnosis.push('✅ GCP project ID is configured');
   }
