@@ -44,20 +44,33 @@ export default function Home() {
 
       // Fetch recent optimization results
       const resultsResponse = await fetch('/api/bigquery-data?table=optimization_results&limit=5&days=7');
+      
+      if (!resultsResponse.ok) {
+        throw new Error(`Failed to fetch optimization results: ${resultsResponse.status} ${resultsResponse.statusText}`);
+      }
+      
       const resultsData = await resultsResponse.json();
 
       // Fetch summary data
       const summaryResponse = await fetch('/api/bigquery-data?table=summary&days=7');
+      
+      if (!summaryResponse.ok) {
+        throw new Error(`Failed to fetch summary data: ${summaryResponse.status} ${summaryResponse.statusText}`);
+      }
+      
       const summaryData = await summaryResponse.json();
 
       if (resultsData.success) {
         setRecentResults(resultsData.data);
       } else {
-        setError(resultsData.message || 'Failed to fetch data');
+        setError(resultsData.message || resultsData.error || 'Failed to fetch data');
       }
 
       if (summaryData.success) {
         setSummary(summaryData.data);
+      } else if (!resultsData.success) {
+        // Only set error from summaryData if resultsData didn't already set an error
+        setError(summaryData.message || summaryData.error || 'Failed to fetch summary data');
       }
 
       setLoading(false);
