@@ -17,7 +17,7 @@ Version: 1.0.0
 import logging
 import json
 import time
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 from dataclasses import dataclass
 

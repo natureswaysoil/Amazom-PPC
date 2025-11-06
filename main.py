@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 import traceback
 from contextlib import contextmanager
 from datetime import datetime
@@ -165,7 +166,6 @@ def send_email_notification(subject: str, body: str, config: Dict) -> bool:
             except (smtplib.SMTPException, OSError) as smtp_err:
                 if attempt < max_retries - 1:
                     logger.warning(f"Email send attempt {attempt + 1}/{max_retries} failed: {smtp_err}. Retrying...")
-                    import time
                     time.sleep(retry_delay * (attempt + 1))
                 else:
                     logger.error(f"Failed to send email after {max_retries} attempts: {smtp_err}")
@@ -218,7 +218,6 @@ def update_dashboard(results, config):
                     if attempt < max_retries - 1:
                         wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
                         logger.info(f"Retrying in {wait_time}s...")
-                        import time
                         time.sleep(wait_time)
                     
             except requests.exceptions.Timeout:
@@ -226,14 +225,12 @@ def update_dashboard(results, config):
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)
                     logger.info(f"Retrying in {wait_time}s...")
-                    import time
                     time.sleep(wait_time)
             except requests.exceptions.RequestException as e:
                 logger.warning(f"Dashboard request failed (attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)
                     logger.info(f"Retrying in {wait_time}s...")
-                    import time
                     time.sleep(wait_time)
         
         logger.error(f"Failed to update dashboard after {max_retries} attempts")
