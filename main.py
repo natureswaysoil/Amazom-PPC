@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 import traceback
 from contextlib import contextmanager
 from datetime import datetime
@@ -17,6 +18,8 @@ import yaml
 from optimizer_core import PPCAutomation
 from dashboard_client import DashboardClient
 from bigquery_client import BigQueryClient
+from verification_system import VerificationSystem
+from github_pages_dashboard import GitHubPagesDashboard
 
 # Configure logging for Cloud Functions
 # Detect if running in Cloud Functions environment
@@ -163,7 +166,6 @@ def send_email_notification(subject: str, body: str, config: Dict) -> bool:
             except (smtplib.SMTPException, OSError) as smtp_err:
                 if attempt < max_retries - 1:
                     logger.warning(f"Email send attempt {attempt + 1}/{max_retries} failed: {smtp_err}. Retrying...")
-                    import time
                     time.sleep(retry_delay * (attempt + 1))
                 else:
                     logger.error(f"Failed to send email after {max_retries} attempts: {smtp_err}")
@@ -216,7 +218,6 @@ def update_dashboard(results, config):
                     if attempt < max_retries - 1:
                         wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
                         logger.info(f"Retrying in {wait_time}s...")
-                        import time
                         time.sleep(wait_time)
                     
             except requests.exceptions.Timeout:
@@ -224,14 +225,12 @@ def update_dashboard(results, config):
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)
                     logger.info(f"Retrying in {wait_time}s...")
-                    import time
                     time.sleep(wait_time)
             except requests.exceptions.RequestException as e:
                 logger.warning(f"Dashboard request failed (attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)
                     logger.info(f"Retrying in {wait_time}s...")
-                    import time
                     time.sleep(wait_time)
         
         logger.error(f"Failed to update dashboard after {max_retries} attempts")
@@ -467,6 +466,15 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
             except Exception as bq_err:
                 logger.warning(f"Failed to initialize BigQuery client (non-blocking): {bq_err}")
         
+        # Initialize GitHub Pages dashboard client (if configured)
+        github_dashboard = None
+        try:
+            github_dashboard = GitHubPagesDashboard(config)
+            if github_dashboard.enabled:
+                logger.info(f"GitHub Pages dashboard initialized: {github_dashboard.dashboard_url}")
+        except Exception as gh_err:
+            logger.warning(f"Failed to initialize GitHub Pages dashboard (non-blocking): {gh_err}")
+        
         # Start optimization run (generates unique run_id)
         run_id = dashboard_client.start_run(dry_run=dry_run)
         logger.info(f"Started optimization run: {run_id}")
@@ -491,6 +499,25 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
                 dry_run=dry_run
             )
             
+            # Run verification checks before optimization
+            logger.info("Running pre-optimization verification checks...")
+            dashboard_client.send_progress("Running verification checks...", 15.0)
+            
+            verification_system = VerificationSystem(optimizer.audit, config)
+            verification_results = verification_system.run_all_verifications(
+                api_client=optimizer.api,
+                bigquery_client=bigquery_client,
+                dashboard_client=dashboard_client
+            )
+            
+            # Check if critical verifications passed
+            if verification_results['summary']['failed'] > 0:
+                logger.warning(f"⚠ {verification_results['summary']['failed']} verification check(s) failed")
+                # Check if we should halt on verification failures (configurable)
+                fail_on_verification = config.get('verification', {}).get('fail_on_critical_errors', False)
+                if fail_on_verification:
+                    raise ValueError(f"Verification failed: {verification_results['summary']['failed']} check(s) failed. Enable dry_run or fix issues.")
+            
             # Run optimization
             # The optimizer will automatically refresh the access token if needed
             logger.info("Running optimization (token refresh handled automatically)...")
@@ -499,6 +526,9 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
             results = optimizer.run()
             
             dashboard_client.send_progress("Processing results...", 90.0)
+            
+            # Add verification results to output
+            results['verification'] = verification_results
         
         # Calculate duration
         end_time = datetime.now()
@@ -520,6 +550,19 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
                 bigquery_client.write_optimization_results(results_payload)
             except Exception as bq_err:
                 logger.warning(f"BigQuery write failed (non-blocking): {bq_err}")
+        
+        # Update GitHub Pages dashboard (non-blocking)
+        if github_dashboard and github_dashboard.enabled:
+            logger.info("Updating GitHub Pages dashboard...")
+            try:
+                results_payload = dashboard_client.build_results_payload(results, config, duration, dry_run)
+                github_dashboard.update_dashboard(results_payload)
+                
+                # Also send verification results
+                if 'verification' in results:
+                    github_dashboard.send_verification_status(results['verification'])
+            except Exception as gh_err:
+                logger.warning(f"GitHub Pages dashboard update failed (non-blocking): {gh_err}")
         
         # Prepare summary
         summary = format_results_summary(results, duration, dry_run)
