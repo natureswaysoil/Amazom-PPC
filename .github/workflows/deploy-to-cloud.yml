@@ -32,6 +32,9 @@ jobs:
   deploy:
     name: Deploy to Google Cloud Functions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     
     steps:
       - name: Checkout code
@@ -321,6 +324,8 @@ jobs:
     needs: deploy
     runs-on: ubuntu-latest
     if: always()
+    permissions:
+      contents: read
     
     steps:
       - name: Send deployment notification
