@@ -3,6 +3,20 @@
 
 Automated Amazon Advertising campaign optimization deployed on Google Cloud Functions with automatic token refresh.
 
+## 🚀 Quick Start
+
+**New to the optimizer?** Check out the **[Quick Start Guide (QUICKSTART.md)](QUICKSTART.md)** for step-by-step setup instructions:
+
+1. ✅ Configure GitHub Token for CI/CD
+2. ✅ Set Up BigQuery Credentials
+3. ✅ Run Local Dry-Run Test
+4. ✅ Deploy to Cloud Functions
+5. ✅ Verify with Real Data
+
+**Estimated setup time**: 30-45 minutes
+
+---
+
 ## 🚀 Features
 
 - **Automatic Token Refresh**: Tokens are automatically refreshed before API calls
@@ -457,12 +471,14 @@ Or configure less frequent checks (e.g., every 5-10 minutes instead of every 5-6
 | Document | Description |
 |----------|-------------|
 | [README.md](README.md) | Main project documentation (this file) |
+| **[QUICKSTART.md](QUICKSTART.md)** | **🌟 Step-by-step setup guide for new users** |
 | [VERIFICATION_GUIDE.md](VERIFICATION_GUIDE.md) | Complete verification procedures and testing guide |
 | [DATA_FLOW_SUMMARY.md](DATA_FLOW_SUMMARY.md) | Data flow from optimizer to dashboard with examples |
 | [DASHBOARD_INTEGRATION.md](DASHBOARD_INTEGRATION.md) | Detailed dashboard integration documentation |
 | [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) | Step-by-step deployment instructions |
 | [DEPLOY_NOW.md](DEPLOY_NOW.md) | Quick deployment commands |
 | [DEPLOYMENT_COMPLETE.md](DEPLOYMENT_COMPLETE.md) | Post-deployment verification checklist |
+| [BIGQUERY_INTEGRATION.md](BIGQUERY_INTEGRATION.md) | BigQuery setup and troubleshooting |
 
 ## 📝 License
 
