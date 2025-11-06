@@ -44,21 +44,23 @@ export default function Home() {
 
       // Fetch recent optimization results
       const resultsResponse = await fetch('/api/bigquery-data?table=optimization_results&limit=5&days=7');
+      const resultsData = await resultsResponse.json();
       
       if (!resultsResponse.ok) {
-        throw new Error(`Failed to fetch optimization results: ${resultsResponse.status} ${resultsResponse.statusText}`);
+        // Extract detailed error message from the response body
+        const errorMsg = resultsData.message || resultsData.error || resultsResponse.statusText || 'Unknown error';
+        throw new Error(`Failed to fetch optimization results: ${errorMsg}`);
       }
-      
-      const resultsData = await resultsResponse.json();
 
       // Fetch summary data
       const summaryResponse = await fetch('/api/bigquery-data?table=summary&days=7');
+      const summaryData = await summaryResponse.json();
       
       if (!summaryResponse.ok) {
-        throw new Error(`Failed to fetch summary data: ${summaryResponse.status} ${summaryResponse.statusText}`);
+        // Extract detailed error message from the response body
+        const errorMsg = summaryData.message || summaryData.error || summaryResponse.statusText || 'Unknown error';
+        throw new Error(`Failed to fetch summary data: ${errorMsg}`);
       }
-      
-      const summaryData = await summaryResponse.json();
 
       if (resultsData.success) {
         setRecentResults(resultsData.data);
