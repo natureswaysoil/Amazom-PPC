@@ -6,7 +6,8 @@ amazon_api:
   refresh_token: Atzr|IwEBIxxxxx
 
 dashboard:
-  url: https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app
+  # Replace with your actual dashboard URL from deployment
+  url: https://your-dashboard-url.vercel.app
   api_key: YOUR_DASHBOARD_API_KEY
   enabled: true
   send_real_time_updates: true
@@ -112,3 +113,8 @@ logging:
   level: INFO
   output_dir: ./logs
   audit_trail: true
+
+verification:
+  enabled: true
+  run_pre_optimization: true
+  fail_on_critical_errors: false

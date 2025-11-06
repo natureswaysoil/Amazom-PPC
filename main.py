@@ -516,7 +516,10 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
             # Check if critical verifications passed
             if verification_results['summary']['failed'] > 0:
                 logger.warning(f"⚠ {verification_results['summary']['failed']} verification check(s) failed")
-                # Continue with optimization but log warnings
+                # Check if we should halt on verification failures (configurable)
+                fail_on_verification = config.get('verification', {}).get('fail_on_critical_errors', False)
+                if fail_on_verification:
+                    raise ValueError(f"Verification failed: {verification_results['summary']['failed']} check(s) failed. Enable dry_run or fix issues.")
             
             # Run optimization
             # The optimizer will automatically refresh the access token if needed

@@ -257,6 +257,7 @@ class GitHubPagesDashboard:
                 total_spend += metrics.get('total_spend', 0.0)
                 total_sales += metrics.get('total_sales', 0.0)
         
+        # Calculate average ACOS (Advertising Cost of Sales = Spend / Sales)
         avg_acos = (total_spend / total_sales) if total_sales > 0 else 0.0
         
         return {
@@ -269,8 +270,8 @@ class GitHubPagesDashboard:
             'average_acos': round(avg_acos, 4),
             'last_30_days': {
                 'runs': len(runs),
-                'avg_campaigns_per_run': total_campaigns // len(runs) if runs else 0,
-                'avg_keywords_per_run': total_keywords // len(runs) if runs else 0
+                'avg_campaigns_per_run': round(total_campaigns / len(runs), 1) if runs else 0,
+                'avg_keywords_per_run': round(total_keywords / len(runs), 1) if runs else 0
             }
         }
     

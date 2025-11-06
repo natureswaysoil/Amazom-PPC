@@ -31,7 +31,7 @@
     "data_path": "data/ppc-data.json",
     "github_token": "YOUR_GITHUB_TOKEN_HERE",
     "dashboard_url": "https://natureswaysoil.github.io/best/",
-    "note": "GitHub token needs 'repo' scope for updating dashboard data"
+    "note": "GitHub token requirements: (1) Scope: 'repo' for full repository access, (2) Generate at: https://github.com/settings/tokens/new, (3) Security: Store in Secret Manager for production, never commit to git"
   },
   "bigquery": {
     "enabled": true,
@@ -129,5 +129,11 @@
     "level": "INFO",
     "output_dir": "./logs",
     "audit_trail": true
+  },
+  "verification": {
+    "enabled": true,
+    "run_pre_optimization": true,
+    "fail_on_critical_errors": false,
+    "note": "Set fail_on_critical_errors to true to halt optimization if verification checks fail"
   }
 }
