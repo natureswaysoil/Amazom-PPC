@@ -44,7 +44,18 @@ export default function Home() {
 
       // Fetch recent optimization results
       const resultsResponse = await fetch('/api/bigquery-data?table=optimization_results&limit=5&days=7');
-      const resultsData = await resultsResponse.json();
+      
+      // Try to parse response body for detailed error message
+      let resultsData;
+      try {
+        resultsData = await resultsResponse.json();
+      } catch (jsonErr) {
+        // If JSON parsing fails, throw error with status code
+        if (!resultsResponse.ok) {
+          throw new Error(`Failed to fetch optimization results: ${resultsResponse.status} ${resultsResponse.statusText}`);
+        }
+        throw jsonErr;
+      }
       
       if (!resultsResponse.ok) {
         // Extract detailed error message from the response body
@@ -54,7 +65,18 @@ export default function Home() {
 
       // Fetch summary data
       const summaryResponse = await fetch('/api/bigquery-data?table=summary&days=7');
-      const summaryData = await summaryResponse.json();
+      
+      // Try to parse response body for detailed error message
+      let summaryData;
+      try {
+        summaryData = await summaryResponse.json();
+      } catch (jsonErr) {
+        // If JSON parsing fails, throw error with status code
+        if (!summaryResponse.ok) {
+          throw new Error(`Failed to fetch summary data: ${summaryResponse.status} ${summaryResponse.statusText}`);
+        }
+        throw jsonErr;
+      }
       
       if (!summaryResponse.ok) {
         // Extract detailed error message from the response body
