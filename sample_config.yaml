@@ -6,11 +6,26 @@ amazon_api:
   refresh_token: Atzr|IwEBIxxxxx
 
 dashboard:
-  url: https://ppc-dashboard.abacusai.app
+  url: https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app
   api_key: YOUR_DASHBOARD_API_KEY
   enabled: true
   send_real_time_updates: true
   timeout: 30
+
+github_pages_dashboard:
+  enabled: true
+  repo_owner: natureswaysoil
+  repo_name: best
+  branch: main
+  data_path: data/ppc-data.json
+  github_token: YOUR_GITHUB_TOKEN_HERE
+  dashboard_url: https://natureswaysoil.github.io/best/
+
+bigquery:
+  enabled: true
+  project_id: amazon-ppc-474902
+  dataset_id: amazon_ppc
+  location: us-east4
 
 email_notifications:
   enabled: false
