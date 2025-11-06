@@ -114,7 +114,11 @@ verification sample or a descriptive error when credentials are misconfigured.
 
 ## 🚀 Deployment
 
-See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed deployment instructions.
+For complete end-to-end setup from scratch, see:
+- **[COMPLETE_DEPLOYMENT_GUIDE.md](COMPLETE_DEPLOYMENT_GUIDE.md)** - Comprehensive setup guide covering all 5 steps from GitHub tokens to production verification
+
+For specific deployment details, see:
+- [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) - Detailed deployment reference and configuration options
 
 ### Quick Deploy (Secure - Recommended)
 
@@ -457,6 +461,7 @@ Or configure less frequent checks (e.g., every 5-10 minutes instead of every 5-6
 | Document | Description |
 |----------|-------------|
 | [README.md](README.md) | Main project documentation (this file) |
+| [COMPLETE_DEPLOYMENT_GUIDE.md](COMPLETE_DEPLOYMENT_GUIDE.md) | **⭐ Complete end-to-end setup guide** (GitHub, BigQuery, testing, deployment, verification) |
 | [VERIFICATION_GUIDE.md](VERIFICATION_GUIDE.md) | Complete verification procedures and testing guide |
 | [DATA_FLOW_SUMMARY.md](DATA_FLOW_SUMMARY.md) | Data flow from optimizer to dashboard with examples |
 | [DASHBOARD_INTEGRATION.md](DASHBOARD_INTEGRATION.md) | Detailed dashboard integration documentation |
