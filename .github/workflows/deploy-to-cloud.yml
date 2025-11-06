@@ -1,0 +1,377 @@
+name: Deploy to Google Cloud
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      dry_run:
+        description: 'Dry run deployment (no actual changes)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-central1
+  FUNCTION_NAME: amazon-ppc-optimizer
+  BIGQUERY_DATASET: amazon_ppc
+  BIGQUERY_LOCATION: us-east4
+
+jobs:
+  deploy:
+    name: Deploy to Google Cloud Functions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "❌ ERROR: GCP_PROJECT_ID secret is not configured"
+            echo "Please configure required secrets in repository settings"
+            echo "See GITHUB_SECRETS_SETUP.md for details"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "❌ ERROR: GCP_SA_KEY secret is not configured"
+            exit 1
+          fi
+          echo "✅ Required secrets validated"
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: '>= 471.0.0'
+      
+      - name: Configure gcloud
+        run: |
+          gcloud config set project $GCP_PROJECT_ID
+          gcloud config list
+      
+      - name: Enable required APIs
+        run: |
+          echo "Enabling Google Cloud APIs..."
+          gcloud services enable cloudfunctions.googleapis.com
+          gcloud services enable cloudbuild.googleapis.com
+          gcloud services enable cloudscheduler.googleapis.com
+          gcloud services enable secretmanager.googleapis.com
+          gcloud services enable bigquery.googleapis.com
+          gcloud services enable bigquerystorage.googleapis.com
+      
+      - name: Set up BigQuery infrastructure
+        run: |
+          echo "Setting up BigQuery dataset and tables..."
+          chmod +x setup-bigquery.sh
+          ./setup-bigquery.sh $GCP_PROJECT_ID $BIGQUERY_DATASET $BIGQUERY_LOCATION || true
+      
+      - name: Grant BigQuery permissions to service account
+        run: |
+          PROJECT_NUMBER=$(gcloud projects describe $GCP_PROJECT_ID --format='value(projectNumber)')
+          SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+          
+          echo "Granting BigQuery permissions to: $SERVICE_ACCOUNT"
+          gcloud projects add-iam-policy-binding $GCP_PROJECT_ID \
+            --member="serviceAccount:${SERVICE_ACCOUNT}" \
+            --role="roles/bigquery.dataEditor" \
+            --condition=None || true
+          
+          gcloud projects add-iam-policy-binding $GCP_PROJECT_ID \
+            --member="serviceAccount:${SERVICE_ACCOUNT}" \
+            --role="roles/bigquery.jobUser" \
+            --condition=None || true
+      
+      - name: Create secrets in Secret Manager
+        run: |
+          echo "Setting up secrets in Google Secret Manager..."
+          
+          # Function to create or update secret
+          create_or_update_secret() {
+            local secret_name=$1
+            local secret_value=$2
+            
+            if [ -z "$secret_value" ]; then
+              echo "⚠️  Skipping $secret_name (value not provided)"
+              return
+            fi
+            
+            if gcloud secrets describe "$secret_name" &>/dev/null; then
+              echo "Updating existing secret: $secret_name"
+              echo -n "$secret_value" | gcloud secrets versions add "$secret_name" --data-file=-
+            else
+              echo "Creating new secret: $secret_name"
+              echo -n "$secret_value" | gcloud secrets create "$secret_name" --data-file=-
+            fi
+          }
+          
+          # Create/update secrets from GitHub Secrets
+          create_or_update_secret "amazon-client-id" "${{ secrets.AMAZON_CLIENT_ID }}"
+          create_or_update_secret "amazon-client-secret" "${{ secrets.AMAZON_CLIENT_SECRET }}"
+          create_or_update_secret "amazon-refresh-token" "${{ secrets.AMAZON_REFRESH_TOKEN }}"
+          create_or_update_secret "amazon-profile-id" "${{ secrets.AMAZON_PROFILE_ID }}"
+          create_or_update_secret "dashboard-api-key" "${{ secrets.DASHBOARD_API_KEY }}"
+          create_or_update_secret "dashboard-url" "https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app"
+      
+      - name: Grant secret access to service account
+        run: |
+          PROJECT_NUMBER=$(gcloud projects describe $GCP_PROJECT_ID --format='value(projectNumber)')
+          SA_EMAIL="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+          
+          echo "Granting secret access to: $SA_EMAIL"
+          
+          for SECRET in amazon-client-id amazon-client-secret amazon-refresh-token amazon-profile-id dashboard-api-key dashboard-url; do
+            if gcloud secrets describe "$SECRET" &>/dev/null; then
+              gcloud secrets add-iam-policy-binding "$SECRET" \
+                --member="serviceAccount:${SA_EMAIL}" \
+                --role="roles/secretmanager.secretAccessor" || true
+            fi
+          done
+      
+      - name: Deploy Cloud Function
+        run: |
+          echo "Deploying Cloud Function: $FUNCTION_NAME"
+          
+          gcloud functions deploy $FUNCTION_NAME \
+            --gen2 \
+            --runtime=python311 \
+            --region=$GCP_REGION \
+            --source=. \
+            --entry-point=run_optimizer \
+            --trigger-http \
+            --no-allow-unauthenticated \
+            --timeout=540s \
+            --memory=512MB \
+            --min-instances=0 \
+            --max-instances=1 \
+            --set-secrets='AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest,AMAZON_PROFILE_ID=amazon-profile-id:latest,DASHBOARD_API_KEY=dashboard-api-key:latest,DASHBOARD_URL=dashboard-url:latest' \
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT_ID,GOOGLE_CLOUD_PROJECT=$GCP_PROJECT_ID"
+      
+      - name: Get function URL
+        id: get_url
+        run: |
+          FUNCTION_URL=$(gcloud functions describe $FUNCTION_NAME \
+            --region=$GCP_REGION \
+            --gen2 \
+            --format='value(serviceConfig.uri)')
+          echo "function_url=$FUNCTION_URL" >> $GITHUB_OUTPUT
+          echo "Function deployed at: $FUNCTION_URL"
+      
+      - name: Set up Cloud Scheduler
+        run: |
+          FUNCTION_URL="${{ steps.get_url.outputs.function_url }}"
+          
+          # Create scheduler service account if it doesn't exist
+          gcloud iam service-accounts create ppc-scheduler \
+            --display-name="PPC Optimizer Scheduler Service Account" 2>/dev/null || echo "Service account already exists"
+          
+          # Grant invoker permission
+          gcloud functions add-iam-policy-binding $FUNCTION_NAME \
+            --region=$GCP_REGION \
+            --member="serviceAccount:ppc-scheduler@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
+            --role="roles/cloudfunctions.invoker"
+          
+          # Create or update daily production job
+          if gcloud scheduler jobs describe "${FUNCTION_NAME}-daily" --location=$GCP_REGION &>/dev/null; then
+            echo "Updating existing daily scheduler job..."
+            gcloud scheduler jobs update http "${FUNCTION_NAME}-daily" \
+              --location=$GCP_REGION \
+              --schedule="0 3 * * *" \
+              --uri="${FUNCTION_URL}" \
+              --http-method=POST \
+              --time-zone="America/New_York" \
+              --oidc-service-account-email="ppc-scheduler@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
+              --oidc-token-audience="${FUNCTION_URL}" \
+              --headers="Content-Type=application/json" \
+              --message-body='{"dry_run": false}'
+          else
+            echo "Creating new daily scheduler job..."
+            gcloud scheduler jobs create http "${FUNCTION_NAME}-daily" \
+              --location=$GCP_REGION \
+              --schedule="0 3 * * *" \
+              --uri="${FUNCTION_URL}" \
+              --http-method=POST \
+              --time-zone="America/New_York" \
+              --oidc-service-account-email="ppc-scheduler@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
+              --oidc-token-audience="${FUNCTION_URL}" \
+              --headers="Content-Type=application/json" \
+              --message-body='{"dry_run": false}'
+          fi
+          
+          # Create or update dry-run test job
+          if gcloud scheduler jobs describe "${FUNCTION_NAME}-dryrun" --location=$GCP_REGION &>/dev/null; then
+            echo "Updating existing dry-run scheduler job..."
+            gcloud scheduler jobs update http "${FUNCTION_NAME}-dryrun" \
+              --location=$GCP_REGION \
+              --schedule="0 */4 * * *" \
+              --uri="${FUNCTION_URL}" \
+              --http-method=POST \
+              --time-zone="America/New_York" \
+              --oidc-service-account-email="ppc-scheduler@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
+              --oidc-token-audience="${FUNCTION_URL}" \
+              --headers="Content-Type=application/json" \
+              --message-body='{"dry_run": true}'
+          else
+            echo "Creating new dry-run scheduler job..."
+            gcloud scheduler jobs create http "${FUNCTION_NAME}-dryrun" \
+              --location=$GCP_REGION \
+              --schedule="0 */4 * * *" \
+              --uri="${FUNCTION_URL}" \
+              --http-method=POST \
+              --time-zone="America/New_York" \
+              --oidc-service-account-email="ppc-scheduler@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
+              --oidc-token-audience="${FUNCTION_URL}" \
+              --headers="Content-Type=application/json" \
+              --message-body='{"dry_run": true}'
+          fi
+      
+      - name: Verify deployment
+        id: verify
+        run: |
+          FUNCTION_URL="${{ steps.get_url.outputs.function_url }}"
+          
+          echo "Testing health check endpoint..."
+          TOKEN=$(gcloud auth print-identity-token)
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" "${FUNCTION_URL}?health=true" || echo "FAILED")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response: $BODY"
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "✅ Health check passed!"
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "❌ Health check failed!"
+            exit 1
+          fi
+      
+      - name: Save deployment info
+        run: |
+          cat > deployment-info.json << EOF
+          {
+            "project_id": "$GCP_PROJECT_ID",
+            "region": "$GCP_REGION",
+            "function_name": "$FUNCTION_NAME",
+            "function_url": "${{ steps.get_url.outputs.function_url }}",
+            "deployment_time": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "commit_sha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "workflow_run_id": "${{ github.run_id }}"
+          }
+          EOF
+          cat deployment-info.json
+      
+      - name: Upload deployment info
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-info
+          path: deployment-info.json
+      
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Status**: Deployment successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Project**: $GCP_PROJECT_ID" >> $GITHUB_STEP_SUMMARY
+          echo "**Function**: $FUNCTION_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "**Region**: $GCP_REGION" >> $GITHUB_STEP_SUMMARY
+          echo "**URL**: ${{ steps.get_url.outputs.function_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Dashboard**: https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Monitor function logs: \`gcloud functions logs read $FUNCTION_NAME --region=$GCP_REGION\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check scheduler jobs: \`gcloud scheduler jobs list --location=$GCP_REGION\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. Verify BigQuery data: \`bq ls $GCP_PROJECT_ID:$BIGQUERY_DATASET\`" >> $GITHUB_STEP_SUMMARY
+          echo "4. Visit dashboard to see live data" >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Send notification
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Send deployment notification
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_PASS }}
+          subject: "Amazon PPC Optimizer - Deployment Successful ✅"
+          to: natureswaysoil@gmail.com
+          from: ${{ secrets.GMAIL_USER }}
+          body: |
+            Deployment to Google Cloud completed successfully!
+            
+            Project: ${{ env.GCP_PROJECT_ID }}
+            Function: ${{ env.FUNCTION_NAME }}
+            Region: ${{ env.GCP_REGION }}
+            
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+            
+            Dashboard: https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app
+            
+            Next: The health check workflow will verify the deployment.
+      
+      - name: Send failure notification
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_PASS }}
+          subject: "Amazon PPC Optimizer - Deployment Failed ❌"
+          to: natureswaysoil@gmail.com
+          from: ${{ secrets.GMAIL_USER }}
+          body: |
+            Deployment to Google Cloud failed!
+            
+            Project: ${{ env.GCP_PROJECT_ID }}
+            Function: ${{ env.FUNCTION_NAME }}
+            
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+            Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            Please check the workflow logs for details.
