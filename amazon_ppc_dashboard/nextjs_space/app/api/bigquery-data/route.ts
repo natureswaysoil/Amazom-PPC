@@ -3,10 +3,14 @@ import { BigQuery } from '@google-cloud/bigquery';
 
 export async function GET(request: NextRequest) {
   try {
-    // Get configuration from environment variables
+    // Get configuration from environment variables with fallback to default
+    // Priority: GCP_PROJECT > GOOGLE_CLOUD_PROJECT > extracted from credentials > default
     let projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
     const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
     const location = process.env.BQ_LOCATION || 'us-east4';
+    
+    // Default project ID from config.json (fallback when env vars not set)
+    const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
     
     // Handle Google Cloud credentials
     // In Vercel, credentials can be provided as:
@@ -22,9 +26,10 @@ export async function GET(request: NextRequest) {
         // Type-safe check for project_id property
         if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
           projectId = credentials.project_id;
-          console.log('Using project ID from GCP_SERVICE_ACCOUNT_KEY');
+          console.log('Using project ID from GCP_SERVICE_ACCOUNT_KEY:', projectId);
         }
       } catch (e) {
+        console.error('Failed to parse GCP_SERVICE_ACCOUNT_KEY:', e);
         return NextResponse.json({ 
           error: 'Configuration error',
           message: 'GCP_SERVICE_ACCOUNT_KEY is not valid JSON',
@@ -39,7 +44,7 @@ export async function GET(request: NextRequest) {
         // Type-safe check for project_id property
         if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
           projectId = credentials.project_id;
-          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS');
+          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS:', projectId);
         }
       } catch (e) {
         // If not JSON, assume it's a file path (local development)
@@ -48,7 +53,13 @@ export async function GET(request: NextRequest) {
       }
     }
     
-    // Validate required configuration after attempting to extract from credentials
+    // Use default project ID if none found in environment or credentials
+    if (!projectId) {
+      projectId = DEFAULT_PROJECT_ID;
+      console.log('Using default project ID from config.json:', projectId);
+    }
+    
+    // Validate that we have a project ID after all fallbacks
     if (!projectId) {
       return NextResponse.json({ 
         error: 'Configuration error',

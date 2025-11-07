@@ -3,6 +3,14 @@
 
 Automated Amazon Advertising campaign optimization deployed on Google Cloud Functions with automatic token refresh.
 
+## 📚 Quick Links
+
+- **[🚀 Quick Start Guide](QUICK_START.md)** - Get up and running in 15 minutes
+- **[📖 Complete Deployment Guide](COMPLETE_DEPLOYMENT_GUIDE.md)** - Comprehensive 500+ line guide covering all deployment steps
+- **[🔧 Local Testing Script](local-test.sh)** - Interactive script for local testing
+- **[⚙️ Automated Deployment](deploy-complete.sh)** - One-command deployment automation
+- **[🔐 Environment Template](.env.template)** - Template for local development environment
+
 ## 🚀 Features
 
 - **Automatic Token Refresh**: Tokens are automatically refreshed before API calls
@@ -458,6 +466,16 @@ Or configure less frequent checks (e.g., every 5-10 minutes instead of every 5-6
 
 ## 📚 Documentation Index
 
+### Getting Started
+| Document | Description | Use Case |
+|----------|-------------|----------|
+| [QUICK_START.md](QUICK_START.md) | Get running in 15 minutes | First-time setup |
+| [COMPLETE_DEPLOYMENT_GUIDE.md](COMPLETE_DEPLOYMENT_GUIDE.md) | Comprehensive deployment guide (500+ lines) | Complete CI/CD setup |
+| [local-test.sh](local-test.sh) | Interactive local testing script | Local development |
+| [deploy-complete.sh](deploy-complete.sh) | Automated deployment script | One-command deployment |
+| [.env.template](.env.template) | Environment variables template | Local configuration |
+
+### Deployment & Operations
 | Document | Description |
 |----------|-------------|
 | [README.md](README.md) | Main project documentation (this file) |
@@ -468,6 +486,18 @@ Or configure less frequent checks (e.g., every 5-10 minutes instead of every 5-6
 | [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) | Step-by-step deployment instructions |
 | [DEPLOY_NOW.md](DEPLOY_NOW.md) | Quick deployment commands |
 | [DEPLOYMENT_COMPLETE.md](DEPLOYMENT_COMPLETE.md) | Post-deployment verification checklist |
+
+### Verification & Testing
+| Document | Description |
+|----------|-------------|
+| [VERIFICATION_GUIDE.md](VERIFICATION_GUIDE.md) | Complete verification procedures and testing guide |
+| [DATA_FLOW_SUMMARY.md](DATA_FLOW_SUMMARY.md) | Data flow from optimizer to dashboard with examples |
+
+### Integration Guides
+| Document | Description |
+|----------|-------------|
+| [DASHBOARD_INTEGRATION.md](DASHBOARD_INTEGRATION.md) | Detailed dashboard integration documentation |
+| [BIGQUERY_INTEGRATION.md](BIGQUERY_INTEGRATION.md) | BigQuery setup and integration guide |
 
 ## 📝 License
 

@@ -44,20 +44,57 @@ export default function Home() {
 
       // Fetch recent optimization results
       const resultsResponse = await fetch('/api/bigquery-data?table=optimization_results&limit=5&days=7');
-      const resultsData = await resultsResponse.json();
+      
+      // Try to parse response body for detailed error message
+      let resultsData;
+      try {
+        resultsData = await resultsResponse.json();
+      } catch (jsonErr) {
+        // If JSON parsing fails, throw error with status code
+        if (!resultsResponse.ok) {
+          throw new Error(`Failed to fetch optimization results: ${resultsResponse.status} ${resultsResponse.statusText}`);
+        }
+        throw jsonErr;
+      }
+      
+      if (!resultsResponse.ok) {
+        // Extract detailed error message from the response body
+        const errorMsg = resultsData.message || resultsData.error || resultsResponse.statusText || 'Unknown error';
+        throw new Error(`Failed to fetch optimization results: ${errorMsg}`);
+      }
 
       // Fetch summary data
       const summaryResponse = await fetch('/api/bigquery-data?table=summary&days=7');
-      const summaryData = await summaryResponse.json();
+      
+      // Try to parse response body for detailed error message
+      let summaryData;
+      try {
+        summaryData = await summaryResponse.json();
+      } catch (jsonErr) {
+        // If JSON parsing fails, throw error with status code
+        if (!summaryResponse.ok) {
+          throw new Error(`Failed to fetch summary data: ${summaryResponse.status} ${summaryResponse.statusText}`);
+        }
+        throw jsonErr;
+      }
+      
+      if (!summaryResponse.ok) {
+        // Extract detailed error message from the response body
+        const errorMsg = summaryData.message || summaryData.error || summaryResponse.statusText || 'Unknown error';
+        throw new Error(`Failed to fetch summary data: ${errorMsg}`);
+      }
 
       if (resultsData.success) {
         setRecentResults(resultsData.data);
       } else {
-        setError(resultsData.message || 'Failed to fetch data');
+        setError(resultsData.message || resultsData.error || 'Failed to fetch data');
       }
 
       if (summaryData.success) {
         setSummary(summaryData.data);
+      } else if (!resultsData.success) {
+        // Only set error from summaryData if resultsData didn't already set an error
+        setError(summaryData.message || summaryData.error || 'Failed to fetch summary data');
       }
 
       setLoading(false);
