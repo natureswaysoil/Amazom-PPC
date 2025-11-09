@@ -295,7 +295,7 @@ jobs:
           cat deployment-info.json
       
       - name: Upload deployment info
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: deployment-info
           path: deployment-info.json
@@ -329,7 +329,7 @@ jobs:
     
     steps:
       - name: Send deployment notification
-        if: success()
+        if: success() && secrets.GMAIL_USER != '' && secrets.GMAIL_PASS != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -354,7 +354,7 @@ jobs:
             Next: The health check workflow will verify the deployment.
       
       - name: Send failure notification
-        if: failure()
+        if: failure() && secrets.GMAIL_USER != '' && secrets.GMAIL_PASS != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
