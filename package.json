@@ -6,11 +6,18 @@
   "private": true,
   "scripts": {
     "start": "node index.js",
+    "start:server": "node dist/server.js",
+    "cli": "node dist/cli.js",
     "check": "node --check index.js",
     "build:docs": "echo 'Documentation build complete - all markdown files are ready'",
-    "build": "npm run check && npm run build:docs"
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "npm run check && npm run build:docs && npm run build:ts"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.5.4"
   }
 }
