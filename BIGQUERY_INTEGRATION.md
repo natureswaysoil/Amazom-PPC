@@ -57,7 +57,35 @@ Example:
 ./setup-bigquery.sh amazon-ppc-474902 amazon_ppc us-east4
 ```
 
-### Step 3: Grant Permissions
+### Step 3: Fix BigQuery Data Transfer organization_id (if applicable)
+
+If you are using the **BigQuery Data Transfer Service** to ingest
+Amazon PPC data and see errors such as:
+
+```
+TransferRun only supports numeric values in organization id
+```
+
+update the transfer configuration so that the `organization_id` is a
+numeric string.  This repository includes a helper script that performs
+the validation and update for you:
+
+```bash
+python fix_bigquery_transfer.py \
+  --project-id amazon-ppc-474902 \
+  --location us \
+  --config-id 69588e94-0000-2970-aebe-582429ad18d4 \
+  --organization-id 1234567890
+```
+
+- Replace `1234567890` with your numeric organization ID provided by
+  the data source.
+- Use `--dry-run` to preview the change without updating the transfer.
+
+The script will raise a validation error if a non-numeric value is
+provided, preventing misconfiguration before the transfer run starts.
+
+### Step 4: Grant Permissions
 
 Grant the Cloud Function service account permission to write to BigQuery:
 
@@ -77,7 +105,7 @@ gcloud projects add-iam-policy-binding amazon-ppc-474902 \
     --role="roles/bigquery.jobUser"
 ```
 
-### Step 4: Test the Integration
+### Step 5: Test the Integration
 
 Run the optimizer and check that data appears in BigQuery:
 
