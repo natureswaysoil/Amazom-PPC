@@ -264,6 +264,11 @@ class ConfigurationError(Exception):
     pass
 
 
+class AuthenticationError(Exception):
+    """Amazon Ads API authentication error"""
+    pass
+
+
 class Config:
     """Configuration manager with enhanced error handling"""
     
@@ -429,7 +434,7 @@ class AmazonAdsAPI:
         
         if not all([client_id, client_secret, refresh_token]):
             logger.error("Missing required environment variables")
-            sys.exit(1)
+            raise AuthenticationError("Missing required environment variables: AMAZON_CLIENT_ID, AMAZON_CLIENT_SECRET, or AMAZON_REFRESH_TOKEN")
         
         payload = {
             "grant_type": "refresh_token",
@@ -439,21 +444,23 @@ class AmazonAdsAPI:
         }
         
         try:
-            self._auth_lock = True
-            logger.info("Access token expired, refreshing...")
+            response = requests.post(TOKEN_URL, data=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
             
-            # Attempt to refresh with fallback
-            try:
-                self.auth = self._authenticate()
-                logger.info("Token refresh successful")
-            except AuthenticationError as e:
-                logger.error(f"Token refresh failed: {e}")
-                # Reset auth to force re-authentication on next attempt
-                self.auth = None
-                raise
-                
-        finally:
-            self._auth_lock = False
+            auth = Auth(
+                access_token=data["access_token"],
+                token_type=data.get("token_type", "Bearer"),
+                expires_at=time.time() + int(data.get("expires_in", 3600))
+            )
+            logger.info("Successfully authenticated with Amazon Ads API")
+            return auth
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Authentication request failed: {e}")
+            raise AuthenticationError(f"Failed to authenticate with Amazon Ads API: {e}")
+        except (KeyError, ValueError) as e:
+            logger.error(f"Invalid authentication response: {e}")
+            raise AuthenticationError(f"Invalid response from Amazon Ads API: {e}")
     
     def _refresh_auth_if_needed(self):
         """Refresh authentication if token expired"""
