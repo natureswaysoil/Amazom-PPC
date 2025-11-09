@@ -101,12 +101,24 @@ def update_transfer_organization_id(
         params_struct.update(config.params)
 
     previous_org_id = params_struct.get("organization_id")
-    if previous_org_id == validated_org_id:
+    previous_org_id_str = None
+    if previous_org_id is not None:
+        # ``Struct`` values may be stored as numbers or strings depending on how
+        # the transfer configuration was created.  Normalize to a string so we
+        # compare apples-to-apples and avoid sending no-op updates.
+        previous_org_id_str = str(previous_org_id).strip()
+        if previous_org_id_str and not previous_org_id_str.isdigit():
+            logging.warning(
+                "Existing organization_id value %r is not numeric; it will be overwritten",
+                previous_org_id,
+            )
+
+    if previous_org_id_str == validated_org_id:
         logging.info(
             "organization_id is already set to %s; no update required",
             validated_org_id,
         )
-        return previous_org_id
+        return previous_org_id_str
 
     logging.info(
         "Updating organization_id from %r to %s", previous_org_id, validated_org_id
@@ -115,13 +127,13 @@ def update_transfer_organization_id(
 
     if dry_run:
         logging.info("Dry run enabled; skipping API update call")
-        return previous_org_id
+        return previous_org_id_str
 
     config.params.CopyFrom(params_struct)
-    update_mask = field_mask_pb2.FieldMask(paths=["params"])
+    update_mask = field_mask_pb2.FieldMask(paths=["params.organization_id"])
     client.update_transfer_config(transfer_config=config, update_mask=update_mask)
     logging.info("Transfer configuration updated successfully")
-    return previous_org_id
+    return previous_org_id_str
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
