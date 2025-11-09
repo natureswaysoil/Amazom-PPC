@@ -598,6 +598,14 @@ Please check the Cloud Functions logs for more details.
         }, 500
 
 
+# Cloud Functions entry point alias.
+#
+# The Cloud Function is configured with `optimizePPC` as the entry point, but
+# this module originally exposed the handler as `run_optimizer`. Export an alias
+# so either name can be used without redeploying infrastructure.
+optimizePPC = run_optimizer
+
+
 def load_config() -> Dict[str, Any]:
     """
     Load configuration from environment variables or config file
