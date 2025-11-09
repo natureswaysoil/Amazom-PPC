@@ -12,6 +12,12 @@ dashboard:
   send_real_time_updates: true
   timeout: 30
 
+bigquery:
+  enabled: true
+  project_id: amazon-ppc-474902
+  dataset_id: amazon_ppc
+  location: us-east4
+
 email_notifications:
   enabled: false
   smtp_host: smtp.gmail.com
@@ -92,6 +98,10 @@ features:
     - campaign_management
     - keyword_discovery
     - negative_keywords
+
+api:
+  region: NA
+  max_requests_per_second: 10
 
 logging:
   level: INFO
