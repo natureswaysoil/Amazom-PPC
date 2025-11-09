@@ -46,9 +46,10 @@ gcloud functions deploy "$FUNCTION_NAME" \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
-  --no-allow-unauthenticated \
+  --allow-unauthenticated \
   --timeout=540s \
   --memory=512MB \
+  --max-instances=10 \
   --set-env-vars=LOG_LEVEL=INFO \
   --set-secrets=AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest,AMAZON_PROFILE_ID=ppc-profile-id:latest,DASHBOARD_URL=dashboard-url:latest,DASHBOARD_API_KEY=dashboard-api-key:latest
 
