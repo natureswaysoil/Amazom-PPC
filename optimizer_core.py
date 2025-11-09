@@ -419,8 +419,8 @@ class AmazonAdsAPI:
         self.profile_id = profile_id
         self.region = region.upper()
         self.base_url = ENDPOINTS.get(self.region, ENDPOINTS["NA"])
-        # Ensure client ID attribute exists even if authentication fails early
-        self.client_id: Optional[str] = None
+        # Initialize client_id from environment; will be refreshed in _authenticate
+        self.client_id: Optional[str] = os.getenv("AMAZON_CLIENT_ID", "") or None
         self.auth = self._authenticate()
         self.rate_limiter = RateLimiter(max_requests_per_second or MAX_REQUESTS_PER_SECOND)
         self.session = session or requests.Session()

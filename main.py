@@ -685,20 +685,35 @@ def load_config() -> Dict[str, Any]:
 
 def set_environment_variables(config: Dict[str, Any]) -> None:
     """
-    Set environment variables from config for the optimizer
-    The optimizer_core reads these environment variables for API authentication
+    Set environment variables required by optimizer_core, without clobbering
+    values already provided by the runtime (e.g., Secret Manager).
+
+    Preference order for each credential:
+      1) Existing environment variable (already injected via secrets)
+      2) Value from config.amazon_api (useful for local/dev only)
     
     Args:
         config: Configuration dictionary
     """
     amazon_api = config.get('amazon_api', {})
-    
-    # Set required environment variables that optimizer_core expects
-    os.environ['AMAZON_CLIENT_ID'] = amazon_api.get('client_id', '')
-    os.environ['AMAZON_CLIENT_SECRET'] = amazon_api.get('client_secret', '')
-    os.environ['AMAZON_REFRESH_TOKEN'] = amazon_api.get('refresh_token', '')
-    
-    logger.info("Environment variables set for optimizer")
+
+    def _set_if_missing(env_name: str, cfg_key: str) -> None:
+        current = os.environ.get(env_name, '').strip()
+        if current:
+            logger.debug(f"{env_name} already set from environment; preserving existing value")
+            return
+        cfg_val = amazon_api.get(cfg_key, '').strip()
+        if cfg_val:
+            os.environ[env_name] = cfg_val
+            logger.info(f"Set {env_name} from config")
+        else:
+            logger.warning(f"{env_name} not provided in environment or config; authentication may fail")
+
+    _set_if_missing('AMAZON_CLIENT_ID', 'client_id')
+    _set_if_missing('AMAZON_CLIENT_SECRET', 'client_secret')
+    _set_if_missing('AMAZON_REFRESH_TOKEN', 'refresh_token')
+
+    logger.debug("Environment variables prepared for optimizer (sources: env > config)")
 
 
 def set_bigquery_env_vars(project_id: str) -> None:

@@ -8,9 +8,13 @@ echo ""
 
 # Get credentials from secrets
 echo "Fetching credentials from Secret Manager..."
-REFRESH_TOKEN=$(gcloud secrets versions access latest --secret=amazon-refresh-token --project=1009540130231)
-CLIENT_ID=$(gcloud secrets versions access latest --secret=amazon-client-id --project=1009540130231)
-CLIENT_SECRET=$(gcloud secrets versions access latest --secret=amazon-client-secret --project=1009540130231)
+PROJECT_ID="amazon-ppc-474902"
+REGION="us-central1"
+SERVICE_NAME="amazon-ppc-optimizer"
+
+REFRESH_TOKEN=$(gcloud secrets versions access latest --secret=amazon-refresh-token --project="$PROJECT_ID")
+CLIENT_ID=$(gcloud secrets versions access latest --secret=amazon-client-id --project="$PROJECT_ID")
+CLIENT_SECRET=$(gcloud secrets versions access latest --secret=amazon-client-secret --project="$PROJECT_ID")
 
 echo "Requesting new access token from Amazon..."
 RESPONSE=$(curl -s -X POST https://api.amazon.com/auth/o2/token \
@@ -33,7 +37,7 @@ if [ ! -z "$NEW_REFRESH_TOKEN" ] && [ "$NEW_REFRESH_TOKEN" != "None" ]; then
   echo "Updating secret in Secret Manager..."
   gcloud secrets versions add amazon-refresh-token \
     --data-file=- \
-    --project=1009540130231 \
+    --project="$PROJECT_ID" \
     <<< "$NEW_REFRESH_TOKEN"
   
   echo ""
@@ -41,7 +45,7 @@ if [ ! -z "$NEW_REFRESH_TOKEN" ] && [ "$NEW_REFRESH_TOKEN" != "None" ]; then
   gcloud run services update amazon-ppc-optimizer \
     --update-env-vars=LAST_UPDATED=$(date +%s) \
     --region=us-central1 \
-    --project=amazon-ppc-474902
+    --project="$PROJECT_ID"
   
   echo ""
   echo "Waiting 30 seconds for service to restart..."
@@ -49,7 +53,8 @@ if [ ! -z "$NEW_REFRESH_TOKEN" ] && [ "$NEW_REFRESH_TOKEN" != "None" ]; then
   
   echo ""
   echo "Testing health check..."
-  curl "https://amazon-ppc-optimizer-nucguq3dba-uc.a.run.app?health=true"
+  FUNC_URL=$(gcloud functions describe "$SERVICE_NAME" --region="$REGION" --gen2 --format='value(serviceConfig.uri)' --project="$PROJECT_ID")
+  curl -s -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$FUNC_URL?health=true"
   echo ""
   echo ""
   echo "=========================================="
@@ -69,7 +74,7 @@ else
   echo ""
   echo "   gcloud secrets versions add amazon-refresh-token \\"
   echo "     --data-file=- \\"
-  echo "     --project=1009540130231 \\"
+  echo "     --project=$PROJECT_ID \\"
   echo "     <<< \"YOUR_NEW_REFRESH_TOKEN\""
   echo ""
   echo "5. Then restart the function:"
@@ -77,6 +82,6 @@ else
   echo "   gcloud run services update amazon-ppc-optimizer \\"
   echo "     --update-env-vars=LAST_UPDATED=\$(date +%s) \\"
   echo "     --region=us-central1 \\"
-  echo "     --project=amazon-ppc-474902"
+  echo "     --project=$PROJECT_ID"
   echo ""
 fi
