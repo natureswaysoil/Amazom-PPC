@@ -66,3 +66,7 @@ API_SECRETS_CONFIGURATION.pdf
 # Test files
 test_*.py
 *_test.py
+
+# Node.js artifacts
+node_modules/
+package-lock.json
