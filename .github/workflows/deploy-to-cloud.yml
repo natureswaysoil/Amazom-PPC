@@ -327,9 +327,13 @@ jobs:
     permissions:
       contents: read
     
+    env:
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
+    
     steps:
       - name: Send deployment notification
-        if: success() && secrets.GMAIL_USER != '' && secrets.GMAIL_PASS != ''
+        if: success() && env.GMAIL_USER != '' && env.GMAIL_PASS != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -337,7 +341,7 @@ jobs:
           username: ${{ secrets.GMAIL_USER }}
           password: ${{ secrets.GMAIL_PASS }}
           subject: "Amazon PPC Optimizer - Deployment Successful ✅"
-          to: natureswaysoil@gmail.com
+          to: natureswaysoil@gmail.com,james@natureswaysoil.com
           from: ${{ secrets.GMAIL_USER }}
           body: |
             Deployment to Google Cloud completed successfully!
@@ -354,7 +358,7 @@ jobs:
             Next: The health check workflow will verify the deployment.
       
       - name: Send failure notification
-        if: failure() && secrets.GMAIL_USER != '' && secrets.GMAIL_PASS != ''
+        if: failure() && env.GMAIL_USER != '' && env.GMAIL_PASS != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -362,7 +366,7 @@ jobs:
           username: ${{ secrets.GMAIL_USER }}
           password: ${{ secrets.GMAIL_PASS }}
           subject: "Amazon PPC Optimizer - Deployment Failed ❌"
-          to: natureswaysoil@gmail.com
+          to: natureswaysoil@gmail.com,james@natureswaysoil.com
           from: ${{ secrets.GMAIL_USER }}
           body: |
             Deployment to Google Cloud failed!

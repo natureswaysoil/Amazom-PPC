@@ -38,6 +38,8 @@ jobs:
       REQUIRE_AUTH: ${{ inputs.require_auth || secrets.HEALTH_REQUIRE_AUTH || true }}
       REGION_INPUT: ${{ inputs.region }}
       FUNCTION_NAME_INPUT: ${{ inputs.function_name }}
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
 
     steps:
       - name: Checkout code
@@ -119,7 +121,7 @@ jobs:
           fi
 
       - name: Send Email Notification
-        if: always() && secrets.GMAIL_USER != '' && secrets.GMAIL_PASS != ''
+        if: always() && env.GMAIL_USER != '' && env.GMAIL_PASS != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -127,7 +129,7 @@ jobs:
           username: ${{ secrets.GMAIL_USER }}
           password: ${{ secrets.GMAIL_PASS }}
           subject: "Amazon PPC Optimizer - Deployment Health Check ${{ steps.health_check.outputs.status == 'success' && '✅ PASSED' || '❌ FAILED' }}"
-          to: natureswaysoil@gmail.com
+          to: natureswaysoil@gmail.com,james@natureswaysoil.com
           from: ${{ secrets.GMAIL_USER }}
           body: |
             Amazon PPC Optimizer Cloud Function - Health Check Report
