@@ -436,6 +436,11 @@ class AmazonAdsAPI:
             logger.error("Missing required environment variables")
             raise AuthenticationError("Missing required environment variables: AMAZON_CLIENT_ID, AMAZON_CLIENT_SECRET, or AMAZON_REFRESH_TOKEN")
         
+        # Log credential status (masked)
+        logger.debug(f"Auth attempt - client_id: {client_id[:8] if client_id else 'MISSING'}..., "
+                    f"client_secret: {'SET' if client_secret else 'MISSING'}, "
+                    f"refresh_token: {refresh_token[:12] if refresh_token else 'MISSING'}...")
+        
         payload = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
@@ -444,7 +449,18 @@ class AmazonAdsAPI:
         }
         
         try:
+            logger.debug(f"POST {TOKEN_URL}")
             response = requests.post(TOKEN_URL, data=payload, timeout=30)
+            logger.debug(f"Response status: {response.status_code}")
+            
+            # Log response body for debugging (may contain error details)
+            try:
+                response_data = response.json()
+                if response.status_code != 200:
+                    logger.error(f"Amazon auth error response: {response_data}")
+            except:
+                logger.debug(f"Response body (first 200 chars): {response.text[:200]}")
+            
             response.raise_for_status()
             data = response.json()
             
