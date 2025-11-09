@@ -22,17 +22,45 @@ from bigquery_client import BigQueryClient
 # Detect if running in Cloud Functions environment
 IS_CLOUD_FUNCTION = os.getenv('K_SERVICE') is not None or os.getenv('FUNCTION_TARGET') is not None
 
+
+def _determine_log_level(default_level: int = logging.INFO) -> Tuple[int, Optional[str], bool]:
+    """Resolve the log level from the LOG_LEVEL environment variable."""
+
+    level_name = os.getenv('LOG_LEVEL')
+    if not level_name:
+        return default_level, None, False
+
+    level_name = level_name.strip()
+    if not level_name:
+        return default_level, '', True
+
+    resolved_level = logging.getLevelName(level_name.upper())
+    if isinstance(resolved_level, int):
+        return resolved_level, level_name, False
+
+    try:
+        numeric_level = int(level_name)
+    except ValueError:
+        return default_level, level_name, True
+
+    # Clamp numeric level to the supported logging range
+    numeric_level = max(logging.NOTSET, min(logging.CRITICAL, numeric_level))
+    return numeric_level, level_name, False
+
+
+LOG_LEVEL, _raw_log_level, _log_level_fallback = _determine_log_level()
+
 if IS_CLOUD_FUNCTION:
     # Use only StreamHandler for Cloud Functions (logs go to Cloud Logging)
     logging.basicConfig(
-        level=logging.INFO,
+        level=LOG_LEVEL,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[logging.StreamHandler(sys.stdout)]
     )
 else:
     # For local development, use both console and file logging
     logging.basicConfig(
-        level=logging.INFO,
+        level=LOG_LEVEL,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(sys.stdout),
@@ -41,6 +69,12 @@ else:
     )
 
 logger = logging.getLogger(__name__)
+logger.setLevel(LOG_LEVEL)
+
+if _log_level_fallback and _raw_log_level is not None:
+    logger.warning(
+        "Invalid LOG_LEVEL value '%s'; defaulting to INFO", _raw_log_level
+    )
 
 
 @contextmanager

@@ -120,14 +120,19 @@ gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
   --region=us-central1 \
+  --project=YOUR_PROJECT_ID \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
   --no-allow-unauthenticated \
   --memory=512MB \
   --timeout=540s \
-  --set-env-vars="PPC_CONFIG=${PPC_CONFIG}"
+  --set-env-vars="PPC_CONFIG=${PPC_CONFIG},LOG_LEVEL=DEBUG"
 ```
+
+> ℹ️ **Log levels**: The function reads the `LOG_LEVEL` environment variable at startup.
+> Supported values include standard names such as `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`, or their numeric equivalents.
+> Invalid values automatically fall back to `INFO` and emit a warning during initialization.
 
 ### Parameters Explained:
 - `--gen2`: Uses 2nd generation Cloud Functions
