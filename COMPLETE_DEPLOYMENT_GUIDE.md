@@ -1,8 +1,8 @@
-# Complete CI/CD Deployment Automation Guide
+# Amazon PPC Optimizer - Complete Deployment & Setup Guide
 
-This comprehensive guide walks you through deploying the Amazon PPC Optimizer from scratch to a fully functional production system with live data in the dashboard.
+This comprehensive guide walks you through the complete setup and deployment process for the Amazon PPC Optimizer, from initial GitHub configuration to production verification.
 
-## Table of Contents
+## 📋 Table of Contents
 
 1. [Prerequisites](#prerequisites)
 2. [Step 1: GitHub Token Setup for CI/CD Automation](#step-1-github-token-setup-for-cicd-automation)
@@ -10,159 +10,230 @@ This comprehensive guide walks you through deploying the Amazon PPC Optimizer fr
 4. [Step 3: Local Dry-Run Testing](#step-3-local-dry-run-testing)
 5. [Step 4: Cloud Functions Deployment](#step-4-cloud-functions-deployment)
 6. [Step 5: Production Verification](#step-5-production-verification)
-7. [Troubleshooting](#troubleshooting)
+7. [Troubleshooting Common Issues](#troubleshooting-common-issues)
 8. [Security Checklist for Production](#security-checklist-for-production)
 
 ---
 
 ## Prerequisites
 
-Before starting, ensure you have:
+Before you begin, ensure you have:
 
-- **Google Cloud Account** with billing enabled
-- **Amazon Advertising API** credentials (Client ID, Client Secret, Refresh Token, Profile ID)
-- **GitHub Account** with repository access
-- **Gmail Account** for notifications (optional)
-- **Command Line Tools**:
-  - `gcloud` CLI installed and authenticated
-  - `git` installed
-  - `python3.11+` installed
-  - `bq` command line tool (part of gcloud SDK)
+### Required Accounts & Access
+- ✅ Google Cloud account with billing enabled
+- ✅ GitHub account with repository access
+- ✅ Amazon Advertising API credentials (Client ID, Client Secret, Refresh Token, Profile ID)
+- ✅ Gmail account for notifications (optional but recommended)
+
+### Required Software
+- ✅ [gcloud CLI](https://cloud.google.com/sdk/docs/install) installed and configured
+- ✅ [Git](https://git-scm.com/downloads) installed
+- ✅ Python 3.11+ installed locally (for testing)
+- ✅ [bq command-line tool](https://cloud.google.com/bigquery/docs/bq-command-line-tool) (included with gcloud)
+
+### Required Permissions
+- ✅ Project Owner or Editor role on Google Cloud project
+- ✅ Admin access to GitHub repository
 
 ---
 
 ## Step 1: GitHub Token Setup for CI/CD Automation
 
-### 1.1 Create Personal Access Token (PAT)
+This step configures GitHub Actions for automated health checks and notifications.
 
-1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
+### 1.1 Create a GitHub Personal Access Token (PAT)
+
+The PAT is used for GitHub Actions to interact with your repository and Google Cloud.
+
+**Steps:**
+
+1. Go to GitHub → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
 2. Click **Generate new token** → **Generate new token (classic)**
-3. Configure your token:
-   - **Note**: "Amazon PPC CI/CD Automation"
-   - **Expiration**: 90 days (or No expiration for production)
-   - **Scopes** (select these):
+3. Configure the token:
+   - **Note**: "Amazon PPC Optimizer CI/CD"
+   - **Expiration**: 90 days (or your preference)
+   - **Select scopes**:
      - ✅ `repo` (Full control of private repositories)
      - ✅ `workflow` (Update GitHub Action workflows)
-     - ✅ `write:packages` (Upload packages to GitHub Package Registry)
-     - ✅ `read:org` (Read org and team membership)
+     - ✅ `write:packages` (if using container registry)
 4. Click **Generate token**
-5. **IMPORTANT**: Copy the token immediately (you won't see it again)
+5. **⚠️ IMPORTANT**: Copy the token immediately - you won't see it again!
 
 ### 1.2 Configure Repository Secrets
 
-Go to your repository: **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+Store sensitive credentials securely in GitHub Secrets.
 
-Configure these **9 required secrets**:
+**Steps:**
 
-| Secret Name | Description | How to Get | Required |
-|------------|-------------|------------|----------|
-| `GCP_PROJECT_ID` | Your Google Cloud Project ID | From GCP Console | ✅ Yes |
-| `GCP_SA_KEY` | Service account JSON key | Create service account (see 1.3) | ✅ Yes |
-| `AMAZON_CLIENT_ID` | Amazon Ads API Client ID | From Amazon Advertising API Console | ✅ Yes |
-| `AMAZON_CLIENT_SECRET` | Amazon Ads API Client Secret | From Amazon Advertising API Console | ✅ Yes |
-| `AMAZON_REFRESH_TOKEN` | Amazon Ads API Refresh Token | From Amazon OAuth flow | ✅ Yes |
-| `AMAZON_PROFILE_ID` | Amazon Ads Profile ID | From Amazon Advertising Console | ✅ Yes |
-| `GMAIL_USER` | Gmail address for notifications | Your Gmail address | ⚠️ Optional |
-| `GMAIL_PASS` | Gmail App Password | See section 1.4 | ⚠️ Optional |
-| `DASHBOARD_API_KEY` | Dashboard authentication key | Generate secure random string | ⚠️ Optional |
+1. Go to your repository: **Settings** → **Secrets and variables** → **Actions**
+2. Click **New repository secret** for each of the following:
 
-### 1.3 Google Cloud Service Account Setup for GitHub Actions
+#### Required Secrets for Google Cloud Authentication
+
+| Secret Name | Description | Example / How to Get |
+|-------------|-------------|----------------------|
+| `GCP_PROJECT_ID` | Your Google Cloud project ID | `amazon-ppc-474902` |
+| `GCP_SA_KEY` | Service account JSON key | See instructions below |
+| `FUNCTION_URL` | Deployed Cloud Function URL | `https://amazon-ppc-optimizer-xyz-uc.a.run.app` |
+
+#### Required Secrets for Email Notifications
+
+| Secret Name | Description | How to Get |
+|-------------|-------------|------------|
+| `GMAIL_USER` | Gmail address for notifications | Your email: `natureswaysoil@gmail.com` |
+| `GMAIL_PASS` | Gmail App Password | See Gmail App Password setup below |
+
+#### Optional Secrets for Dashboard Integration
+
+| Secret Name | Description | Example |
+|-------------|-------------|---------|
+| `DASHBOARD_API_ENDPOINT` | Dashboard health check endpoint | `https://amazonppcdashboard.vercel.app/api/health-check` |
+| `DASHBOARD_API_KEY` | Dashboard API authentication token | Your dashboard API key |
+
+### 1.3 Create Google Cloud Service Account for GitHub Actions
+
+This service account allows GitHub Actions to authenticate with Google Cloud.
+
+**Run these commands in Google Cloud Shell or local terminal:**
 
 ```bash
 # Set your project ID
-export PROJECT_ID="your-project-id"
+export PROJECT_ID="amazon-ppc-474902"
+gcloud config set project $PROJECT_ID
 
-# Create service account for GitHub Actions
-gcloud iam service-accounts create github-actions-deployer \
-  --display-name="GitHub Actions Deployment Service Account" \
-  --project=$PROJECT_ID
+# Create service account
+gcloud iam service-accounts create github-actions \
+  --display-name="GitHub Actions CI/CD" \
+  --description="Service account for GitHub Actions workflows"
 
-# Grant necessary permissions
+# Grant necessary roles
 gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:github-actions-deployer@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/cloudfunctions.developer"
-
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:github-actions-deployer@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/iam.serviceAccountUser"
+  --member="serviceAccount:github-actions@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/cloudfunctions.viewer"
 
 gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:github-actions-deployer@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/storage.admin"
+  --member="serviceAccount:github-actions@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/logging.viewer"
 
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:github-actions-deployer@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/cloudbuild.builds.builder"
+# Create and download JSON key
+gcloud iam service-accounts keys create ~/github-actions-key.json \
+  --iam-account=github-actions@${PROJECT_ID}.iam.gserviceaccount.com
 
-# Create and download the key
-gcloud iam service-accounts keys create github-actions-key.json \
-  --iam-account=github-actions-deployer@${PROJECT_ID}.iam.gserviceaccount.com
+# Display the key content (copy this to GCP_SA_KEY secret)
+cat ~/github-actions-key.json
 
-# Display the key (copy this to GCP_SA_KEY secret)
-cat github-actions-key.json
-
-# IMPORTANT: Delete the local copy after adding to GitHub Secrets
-rm github-actions-key.json
+# Delete the local key file for security
+rm ~/github-actions-key.json
 ```
 
-### 1.4 Gmail App Password Setup for Notifications
+**⚠️ Security Note**: The JSON key provides access to your Google Cloud project. Store it securely in GitHub Secrets and never commit it to your repository.
+
+### 1.4 Set Up Gmail App Password
+
+Gmail App Passwords allow GitHub Actions to send email notifications without using your main Gmail password.
+
+**Steps:**
 
 1. Go to [Google Account App Passwords](https://myaccount.google.com/apppasswords)
-2. Sign in to your Gmail account (must have 2FA enabled)
-3. Click **Select app** → **Other (Custom name)**
-4. Enter: "GitHub Actions PPC Optimizer"
+2. Sign in to your Gmail account
+3. Click **Select app** → Choose **Other (Custom name)**
+4. Enter name: **GitHub Actions Notifications**
 5. Click **Generate**
-6. Copy the 16-character password (format: `xxxx xxxx xxxx xxxx`)
-7. Add this as the `GMAIL_PASS` secret in GitHub (without spaces)
+6. Copy the 16-character password (e.g., `abcd efgh ijkl mnop`)
+7. Add this password to GitHub Secrets as `GMAIL_PASS`
 
-**Important Notes**:
-- App passwords only work with 2-factor authentication enabled
-- Use app password, NOT your regular Gmail password
-- You can revoke app passwords anytime without changing your main password
+**Important Notes:**
+- ✅ Use App Password, NOT your regular Gmail password
+- ✅ Enable 2-Step Verification on your Google Account (required for App Passwords)
+- ✅ App Passwords can be revoked anytime from your Google Account settings
+
+### 1.5 Verify GitHub Actions Configuration
+
+After setting up secrets, verify the health check workflow is configured:
+
+**Steps:**
+
+1. Check if `.github/workflows/health-check.yml` exists
+2. Go to **Actions** tab in your GitHub repository
+3. You should see **Health Check and Notifications** workflow
+4. Click **Run workflow** to test manually (optional)
+
+**What the workflow does:**
+- ✅ Runs after successful deployments
+- ✅ Tests the Cloud Function health endpoint
+- ✅ Sends email notification with results
+- ✅ Posts to dashboard (if configured)
 
 ---
 
 ## Step 2: BigQuery Credentials and Infrastructure
 
-### 2.1 Enable Required BigQuery APIs
+BigQuery is used for storing and analyzing PPC optimization data, campaign metrics, and historical performance.
+
+### 2.1 Enable BigQuery API
+
+Enable the required Google Cloud APIs for BigQuery integration.
+
+**Run these commands:**
 
 ```bash
 # Set your project
-export PROJECT_ID="your-project-id"
+export PROJECT_ID="amazon-ppc-474902"
 gcloud config set project $PROJECT_ID
 
-# Enable the 3 required APIs
+# Enable BigQuery API
 gcloud services enable bigquery.googleapis.com
-gcloud services enable bigquerystorage.googleapis.com
+
+# Enable BigQuery Data Transfer API (for scheduled queries)
 gcloud services enable bigquerydatatransfer.googleapis.com
+
+# Enable BigQuery Connection API
+gcloud services enable bigqueryconnection.googleapis.com
 
 # Verify APIs are enabled
 gcloud services list --enabled | grep bigquery
 ```
 
-Expected output:
+**Expected output:**
 ```
 bigquery.googleapis.com
-bigquerystorage.googleapis.com
+bigqueryconnection.googleapis.com
 bigquerydatatransfer.googleapis.com
 ```
 
 ### 2.2 Run setup-bigquery.sh Script
 
-```bash
-# Clone the repository if not already done
-git clone https://github.com/natureswaysoil/Amazom-PPC.git
-cd Amazom-PPC
+The repository includes a script that creates the BigQuery dataset and tables with proper schema.
 
-# Make the script executable
+**Run the setup script:**
+
+```bash
+# Navigate to repository
+cd ~/Amazom-PPC
+
+# Make script executable (if not already)
 chmod +x setup-bigquery.sh
 
-# Run the setup script
-# Syntax: ./setup-bigquery.sh <PROJECT_ID> <DATASET_ID> <LOCATION>
+# Run the script with your configuration
 ./setup-bigquery.sh amazon-ppc-474902 amazon_ppc us-east4
 ```
 
-Expected output:
+**Parameters:**
+- `amazon-ppc-474902` - Your Google Cloud project ID
+- `amazon_ppc` - BigQuery dataset name (use this default)
+- `us-east4` - BigQuery region (match your Cloud Function region if possible)
+
+**What the script creates:**
+
+1. **Dataset**: `amazon_ppc`
+2. **Tables**:
+   - `optimization_runs` - Logs of each optimization execution
+   - `campaign_metrics` - Campaign performance data
+   - `keyword_metrics` - Keyword-level performance data
+   - `bid_changes` - History of bid adjustments
+   - `budget_changes` - History of budget modifications
+
+**Expected output:**
 ```
 =========================================
 BigQuery Setup for Amazon PPC Optimizer
@@ -171,280 +242,456 @@ Project ID: amazon-ppc-474902
 Dataset ID: amazon_ppc
 Location: us-east4
 
-Setting project to amazon-ppc-474902...
-Creating dataset amazon_ppc...
-Dataset 'amazon-ppc-474902:amazon_ppc' successfully created.
-
-Creating table: optimization_results...
+✓ Dataset amazon_ppc already exists
+✓ Creating table: optimization_runs
 Table created successfully
-
-Creating table: campaign_details...
+✓ Creating table: campaign_metrics
 Table created successfully
-
-Creating table: optimization_progress...
-Table created successfully
-
-Creating table: optimization_errors...
-Table created successfully
-
-=========================================
-✅ BigQuery Setup Complete!
-=========================================
+...
+✅ BigQuery setup complete!
 ```
 
 ### 2.3 Grant Service Account Permissions
 
+Grant the Cloud Functions service account permission to write to BigQuery.
+
+**Run these commands:**
+
 ```bash
-# Get the service account (Cloud Functions uses compute default SA)
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+# Get project number
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+
+# Service account used by Cloud Functions
 SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-echo "Service Account: $SERVICE_ACCOUNT"
-
-# Grant BigQuery Data Editor role (read/write data)
+# Grant BigQuery Data Editor role
 gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:${SERVICE_ACCOUNT}" \
   --role="roles/bigquery.dataEditor"
 
-# Grant BigQuery Job User role (run queries)
+# Grant BigQuery Job User role (required to run queries)
 gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:${SERVICE_ACCOUNT}" \
   --role="roles/bigquery.jobUser"
 
 # Verify permissions
+echo "Verifying service account: $SERVICE_ACCOUNT"
 gcloud projects get-iam-policy $PROJECT_ID \
   --flatten="bindings[].members" \
-  --filter="bindings.members:${SERVICE_ACCOUNT}"
+  --filter="bindings.members:$SERVICE_ACCOUNT" \
+  --format="table(bindings.role)"
 ```
 
-### 2.4 Verify Dataset and Table Creation
+**Expected output:**
+```
+ROLE
+roles/bigquery.dataEditor
+roles/bigquery.jobUser
+roles/compute.serviceAgent
+...
+```
+
+### 2.4 Verify BigQuery Setup
+
+Verify the dataset and tables were created correctly.
+
+**Run these commands:**
 
 ```bash
 # List datasets
-bq ls $PROJECT_ID:
+bq ls --project_id=$PROJECT_ID
 
-# List tables in the dataset
+# List tables in amazon_ppc dataset
 bq ls $PROJECT_ID:amazon_ppc
 
-# Show table schema for optimization_results
-bq show --schema --format=prettyjson $PROJECT_ID:amazon_ppc.optimization_results
+# Check table schema
+bq show --schema $PROJECT_ID:amazon_ppc.optimization_runs
+
+# Test write permission with a sample query
+bq query --use_legacy_sql=false --project_id=$PROJECT_ID \
+"SELECT COUNT(*) as count FROM \`$PROJECT_ID.amazon_ppc.optimization_runs\`"
 ```
 
-Expected tables:
-- `optimization_results` - Main optimization run data
-- `campaign_details` - Campaign-level performance
-- `optimization_progress` - Real-time progress updates
-- `optimization_errors` - Error tracking
+**Expected output:**
+```
+# Dataset list should show amazon_ppc
+# Table list should show all 5 tables
+# Schema should display JSON with field definitions
+# Query should return "0" (no data yet)
+```
+
+### 2.5 Configure BigQuery in Application
+
+The application automatically detects BigQuery configuration from environment variables.
+
+**Environment variables** (set during Cloud Function deployment):
+
+```bash
+# Project ID (usually auto-detected)
+BIGQUERY_PROJECT_ID=amazon-ppc-474902
+
+# Dataset ID (default: amazon_ppc)
+BIGQUERY_DATASET=amazon_ppc
+
+# Region (default: us-east4)
+BIGQUERY_LOCATION=us-east4
+```
+
+**Note**: These are typically set automatically from your `config.json` or can be added as Cloud Function environment variables.
 
 ---
 
 ## Step 3: Local Dry-Run Testing
 
-### 3.1 Install Dependencies
+Test the optimizer locally before deploying to ensure credentials work and configuration is correct.
+
+### 3.1 Clone the Repository
 
 ```bash
-# Navigate to project directory
+# Clone repository
+git clone https://github.com/natureswaysoil/Amazom-PPC.git
 cd Amazom-PPC
+```
 
+### 3.2 Install Dependencies
+
+Install required Python packages locally.
+
+```bash
 # Create virtual environment (recommended)
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install requirements
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-Expected packages installed:
-- functions-framework
-- google-cloud-bigquery
-- requests
-- python-dateutil
-- pytz
-- PyYAML
-- gunicorn
+**Expected output:**
+```
+Successfully installed requests google-cloud-bigquery google-auth ...
+```
 
-### 3.2 Set Up Environment Variables (.env template)
+### 3.3 Set Environment Variables
 
-Create a `.env` file in the project root:
+Configure your local environment with Amazon API credentials.
+
+**Create a `.env` file** (not committed to Git):
 
 ```bash
 # Create .env file
 cat > .env << 'EOF'
 # Amazon Advertising API Credentials
-AMAZON_CLIENT_ID=amzn1.application-oa2-client.YOUR_CLIENT_ID
-AMAZON_CLIENT_SECRET=amzn1.oa2-cs.v1.YOUR_CLIENT_SECRET
-AMAZON_REFRESH_TOKEN=Atzr|IwEBIYOUR_REFRESH_TOKEN
+AMAZON_CLIENT_ID=amzn1.application-oa2-client.xxxxx
+AMAZON_CLIENT_SECRET=amzn1.oa2-cs.v1.xxxxx
+AMAZON_REFRESH_TOKEN=Atzr|IwEBIxxxxx
 AMAZON_PROFILE_ID=1780498399290938
 
-# Google Cloud Configuration
-GCP_PROJECT=amazon-ppc-474902
-GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
+# Dashboard Configuration (optional for local testing)
+DASHBOARD_URL=https://amazonppcdashboard.vercel.app
+DASHBOARD_API_KEY=your_dashboard_api_key
 
-# Dashboard Configuration (optional)
-DASHBOARD_URL=https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app
-DASHBOARD_API_KEY=your_dashboard_api_key_here
+# BigQuery Configuration (optional for local testing)
+BIGQUERY_PROJECT_ID=amazon-ppc-474902
+BIGQUERY_DATASET=amazon_ppc
 
-# Testing Flags
+# Enable dry run mode for testing
 PPC_DRY_RUN=true
-PPC_VERIFY_CONNECTION=false
 EOF
 
 # Load environment variables
-export $(cat .env | xargs)
+set -a; source .env; set +a
 ```
 
-**IMPORTANT**: Never commit `.env` file to git! It's already in `.gitignore`.
-
-### 3.3 Connection Verification Commands
-
-Test Amazon Ads API connection without running full optimization:
+**Or export manually:**
 
 ```bash
-# Basic connection test
-python optimizer_core.py \
-  --config sample_config.yaml \
-  --profile-id $AMAZON_PROFILE_ID \
-  --verify-connection
+export AMAZON_CLIENT_ID="amzn1.application-oa2-client.xxxxx"
+export AMAZON_CLIENT_SECRET="amzn1.oa2-cs.v1.xxxxx"
+export AMAZON_REFRESH_TOKEN="Atzr|IwEBIxxxxx"
+export AMAZON_PROFILE_ID="1780498399290938"
+export PPC_DRY_RUN=true
+```
 
-# Test with custom sample size
+### 3.4 Verify Amazon Ads Connection
+
+Test connectivity to Amazon Advertising API without running optimization.
+
+**Run the verification command:**
+
+```bash
 python optimizer_core.py \
   --config sample_config.yaml \
   --profile-id $AMAZON_PROFILE_ID \
   --verify-connection \
-  --verify-sample-size=5
+  --verify-sample-size 5
 ```
 
-**Expected output**:
+**Expected output:**
 ```
-2024-11-06 10:30:00 - INFO - Verifying Amazon Ads API connection...
-2024-11-06 10:30:01 - INFO - Successfully authenticated with Amazon Ads API
-2024-11-06 10:30:02 - INFO - Retrieved 5 campaigns
-2024-11-06 10:30:02 - INFO - Sample campaigns:
-  - Campaign: "Brand - Exact Match" (ID: 123456789)
-  - Campaign: "Category - Broad Match" (ID: 987654321)
-  ...
-2024-11-06 10:30:02 - INFO - ✅ Connection verification successful
+✅ Successfully authenticated with Amazon Ads API
+📊 Connection verified! Retrieved 5 sample campaigns:
+
+Campaign: "Brand Campaign 1"
+  ID: 123456789
+  Status: enabled
+  Budget: $50.00
+  
+Campaign: "Auto Campaign - Electronics"
+  ID: 987654321
+  Status: enabled
+  Budget: $75.00
+  
+...
+
+✅ Amazon Ads API connection verified successfully!
 ```
 
-### 3.4 Dry-Run Testing
+**Troubleshooting verification failures:**
 
-Run full optimization in dry-run mode (no changes made):
+- ❌ **401 Unauthorized**: Check Client ID and Client Secret
+- ❌ **Invalid refresh token**: Regenerate refresh token in Amazon console
+- ❌ **Profile not found**: Verify Profile ID is correct
+- ❌ **Rate limit exceeded**: Wait a few minutes and retry
+
+### 3.5 Run Local Dry-Run Test
+
+Execute a full optimization cycle locally in dry-run mode (no changes applied).
+
+**Run dry-run optimization:**
 
 ```bash
-# Full dry-run test
+# Dry run with all features
+python main.py --dry-run
+
+# Or run specific features
+python main.py --dry-run --features bid_optimization,dayparting
+
+# Or use environment variable
+export PPC_DRY_RUN=true
 python main.py
-
-# Or with explicit dry-run flag
-PPC_DRY_RUN=true python main.py
-
-# Test specific features only
-PPC_DRY_RUN=true PPC_FEATURES=bid_optimization,dayparting python main.py
 ```
 
-**Expected dry-run outputs**:
+**Expected output:**
+```
+=== Amazon PPC Optimizer Started at 2025-11-06 10:30:00 ===
+🔒 DRY RUN MODE - No changes will be applied
 
-1. **Authentication Success**:
-   ```
-   Successfully authenticated with Amazon Ads API
-   Access token expires at: 2024-11-06 11:30:00
-   ```
+📋 Configuration loaded successfully
+✅ Successfully authenticated with Amazon Ads API
+🔄 Token refreshed, expires at: 2025-11-06 11:30:00
 
-2. **Campaign Analysis**:
-   ```
-   Analyzing 42 campaigns...
-   Found 15 campaigns requiring optimization
-   Total spend: $1,234.56
-   Average ACOS: 42.3%
-   ```
+🎯 Running optimization features:
+  - bid_optimization
+  - dayparting
+  - campaign_management
+  - keyword_discovery
+  - negative_keywords
+  - budget_optimization
+  - placement_bids
 
-3. **Optimization Summary** (DRY RUN):
-   ```
-   DRY RUN MODE - No changes will be made
-   
-   Bid Optimization:
-   - 127 keywords analyzed
-   - Would increase 34 bids (average +15%)
-   - Would decrease 28 bids (average -20%)
-   - Would maintain 65 bids
-   
-   Dayparting:
-   - 42 campaigns analyzed
-   - Would apply 18 peak hour adjustments
-   - Would apply 24 off-peak adjustments
-   
-   Campaign Management:
-   - Would pause 3 high-ACOS campaigns
-   - Would activate 2 good-performing campaigns
-   ```
+📊 Analyzing 15 active campaigns...
 
-4. **Dashboard Update**:
-   ```
-   Sending results to dashboard...
-   Dashboard updated successfully
-   ```
+[Bid Optimization]
+  Campaign: "Brand Campaign 1"
+    - Keyword "running shoes" ACOS: 22% → Increase bid by $0.15 (DRY RUN)
+    - Keyword "athletic shoes" ACOS: 45% → Decrease bid by $0.08 (DRY RUN)
+    
+[Dayparting]
+  Campaign: "Auto Campaign"
+    - Hour 2-6 AM: Low performance → Decrease bid by 30% (DRY RUN)
+    - Hour 6-10 PM: High conversion → Increase bid by 20% (DRY RUN)
 
-5. **BigQuery Insert**:
-   ```
-   Inserting optimization results to BigQuery...
-   Inserted 1 row to optimization_results
-   Inserted 42 rows to campaign_details
-   ```
+...
+
+✅ Optimization completed successfully!
+📊 Summary:
+  - Campaigns analyzed: 15
+  - Bid adjustments: 42 (not applied - DRY RUN)
+  - Keywords discovered: 8 (not applied - DRY RUN)
+  - Negative keywords: 5 (not applied - DRY RUN)
+  - Budget changes: 3 (not applied - DRY RUN)
+  
+🕐 Execution time: 127 seconds
+```
+
+### 3.6 Test Configuration Options
+
+Test different configuration scenarios to ensure flexibility.
+
+**Test with custom config file:**
+
+```bash
+# Create custom config
+cp sample_config.yaml my_config.yaml
+# Edit my_config.yaml with your preferences
+
+# Run with custom config
+python main.py --config my_config.yaml --dry-run
+```
+
+**Test with specific features:**
+
+```bash
+# Test only bid optimization
+python main.py --dry-run --features bid_optimization
+
+# Test multiple features
+python main.py --dry-run --features bid_optimization,dayparting,budget_optimization
+```
+
+**Test with different profile IDs:**
+
+```bash
+# Override profile ID
+python main.py --dry-run --profile-id 9876543210
+```
+
+### 3.7 Review Logs and Output
+
+Check that the optimizer is generating appropriate logs and output.
+
+**What to verify:**
+
+- ✅ Successfully authenticates with Amazon API
+- ✅ Retrieves campaigns and performance data
+- ✅ Analyzes data and generates recommendations
+- ✅ Shows "DRY RUN" indicators for all changes
+- ✅ Completes without errors
+- ✅ Shows execution summary with metrics
+
+**Common issues during dry-run:**
+
+- ❌ **No campaigns found**: Check profile ID and API permissions
+- ❌ **Insufficient data**: Campaigns need at least 7 days of data
+- ❌ **Configuration errors**: Verify config.json or environment variables
+- ❌ **API rate limiting**: Add delays between requests or reduce lookback days
 
 ---
 
 ## Step 4: Cloud Functions Deployment
 
-### 4.1 Secret Manager Setup
+Deploy the optimizer to Google Cloud Functions with secure configuration using Secret Manager.
 
-Store sensitive credentials in Google Secret Manager:
+### 4.1 Create Secrets in Secret Manager
+
+Store all sensitive credentials in Google Cloud Secret Manager.
+
+**Enable Secret Manager API:**
 
 ```bash
-# Enable Secret Manager API
+export PROJECT_ID="amazon-ppc-474902"
+gcloud config set project $PROJECT_ID
+
+# Enable Secret Manager
 gcloud services enable secretmanager.googleapis.com
+```
 
-# Create the 6 required secrets
-echo -n "amzn1.application-oa2-client.YOUR_ID" | \
-  gcloud secrets create amazon-client-id --data-file=-
+**Create secrets for Amazon API:**
 
-echo -n "amzn1.oa2-cs.v1.YOUR_SECRET" | \
-  gcloud secrets create amazon-client-secret --data-file=-
+```bash
+# Amazon Client ID
+echo -n "amzn1.application-oa2-client.xxxxx" | \
+  gcloud secrets create amazon-client-id \
+  --data-file=- \
+  --replication-policy="automatic"
 
-echo -n "Atzr|IwEBIYOUR_TOKEN" | \
-  gcloud secrets create amazon-refresh-token --data-file=-
+# Amazon Client Secret
+echo -n "amzn1.oa2-cs.v1.xxxxx" | \
+  gcloud secrets create amazon-client-secret \
+  --data-file=- \
+  --replication-policy="automatic"
 
+# Amazon Refresh Token
+echo -n "Atzr|IwEBIxxxxx" | \
+  gcloud secrets create amazon-refresh-token \
+  --data-file=- \
+  --replication-policy="automatic"
+
+# Amazon Profile ID
 echo -n "1780498399290938" | \
-  gcloud secrets create amazon-profile-id --data-file=-
+  gcloud secrets create amazon-profile-id \
+  --data-file=- \
+  --replication-policy="automatic"
+```
 
-echo -n "your_dashboard_api_key" | \
-  gcloud secrets create dashboard-api-key --data-file=-
+**Create secrets for Dashboard (optional):**
 
-echo -n "https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app" | \
-  gcloud secrets create dashboard-url --data-file=-
+```bash
+# Dashboard URL
+echo -n "https://amazonppcdashboard.vercel.app" | \
+  gcloud secrets create dashboard-url \
+  --data-file=- \
+  --replication-policy="automatic"
 
-# Grant Cloud Functions service account access to secrets
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
-SA_EMAIL="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+# Dashboard API Key
+echo -n "your_dashboard_api_key_here" | \
+  gcloud secrets create dashboard-api-key \
+  --data-file=- \
+  --replication-policy="automatic"
+```
 
-for SECRET in amazon-client-id amazon-client-secret amazon-refresh-token amazon-profile-id dashboard-api-key dashboard-url; do
-  gcloud secrets add-iam-policy-binding $SECRET \
-    --member="serviceAccount:${SA_EMAIL}" \
-    --role="roles/secretmanager.secretAccessor"
-done
+**Verify secrets were created:**
 
-# Verify secrets created
+```bash
 gcloud secrets list
 ```
 
-### 4.2 Secure Deployment with --no-allow-unauthenticated
+**Expected output:**
+```
+NAME                     CREATED              REPLICATION_POLICY
+amazon-client-id         2025-11-06T10:00:00  automatic
+amazon-client-secret     2025-11-06T10:00:01  automatic
+amazon-refresh-token     2025-11-06T10:00:02  automatic
+amazon-profile-id        2025-11-06T10:00:03  automatic
+dashboard-url            2025-11-06T10:00:04  automatic
+dashboard-api-key        2025-11-06T10:00:05  automatic
+```
 
-Deploy the Cloud Function with proper security:
+### 4.2 Grant Secret Manager Access
+
+Grant the Cloud Functions service account permission to read secrets.
+
+**Run these commands:**
 
 ```bash
-# Deploy with Secret Manager integration
-gcloud functions deploy amazon-ppc-optimizer \
+# Get project number
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+
+# Compute service account (used by Cloud Functions)
+COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+# Grant Secret Manager accessor role for each secret
+for secret in amazon-client-id amazon-client-secret amazon-refresh-token amazon-profile-id dashboard-url dashboard-api-key
+do
+  gcloud secrets add-iam-policy-binding $secret \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="roles/secretmanager.secretAccessor"
+  echo "✅ Granted access to $secret"
+done
+```
+
+**Verify permissions:**
+
+```bash
+# Check access for one secret
+gcloud secrets get-iam-policy amazon-client-id
+```
+
+### 4.3 Deploy Cloud Function with Secure Flags
+
+Deploy using the recommended secure configuration.
+
+**Deployment command with all security best practices:**
+
+```bash
+export PROJECT_ID="amazon-ppc-474902"
+export REGION="us-central1"
+export FUNCTION_NAME="amazon-ppc-optimizer"
+
+gcloud functions deploy $FUNCTION_NAME \
   --gen2 \
   --runtime=python311 \
-  --region=us-central1 \
+  --region=$REGION \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
@@ -453,301 +700,506 @@ gcloud functions deploy amazon-ppc-optimizer \
   --memory=512MB \
   --min-instances=0 \
   --max-instances=1 \
-  --set-secrets='AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest,AMAZON_PROFILE_ID=amazon-profile-id:latest,DASHBOARD_API_KEY=dashboard-api-key:latest,DASHBOARD_URL=dashboard-url:latest' \
-  --set-env-vars='GCP_PROJECT=amazon-ppc-474902,GOOGLE_CLOUD_PROJECT=amazon-ppc-474902'
-
-# Get the function URL (Gen2 uses Cloud Run URLs)
-FUNCTION_URL=$(gcloud functions describe amazon-ppc-optimizer \
-  --region=us-central1 \
-  --gen2 \
-  --format='value(serviceConfig.uri)')
-
-echo "Function deployed at: $FUNCTION_URL"
+  --set-secrets="AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest,AMAZON_PROFILE_ID=amazon-profile-id:latest,DASHBOARD_URL=dashboard-url:latest,DASHBOARD_API_KEY=dashboard-api-key:latest" \
+  --service-account="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 ```
 
-**Key Security Flags**:
-- `--no-allow-unauthenticated` - Requires authentication (prevents HTTP 429 rate limiting)
-- `--set-secrets` - Mounts secrets from Secret Manager (secure credential storage)
-- `--min-instances=0` - Scales to zero when not in use (cost optimization)
-- `--max-instances=1` - Limits concurrent executions
+**Deployment flags explained:**
 
-### 4.3 Cloud Scheduler Configuration with OIDC Authentication
+| Flag | Purpose | Security Impact |
+|------|---------|-----------------|
+| `--gen2` | Use Cloud Functions Gen2 (Cloud Run) | Better security, scalability |
+| `--no-allow-unauthenticated` | Require authentication | ✅ Prevents unauthorized access |
+| `--set-secrets` | Mount secrets from Secret Manager | ✅ Credentials never in code |
+| `--min-instances=0` | Scale to zero when idle | ✅ Cost optimization |
+| `--max-instances=1` | Limit concurrent executions | ✅ Prevents rate limiting |
+| `--timeout=540s` | 9-minute maximum runtime | Allows long-running optimization |
+| `--memory=512MB` | Memory allocation | Sufficient for typical workloads |
 
-Set up automatic scheduled execution:
+**Expected deployment output:**
+
+```
+Deploying function (may take a while - up to 2 minutes)...
+⠹ Creating 2nd gen function...
+✓ Function deployed successfully!
+availableMemoryMb: 512
+buildId: ...
+name: projects/amazon-ppc-474902/locations/us-central1/functions/amazon-ppc-optimizer
+serviceConfig:
+  uri: https://amazon-ppc-optimizer-xyz123-uc.a.run.app
+state: ACTIVE
+```
+
+**⚠️ Important**: Copy the `uri` value - this is your Function URL needed for step 5 and GitHub Actions.
+
+### 4.4 Quick Deploy Script
+
+Alternatively, use the provided quick deploy script:
 
 ```bash
-# Create service account for Cloud Scheduler
-gcloud iam service-accounts create ppc-scheduler \
-  --display-name="PPC Optimizer Scheduler Service Account"
+# Make script executable
+chmod +x QUICK_DEPLOY.sh
+
+# Run deployment
+./QUICK_DEPLOY.sh amazon-ppc-474902 us-central1
+```
+
+### 4.5 Configure Cloud Scheduler
+
+Set up automatic scheduled execution of the optimizer.
+
+**Create service account for Cloud Scheduler:**
+
+```bash
+export PROJECT_ID="amazon-ppc-474902"
+export SERVICE_ACCOUNT_NAME="ppc-optimizer-scheduler"
+
+# Create service account
+gcloud iam service-accounts create $SERVICE_ACCOUNT_NAME \
+  --display-name="PPC Optimizer Scheduler" \
+  --project=$PROJECT_ID
 
 # Grant invoker permission to the function
-gcloud functions add-iam-policy-binding amazon-ppc-optimizer \
-  --region=us-central1 \
-  --member="serviceAccount:ppc-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/cloudfunctions.invoker"
-
-# Create Cloud Scheduler job (runs daily at 3 AM EST)
-gcloud scheduler jobs create http amazon-ppc-optimizer-daily \
-  --location=us-central1 \
-  --schedule="0 3 * * *" \
-  --uri="${FUNCTION_URL}" \
-  --http-method=POST \
-  --time-zone="America/New_York" \
-  --oidc-service-account-email="ppc-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --oidc-token-audience="${FUNCTION_URL}" \
-  --headers="Content-Type=application/json" \
-  --message-body='{"dry_run": false}'
-
-# Create dry-run job (runs every 4 hours for testing)
-gcloud scheduler jobs create http amazon-ppc-optimizer-dryrun \
-  --location=us-central1 \
-  --schedule="0 */4 * * *" \
-  --uri="${FUNCTION_URL}" \
-  --http-method=POST \
-  --time-zone="America/New_York" \
-  --oidc-service-account-email="ppc-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --oidc-token-audience="${FUNCTION_URL}" \
-  --headers="Content-Type=application/json" \
-  --message-body='{"dry_run": true}'
-
-# List scheduled jobs
-gcloud scheduler jobs list --location=us-central1
+gcloud functions add-invoker-policy-binding $FUNCTION_NAME \
+  --region=$REGION \
+  --member="serviceAccount:${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --project=$PROJECT_ID
 ```
 
-**Schedule Examples**:
-- Daily at 3 AM: `"0 3 * * *"`
-- Every 6 hours: `"0 */6 * * *"`
-- Twice daily (9 AM, 9 PM): `"0 9,21 * * *"`
-- Weekdays only at noon: `"0 12 * * 1-5"`
-- Every Monday at 8 AM: `"0 8 * * 1"`
-
-### 4.4 Service Account Permissions Summary
-
-Verify all required permissions are granted:
+**Get the Function URL:**
 
 ```bash
-# Cloud Functions compute service account needs:
-# - roles/bigquery.dataEditor (write to BigQuery)
-# - roles/bigquery.jobUser (run BigQuery jobs)
-# - roles/secretmanager.secretAccessor (read secrets)
+FUNCTION_URL=$(gcloud functions describe $FUNCTION_NAME \
+  --region=$REGION \
+  --gen2 \
+  --format='value(serviceConfig.uri)' \
+  --project=$PROJECT_ID)
 
-# Scheduler service account needs:
-# - roles/cloudfunctions.invoker (invoke the function)
-
-# Verify permissions
-gcloud projects get-iam-policy $PROJECT_ID \
-  --flatten="bindings[].members" \
-  --filter="bindings.members:*ppc*" \
-  --format="table(bindings.role, bindings.members)"
+echo "Function URL: $FUNCTION_URL"
 ```
+
+**Create Cloud Scheduler job:**
+
+```bash
+# Daily execution at 3 AM UTC
+gcloud scheduler jobs create http ppc-optimizer-daily \
+  --location=$REGION \
+  --schedule="0 3 * * *" \
+  --uri="$FUNCTION_URL" \
+  --http-method=POST \
+  --time-zone="America/New_York" \
+  --oidc-service-account-email="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --oidc-token-audience="$FUNCTION_URL" \
+  --project=$PROJECT_ID
+
+# Optional: Create dry-run job (every 6 hours for testing)
+gcloud scheduler jobs create http ppc-optimizer-dryrun \
+  --location=$REGION \
+  --schedule="0 */6 * * *" \
+  --uri="${FUNCTION_URL}?dry_run=true" \
+  --http-method=POST \
+  --time-zone="America/New_York" \
+  --oidc-service-account-email="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --oidc-token-audience="$FUNCTION_URL" \
+  --project=$PROJECT_ID
+```
+
+**Schedule examples:**
+
+| Schedule | Cron Expression | Description |
+|----------|----------------|-------------|
+| Daily at 3 AM | `0 3 * * *` | Once per day |
+| Every 6 hours | `0 */6 * * *` | 4 times per day |
+| Twice daily | `0 9,21 * * *` | 9 AM and 9 PM |
+| Weekdays at noon | `0 12 * * 1-5` | Monday-Friday only |
+
+**Verify scheduler jobs:**
+
+```bash
+gcloud scheduler jobs list --location=$REGION --project=$PROJECT_ID
+```
+
+### 4.6 Update GitHub Repository Secret
+
+Add the deployed function URL to GitHub for automated health checks.
+
+**Steps:**
+
+1. Copy the Function URL from deployment output
+2. Go to GitHub repository → **Settings** → **Secrets and variables** → **Actions**
+3. Create or update secret: `FUNCTION_URL`
+4. Paste the URL: `https://amazon-ppc-optimizer-xyz123-uc.a.run.app`
 
 ---
 
 ## Step 5: Production Verification
 
-### 5.1 Health Check Endpoint Testing
+Comprehensive testing to ensure everything works correctly in production.
 
-Test the lightweight health check endpoint:
+### 5.1 Health Check Endpoint
+
+Verify the Cloud Function is deployed and accessible.
+
+**Run health check:**
 
 ```bash
-# Get function URL
-FUNCTION_URL=$(gcloud functions describe amazon-ppc-optimizer \
-  --region=us-central1 \
-  --gen2 \
-  --format='value(serviceConfig.uri)')
+export FUNCTION_URL="https://amazon-ppc-optimizer-xyz123-uc.a.run.app"
 
-# Test health check (no authentication example - adjust if using auth)
-curl "${FUNCTION_URL}?health=true"
-
-# With authentication (recommended for production)
-TOKEN=$(gcloud auth print-identity-token)
-curl -H "Authorization: Bearer ${TOKEN}" \
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   "${FUNCTION_URL}?health=true"
 ```
 
-**Expected response**:
+**Expected response:**
+
 ```json
 {
   "status": "healthy",
   "service": "amazon-ppc-optimizer",
-  "timestamp": "2024-11-06T10:30:00.123Z",
-  "version": "2.0.0"
+  "timestamp": "2025-11-06T10:15:30.123Z",
+  "dashboard_ok": true,
+  "bigquery_ok": true,
+  "environment": "cloud_function"
 }
 ```
 
-### 5.2 Amazon Ads API Connection Verification
+**What each field means:**
 
-Verify Amazon Ads API connectivity through the deployed function:
+- `status: "healthy"` - Function is running ✅
+- `dashboard_ok: true` - Dashboard endpoint is reachable ✅
+- `bigquery_ok: true` - BigQuery connection works ✅
+- `environment: "cloud_function"` - Running in production ✅
+
+### 5.2 Verify Amazon Ads Connection
+
+Test API connectivity without running optimization.
+
+**Run connection test:**
 
 ```bash
-# Test connection verification
-TOKEN=$(gcloud auth print-identity-token)
-curl -H "Authorization: Bearer ${TOKEN}" \
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   "${FUNCTION_URL}?verify_connection=true&verify_sample_size=5"
 ```
 
-**Expected response**:
+**Expected response:**
+
 ```json
 {
   "status": "success",
   "message": "Amazon Ads API connection verified",
-  "campaigns_retrieved": 5,
   "sample_campaigns": [
     {
       "campaignId": "123456789",
-      "name": "Brand - Exact Match",
+      "name": "Brand Campaign 1",
       "state": "enabled",
       "budget": 50.0
     },
     ...
   ],
+  "total_campaigns_available": 15,
   "profile_id": "1780498399290938",
-  "timestamp": "2024-11-06T10:30:00.123Z"
+  "timestamp": "2025-11-06T10:16:45.678Z"
 }
 ```
 
-### 5.3 BigQuery Data Queries
+**Troubleshooting connection failures:**
 
-Query the data to verify optimizer is writing to BigQuery:
+- ❌ **401 error**: Check secrets in Secret Manager
+- ❌ **Timeout**: Increase function timeout or check Amazon API status
+- ❌ **Empty campaigns**: Verify profile ID is correct
+
+### 5.3 Run Production Dry-Run Test
+
+Execute full optimization in dry-run mode (no changes applied).
+
+**Run dry-run via Cloud Function:**
 
 ```bash
-# Query recent optimization runs
-bq query --use_legacy_sql=false '
-SELECT 
-  timestamp,
+curl -X POST \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dry_run": true,
+    "features": ["bid_optimization", "dayparting"],
+    "profile_id": "1780498399290938"
+  }' \
+  "${FUNCTION_URL}"
+```
+
+**Expected response:**
+
+```json
+{
+  "status": "success",
+  "message": "Optimization completed successfully (DRY RUN)",
+  "execution_time_seconds": 127,
+  "summary": {
+    "campaigns_analyzed": 15,
+    "bid_adjustments": 42,
+    "keywords_discovered": 8,
+    "negative_keywords_added": 5,
+    "budget_changes": 3
+  },
+  "dry_run": true,
+  "timestamp": "2025-11-06T10:20:15.890Z"
+}
+```
+
+### 5.4 Check BigQuery Data
+
+Verify optimization data is being written to BigQuery.
+
+**Query optimization runs:**
+
+```bash
+export PROJECT_ID="amazon-ppc-474902"
+
+# Check latest optimization run
+bq query --use_legacy_sql=false --project_id=$PROJECT_ID \
+"SELECT 
   run_id,
+  start_time,
+  end_time,
   status,
   campaigns_analyzed,
-  keywords_optimized,
-  average_acos,
-  target_acos
-FROM `amazon-ppc-474902.amazon_ppc.optimization_results`
-ORDER BY timestamp DESC
-LIMIT 10
-'
+  total_bid_changes
+FROM \`$PROJECT_ID.amazon_ppc.optimization_runs\`
+ORDER BY start_time DESC
+LIMIT 5"
+```
 
-# Query campaign performance
-bq query --use_legacy_sql=false '
-SELECT 
+**Query campaign metrics:**
+
+```bash
+# Check latest campaign metrics
+bq query --use_legacy_sql=false --project_id=$PROJECT_ID \
+"SELECT 
+  campaign_id,
   campaign_name,
+  impressions,
+  clicks,
   spend,
   sales,
   acos,
-  impressions,
-  clicks,
-  conversions
-FROM `amazon-ppc-474902.amazon_ppc.campaign_details`
-WHERE DATE(timestamp) = CURRENT_DATE()
-ORDER BY spend DESC
-LIMIT 20
-'
-
-# Query optimization progress
-bq query --use_legacy_sql=false '
-SELECT 
-  timestamp,
-  run_id,
-  status,
-  message,
-  percent_complete
-FROM `amazon-ppc-474902.amazon_ppc.optimization_progress`
-WHERE run_id = (
-  SELECT run_id 
-  FROM `amazon-ppc-474902.amazon_ppc.optimization_results` 
-  ORDER BY timestamp DESC 
-  LIMIT 1
-)
-ORDER BY timestamp ASC
-'
+  date
+FROM \`$PROJECT_ID.amazon_ppc.campaign_metrics\`
+ORDER BY date DESC
+LIMIT 10"
 ```
 
-### 5.4 Live Optimization Testing
+**Expected output:**
 
-Trigger a live optimization run:
-
-```bash
-# Dry run first (safe testing)
-TOKEN=$(gcloud auth print-identity-token)
-curl -X POST \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"dry_run": true, "features": ["bid_optimization"]}' \
-  "${FUNCTION_URL}"
-
-# Live run (makes actual changes!)
-# ⚠️ CAUTION: This will modify your Amazon Ads campaigns
-curl -X POST \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"dry_run": false}' \
-  "${FUNCTION_URL}"
+```
++----------+---------------------+---------------------+-----------+-------------------+------------------+
+|  run_id  |     start_time      |      end_time       |  status   | campaigns_analyzed| total_bid_changes|
++----------+---------------------+---------------------+-----------+-------------------+------------------+
+| run_001  | 2025-11-06 10:20:00 | 2025-11-06 10:22:07 | completed |        15         |        42        |
+| run_002  | 2025-11-06 03:00:00 | 2025-11-06 03:02:15 | completed |        15         |        38        |
++----------+---------------------+---------------------+-----------+-------------------+------------------+
 ```
 
-**Monitor the run**:
+### 5.5 Test Cloud Scheduler Execution
+
+Manually trigger the scheduled job to verify it works.
+
+**Trigger scheduler job:**
+
 ```bash
-# Follow function logs in real-time
-gcloud functions logs read amazon-ppc-optimizer \
-  --region=us-central1 \
+export PROJECT_ID="amazon-ppc-474902"
+export REGION="us-central1"
+
+# Trigger the daily job
+gcloud scheduler jobs run ppc-optimizer-daily \
+  --location=$REGION \
+  --project=$PROJECT_ID
+
+# Or trigger dry-run job
+gcloud scheduler jobs run ppc-optimizer-dryrun \
+  --location=$REGION \
+  --project=$PROJECT_ID
+```
+
+**Check scheduler job status:**
+
+```bash
+gcloud scheduler jobs describe ppc-optimizer-daily \
+  --location=$REGION \
+  --project=$PROJECT_ID
+```
+
+**View recent executions:**
+
+```bash
+# Check Cloud Scheduler logs
+gcloud logging read "resource.type=cloud_scheduler_job AND resource.labels.job_id=ppc-optimizer-daily" \
+  --limit=10 \
+  --format=json \
+  --project=$PROJECT_ID
+```
+
+### 5.6 Monitor Cloud Function Logs
+
+View function execution logs to verify everything is working.
+
+**View recent logs:**
+
+```bash
+# Last 50 log entries
+gcloud functions logs read $FUNCTION_NAME \
+  --region=$REGION \
+  --gen2 \
   --limit=50 \
-  --follow
+  --project=$PROJECT_ID
 
-# Check for errors
-gcloud functions logs read amazon-ppc-optimizer \
-  --region=us-central1 \
-  --limit=100 | grep -i error
+# Follow logs in real-time
+gcloud functions logs read $FUNCTION_NAME \
+  --region=$REGION \
+  --gen2 \
+  --follow \
+  --project=$PROJECT_ID
+
+# Filter for errors only
+gcloud functions logs read $FUNCTION_NAME \
+  --region=$REGION \
+  --gen2 \
+  --limit=50 \
+  --project=$PROJECT_ID | grep -i error
 ```
 
-### 5.5 Dashboard Verification
+**Key log messages to look for:**
 
-1. **Open Dashboard**: https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app
+✅ **Success indicators:**
+- "Successfully authenticated with Amazon Ads API"
+- "Optimization completed successfully"
+- "Dashboard updated successfully"
+- "BigQuery write completed"
 
-2. **Verify Data Display**:
-   - ✅ Recent optimization runs shown
-   - ✅ Campaign performance metrics displayed
-   - ✅ Graphs and charts populated with data
-   - ✅ Real-time status updates visible
+❌ **Error indicators:**
+- "Authentication failed"
+- "Rate limit exceeded"
+- "Timeout"
+- "BigQuery write failed"
 
-3. **Check Dashboard API**:
+### 5.7 Test Live Optimization (Production Run)
+
+After confirming dry-run works, execute a real optimization.
+
+**⚠️ CAUTION**: This will make actual changes to your Amazon PPC campaigns!
+
+**Run live optimization:**
+
 ```bash
-# Test dashboard API endpoint (if configured)
 curl -X POST \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_DASHBOARD_API_KEY" \
-  -d '{"test": "health_check"}' \
-  "https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app/api/health"
+  -d '{
+    "dry_run": false,
+    "features": ["bid_optimization"],
+    "profile_id": "1780498399290938"
+  }' \
+  "${FUNCTION_URL}"
 ```
 
-### 5.6 Complete Production Checklist
+**Best practices for first live run:**
 
-- [ ] **Cloud Function Deployed**: Function URL accessible
-- [ ] **Health Check Passing**: `/health=true` returns 200 OK
-- [ ] **Amazon Ads Connected**: Verification endpoint returns campaigns
-- [ ] **BigQuery Tables Populated**: Data visible in all 4 tables
-- [ ] **Cloud Scheduler Running**: Jobs listed and scheduled correctly
-- [ ] **Dashboard Showing Data**: Live metrics visible
-- [ ] **Secrets Secured**: All credentials in Secret Manager
-- [ ] **Authentication Working**: OIDC tokens valid
-- [ ] **Logs Available**: Can view function execution logs
-- [ ] **Dry Run Successful**: Test run completed without errors
-- [ ] **Live Run Successful**: Production run completed with changes
-- [ ] **Email Notifications Working**: Alerts received (if configured)
-- [ ] **Error Handling Working**: Failed runs logged properly
-- [ ] **Cost Monitoring**: Billing alerts configured
-- [ ] **Backup Strategy**: Data export strategy defined
+1. ✅ Start with a single feature (e.g., `bid_optimization` only)
+2. ✅ Monitor Amazon Ads console during execution
+3. ✅ Check function logs for any errors
+4. ✅ Review changes in BigQuery after completion
+5. ✅ Verify dashboard shows updated data
+6. ✅ Gradually enable more features after validation
+
+**Expected response:**
+
+```json
+{
+  "status": "success",
+  "message": "Optimization completed successfully",
+  "execution_time_seconds": 145,
+  "summary": {
+    "campaigns_analyzed": 15,
+    "bid_adjustments_applied": 42,
+    "keywords_discovered": 8,
+    "negative_keywords_added": 5,
+    "budget_changes_applied": 3
+  },
+  "dry_run": false,
+  "timestamp": "2025-11-06T10:45:30.123Z"
+}
+```
+
+### 5.8 Dashboard Verification
+
+Check the dashboard to see optimization results.
+
+**Dashboard URL**: https://amazonppcdashboard.vercel.app
+
+**What to verify on dashboard:**
+
+1. ✅ Latest optimization run is displayed
+2. ✅ Metrics show correct values (campaigns, keywords, spend, etc.)
+3. ✅ Charts display performance trends
+4. ✅ Campaign breakdown shows individual campaigns
+5. ✅ No error messages displayed
+
+**If dashboard is not updating:**
+
+1. Check `DASHBOARD_URL` secret in Secret Manager
+2. Verify `DASHBOARD_API_KEY` is correct
+3. Check Cloud Function logs for dashboard POST errors
+4. Test dashboard health endpoint manually
+
+### 5.9 Email Notification Test
+
+Verify GitHub Actions health check sends email correctly.
+
+**Trigger health check workflow:**
+
+1. Go to GitHub → **Actions** tab
+2. Select **Health Check and Notifications** workflow
+3. Click **Run workflow**
+4. Select `main` branch
+5. Click **Run workflow** button
+
+**Check email:**
+
+- ✅ Email received at configured address
+- ✅ Subject indicates PASSED or FAILED
+- ✅ Body contains health check results
+- ✅ Includes Function URL and timestamp
+
+### 5.10 Complete Production Checklist
+
+Before considering deployment complete, verify all items:
+
+- [ ] ✅ Health endpoint returns `"healthy"`
+- [ ] ✅ Amazon Ads connection verified
+- [ ] ✅ Dry-run test completes successfully
+- [ ] ✅ BigQuery tables contain data
+- [ ] ✅ Cloud Scheduler triggers function
+- [ ] ✅ Function logs show no errors
+- [ ] ✅ Dashboard displays optimization results
+- [ ] ✅ Email notifications working
+- [ ] ✅ Live optimization test successful
+- [ ] ✅ All secrets configured in Secret Manager
+- [ ] ✅ Service account permissions granted
+- [ ] ✅ GitHub Actions workflow passing
 
 ---
 
-## Troubleshooting
+## Troubleshooting Common Issues
 
-### Common Deployment and Runtime Issues
+### Issue: HTTP 429 Rate Limiting Errors
 
-#### 1. HTTP 429 (Too Many Requests) Errors
+**Symptoms:**
+- Function returns "429 Too Many Requests"
+- Logs show 0ms execution time
+- Response size is 14B
 
-**Symptoms**: Function returns 429 before executing, logs show 0ms duration
+**Root Cause:**
+Function deployed with `--allow-unauthenticated` flag, causing GCP to rate-limit before function executes.
 
-**Root Cause**: Function deployed with `--allow-unauthenticated` flag
+**Solution:**
 
-**Solution**:
 ```bash
 # Redeploy with authentication required
 gcloud functions deploy amazon-ppc-optimizer \
@@ -760,374 +1212,468 @@ gcloud functions deploy amazon-ppc-optimizer \
   --no-allow-unauthenticated \
   --timeout=540s \
   --memory=512MB \
-  --set-secrets='AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest'
+  --set-secrets=AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest
+
+# Update Cloud Scheduler to use OIDC authentication
+gcloud scheduler jobs update http ppc-optimizer-daily \
+  --location=us-central1 \
+  --oidc-service-account-email="ppc-optimizer-scheduler@amazon-ppc-474902.iam.gserviceaccount.com" \
+  --oidc-token-audience="$FUNCTION_URL"
 ```
 
-#### 2. "Unauthorized" or "403 Forbidden" Errors
+### Issue: "Permission Denied" during Deployment
 
-**Symptoms**: Can't invoke function, authentication fails
+**Symptoms:**
+- Deployment fails with "403 Forbidden"
+- Error: "User does not have permission"
 
-**Solution**:
+**Solution:**
+
 ```bash
-# Verify service account has invoker role
-gcloud functions add-iam-policy-binding amazon-ppc-optimizer \
-  --region=us-central1 \
-  --member="serviceAccount:ppc-scheduler@YOUR-PROJECT.iam.gserviceaccount.com" \
-  --role="roles/cloudfunctions.invoker"
+# Grant yourself deployment permissions
+export PROJECT_ID="amazon-ppc-474902"
+export YOUR_EMAIL="your-email@gmail.com"
 
-# Test with identity token
-TOKEN=$(gcloud auth print-identity-token)
-curl -H "Authorization: Bearer ${TOKEN}" "${FUNCTION_URL}?health=true"
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="user:$YOUR_EMAIL" \
+  --role="roles/cloudfunctions.developer"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="user:$YOUR_EMAIL" \
+  --role="roles/iam.serviceAccountUser"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="user:$YOUR_EMAIL" \
+  --role="roles/storage.admin"
 ```
 
-#### 3. BigQuery "Dataset Not Found" Error
+### Issue: "Secret Not Found" Error
 
-**Symptoms**: Function fails with "Dataset amazon-ppc-474902:amazon_ppc was not found"
+**Symptoms:**
+- Function fails with "Secret not found"
+- Error: "Unable to access secret"
 
-**Solution**:
+**Solution:**
+
 ```bash
-# Re-run BigQuery setup
+# Check if secrets exist
+gcloud secrets list --project=$PROJECT_ID
+
+# If missing, create the secret
+echo -n "YOUR_VALUE" | gcloud secrets create SECRET_NAME \
+  --data-file=- \
+  --replication-policy="automatic" \
+  --project=$PROJECT_ID
+
+# Grant access to service account
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+gcloud secrets add-iam-policy-binding SECRET_NAME \
+  --member="serviceAccount:${COMPUTE_SA}" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project=$PROJECT_ID
+```
+
+### Issue: Amazon API Authentication Failed
+
+**Symptoms:**
+- Function returns "401 Unauthorized"
+- Logs show "Authentication failed"
+
+**Solution:**
+
+```bash
+# Update secrets with correct values
+echo -n "NEW_REFRESH_TOKEN" | gcloud secrets versions add amazon-refresh-token \
+  --data-file=- \
+  --project=$PROJECT_ID
+
+# Verify secrets have correct values (last 4 characters only)
+gcloud secrets versions access latest --secret=amazon-refresh-token --project=$PROJECT_ID | tail -c 4
+```
+
+### Issue: BigQuery "Dataset Not Found"
+
+**Symptoms:**
+- Error: "Dataset amazon_ppc was not found"
+- Function fails during BigQuery write
+
+**Solution:**
+
+```bash
+# Run BigQuery setup script
 ./setup-bigquery.sh amazon-ppc-474902 amazon_ppc us-east4
 
-# Verify dataset exists
-bq ls amazon-ppc-474902:
-
-# Check permissions
-PROJECT_NUMBER=$(gcloud projects describe amazon-ppc-474902 --format='value(projectNumber)')
+# Grant permissions
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
 SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-gcloud projects add-iam-policy-binding amazon-ppc-474902 \
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:${SERVICE_ACCOUNT}" \
   --role="roles/bigquery.dataEditor"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${SERVICE_ACCOUNT}" \
+  --role="roles/bigquery.jobUser"
 ```
 
-#### 4. Amazon Ads API Authentication Failures
+### Issue: Function Timeout
 
-**Symptoms**: "Authentication failed", "Invalid refresh token"
+**Symptoms:**
+- Function returns "Function execution took too long"
+- Error: "DeadlineExceeded"
 
-**Solution**:
+**Solution:**
+
 ```bash
-# Verify refresh token in Secret Manager
-gcloud secrets versions access latest --secret="amazon-refresh-token"
-
-# Update if needed
-echo -n "NEW_REFRESH_TOKEN" | gcloud secrets versions add amazon-refresh-token --data-file=-
-
-# Test connection
-TOKEN=$(gcloud auth print-identity-token)
-curl -H "Authorization: Bearer ${TOKEN}" \
-  "${FUNCTION_URL}?verify_connection=true"
-```
-
-#### 5. Function Timeout Errors
-
-**Symptoms**: Function execution exceeds timeout limit
-
-**Solution**:
-```bash
-# Increase timeout to maximum (15 minutes)
+# Increase timeout to maximum (9 minutes for Gen2)
 gcloud functions deploy amazon-ppc-optimizer \
-  --region=us-central1 \
-  --update-env-vars FUNCTION_TIMEOUT=900 \
-  --timeout=900s
+  --timeout=540s \
+  --update-env-vars=LOOKBACK_DAYS=7 \
+  --project=$PROJECT_ID
 
-# Optimize configuration
-# Reduce lookback_days in config.json:
-# "lookback_days": 7  # Instead of 14 or 30
+# Or reduce data processing:
+# - Decrease lookback_days in config
+# - Reduce number of enabled features
+# - Filter campaigns by name pattern
 ```
 
-#### 6. Memory Limit Exceeded
+### Issue: Dashboard Not Updating
 
-**Symptoms**: Function crashes with "Exceeded memory limit"
+**Symptoms:**
+- Optimization completes but dashboard shows no data
+- Logs show "Dashboard update failed"
 
-**Solution**:
+**Solution:**
+
+```bash
+# Check dashboard secrets
+gcloud secrets versions access latest --secret=dashboard-url --project=$PROJECT_ID
+gcloud secrets versions access latest --secret=dashboard-api-key --project=$PROJECT_ID
+
+# Update dashboard URL
+echo -n "https://amazonppcdashboard.vercel.app" | \
+  gcloud secrets versions add dashboard-url --data-file=- --project=$PROJECT_ID
+
+# Test dashboard connectivity
+curl -X POST "https://amazonppcdashboard.vercel.app/api/health-check" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Issue: Cloud Scheduler Not Triggering
+
+**Symptoms:**
+- Scheduled jobs don't execute
+- No function invocations at scheduled time
+
+**Solution:**
+
+```bash
+# Check scheduler job exists
+gcloud scheduler jobs list --location=$REGION --project=$PROJECT_ID
+
+# Verify service account has invoker permission
+gcloud functions get-iam-policy amazon-ppc-optimizer \
+  --region=$REGION \
+  --project=$PROJECT_ID
+
+# Grant invoker permission if missing
+gcloud functions add-invoker-policy-binding amazon-ppc-optimizer \
+  --region=$REGION \
+  --member="serviceAccount:ppc-optimizer-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --project=$PROJECT_ID
+
+# Test scheduler manually
+gcloud scheduler jobs run ppc-optimizer-daily \
+  --location=$REGION \
+  --project=$PROJECT_ID
+```
+
+### Issue: Email Notifications Not Sent
+
+**Symptoms:**
+- GitHub Actions workflow completes but no email received
+
+**Solution:**
+
+1. Verify GitHub Secrets are set:
+   - `GMAIL_USER`
+   - `GMAIL_PASS` (must be App Password, not regular password)
+
+2. Check Gmail App Password:
+   - Must enable 2-Step Verification first
+   - Generate new App Password at https://myaccount.google.com/apppasswords
+
+3. Test workflow manually:
+   - Go to Actions → Health Check and Notifications
+   - Click "Run workflow"
+   - Check workflow logs for email errors
+
+### Issue: Memory Limit Exceeded
+
+**Symptoms:**
+- Function fails with "Exceeded memory limit"
+- Error: "OOMKilled"
+
+**Solution:**
+
 ```bash
 # Increase memory allocation
 gcloud functions deploy amazon-ppc-optimizer \
-  --region=us-central1 \
-  --memory=1GB  # or 2GB if needed
+  --memory=1GB \
+  --project=$PROJECT_ID
+
+# Or reduce memory usage:
+# - Process fewer campaigns per run
+# - Reduce lookback_days in config
+# - Disable memory-intensive features
 ```
 
-#### 7. Secret Manager Access Denied
+### Issue: Invalid JSON in Request
 
-**Symptoms**: "Permission denied" when accessing secrets
+**Symptoms:**
+- Error: "Invalid JSON payload"
+- Function returns 400 Bad Request
 
-**Solution**:
+**Solution:**
+
 ```bash
-# Grant secretAccessor role to compute service account
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
-SA_EMAIL="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-
-gcloud secrets add-iam-policy-binding amazon-client-id \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/secretmanager.secretAccessor"
-
-# Repeat for all secrets
-for SECRET in amazon-client-secret amazon-refresh-token amazon-profile-id; do
-  gcloud secrets add-iam-policy-binding $SECRET \
-    --member="serviceAccount:${SA_EMAIL}" \
-    --role="roles/secretmanager.secretAccessor"
-done
-```
-
-#### 8. Cloud Scheduler Not Triggering
-
-**Symptoms**: Scheduled jobs don't execute
-
-**Solution**:
-```bash
-# Verify job exists and is enabled
-gcloud scheduler jobs list --location=us-central1
-
-# Test manual trigger
-gcloud scheduler jobs run amazon-ppc-optimizer-daily --location=us-central1
-
-# Check scheduler logs
-gcloud logging read "resource.type=cloud_scheduler_job" --limit=50 --format=json
-
-# Verify OIDC authentication configured
-gcloud scheduler jobs describe amazon-ppc-optimizer-daily \
-  --location=us-central1
-```
-
-#### 9. Dashboard Not Receiving Data
-
-**Symptoms**: Dashboard shows no data or stale data
-
-**Solution**:
-```bash
-# Verify dashboard URL in secrets
-gcloud secrets versions access latest --secret="dashboard-url"
-
-# Check function logs for dashboard errors
-gcloud functions logs read amazon-ppc-optimizer \
-  --region=us-central1 \
-  --limit=50 | grep -i dashboard
-
-# Test dashboard API manually
+# Ensure JSON is properly formatted
 curl -X POST \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{"test": true}' \
-  "https://amazonppcdashboard-db7ltsqjn-james-projects-5e9a58a0.vercel.app/api/optimization-results"
+  -d '{"dry_run": true, "features": ["bid_optimization"]}' \
+  "${FUNCTION_URL}"
+
+# Use jq to validate JSON
+echo '{"dry_run": true}' | jq .
 ```
 
-#### 10. Build Failures During Deployment
+### Getting More Help
 
-**Symptoms**: Deployment fails with "Build failed" error
+**View logs for detailed errors:**
 
-**Solution**:
 ```bash
-# Check requirements.txt syntax
-cat requirements.txt
-
-# Verify Python version compatibility
-python --version  # Should be 3.11+
-
-# Check .gcloudignore file
-cat .gcloudignore
-
-# Try deploying with verbose logging
-gcloud functions deploy amazon-ppc-optimizer \
+# Function logs
+gcloud functions logs read amazon-ppc-optimizer \
+  --region=$REGION \
   --gen2 \
-  --runtime=python311 \
-  --region=us-central1 \
-  --source=. \
-  --entry-point=run_optimizer \
-  --trigger-http \
-  --verbosity=debug
-```
-
-### Log Inspection Guidance
-
-**View recent logs**:
-```bash
-gcloud functions logs read amazon-ppc-optimizer \
-  --region=us-central1 \
-  --limit=100
-```
-
-**Follow logs in real-time**:
-```bash
-gcloud functions logs read amazon-ppc-optimizer \
-  --region=us-central1 \
-  --follow
-```
-
-**Filter for errors**:
-```bash
-gcloud functions logs read amazon-ppc-optimizer \
-  --region=us-central1 \
-  --limit=200 | grep -i "error\|exception\|failed"
-```
-
-**View specific time range**:
-```bash
-gcloud logging read "resource.type=cloud_function AND resource.labels.function_name=amazon-ppc-optimizer" \
   --limit=100 \
-  --format=json \
-  --freshness=1h
+  --project=$PROJECT_ID
+
+# Cloud Scheduler logs
+gcloud logging read "resource.type=cloud_scheduler_job" \
+  --limit=50 \
+  --project=$PROJECT_ID
+
+# BigQuery job logs
+gcloud logging read "resource.type=bigquery_project" \
+  --limit=50 \
+  --project=$PROJECT_ID
 ```
 
-**Export logs for analysis**:
-```bash
-gcloud logging read "resource.type=cloud_function" \
-  --limit=1000 \
-  --format=json > function_logs.json
-```
+**Check Cloud Console:**
+- [Cloud Functions Dashboard](https://console.cloud.google.com/functions/list)
+- [Cloud Scheduler Dashboard](https://console.cloud.google.com/cloudscheduler)
+- [Secret Manager Dashboard](https://console.cloud.google.com/security/secret-manager)
+- [BigQuery Console](https://console.cloud.google.com/bigquery)
+- [IAM & Admin](https://console.cloud.google.com/iam-admin)
 
 ---
 
 ## Security Checklist for Production
 
-### Authentication & Authorization (15 items)
+Use this checklist to ensure your deployment is secure and ready for production use.
 
-- [ ] Cloud Function deployed with `--no-allow-unauthenticated`
-- [ ] Cloud Scheduler uses OIDC authentication
-- [ ] Service accounts follow principle of least privilege
-- [ ] IAM roles reviewed and minimal permissions granted
-- [ ] Service account keys rotated regularly (every 90 days)
-- [ ] Amazon Ads API credentials stored in Secret Manager only
-- [ ] No credentials in environment variables (use secrets)
-- [ ] No credentials in source code or config files committed to git
-- [ ] Dashboard API uses authentication tokens
-- [ ] BigQuery access restricted to specific service accounts
-- [ ] Function invoker role granted only to scheduler service account
-- [ ] Identity tokens expire appropriately
-- [ ] OAuth refresh tokens stored securely
-- [ ] Two-factor authentication enabled on all admin accounts
-- [ ] Service account permissions audited monthly
+### Authentication & Authorization
 
-### Secrets Management (12 items)
+- [ ] ✅ Cloud Function deployed with `--no-allow-unauthenticated`
+- [ ] ✅ Cloud Scheduler uses OIDC service account authentication
+- [ ] ✅ Service accounts follow principle of least privilege
+- [ ] ✅ No credentials hardcoded in code or config files
+- [ ] ✅ All secrets stored in Google Secret Manager
+- [ ] ✅ Secret Manager IAM policies grant access only to required service accounts
+- [ ] ✅ Personal Access Tokens (PAT) have minimum required scopes
+- [ ] ✅ Gmail uses App Password, not main account password
 
-- [ ] All secrets stored in Google Secret Manager
-- [ ] Secret versions tracked and can be rolled back
-- [ ] Secrets never logged or exposed in error messages
-- [ ] Secret access logged and monitored
-- [ ] Rotation policy defined for all secrets (90-day max)
-- [ ] Secrets automatically versioned on update
-- [ ] Old secret versions disabled after rotation
-- [ ] Service accounts granted secretAccessor role only
-- [ ] Secrets use latest version reference
-- [ ] Development and production secrets separated
-- [ ] API keys use restricted scopes where possible
-- [ ] Emergency secret revocation procedure documented
+### Secrets Management
 
-### Network Security (8 items)
+- [ ] ✅ All Amazon API credentials in Secret Manager
+- [ ] ✅ Dashboard API key in Secret Manager
+- [ ] ✅ No secrets in environment variables (use `--set-secrets` instead)
+- [ ] ✅ Secrets have `--replication-policy="automatic"` for availability
+- [ ] ✅ Regular rotation schedule for API keys (every 90 days recommended)
+- [ ] ✅ `.gitignore` excludes `.env`, `config.json`, and credentials
+- [ ] ✅ GitHub repository secrets configured correctly
+- [ ] ✅ No secrets in Cloud Function environment variables
 
-- [ ] HTTPS only (no HTTP endpoints)
-- [ ] TLS 1.2+ enforced for all connections
-- [ ] VPC Service Controls configured (if using VPC)
-- [ ] Ingress settings configured appropriately
-- [ ] Egress limited to required endpoints only
-- [ ] DNS resolution secured
-- [ ] No public IPs exposed unnecessarily
-- [ ] Rate limiting enabled to prevent abuse
+### Network Security
 
-### Data Protection (10 items)
+- [ ] ✅ Function URL uses HTTPS only (automatic with Cloud Functions)
+- [ ] ✅ No public access to function (requires Bearer token)
+- [ ] ✅ VPC connector configured (if accessing internal resources)
+- [ ] ✅ Egress settings configured appropriately
+- [ ] ✅ Rate limiting enabled (handled by optimizer code)
 
-- [ ] BigQuery datasets encrypted at rest
-- [ ] Data encrypted in transit (HTTPS/TLS)
-- [ ] PII data handled according to privacy policy
-- [ ] Customer data retention policy defined
-- [ ] Data deletion procedures documented
-- [ ] Backups configured for BigQuery datasets
-- [ ] Export to Google Cloud Storage scheduled
-- [ ] Data anonymization for development/testing
-- [ ] Query results don't expose sensitive data
-- [ ] Dashboard API responses sanitized
+### Data Protection
 
-### Monitoring & Logging (13 items)
+- [ ] ✅ BigQuery dataset in appropriate region (consider data residency)
+- [ ] ✅ BigQuery tables have proper access controls
+- [ ] ✅ No PII (Personally Identifiable Information) stored unnecessarily
+- [ ] ✅ Audit logs enabled for data access
+- [ ] ✅ Encryption at rest (automatic with GCP services)
+- [ ] ✅ Encryption in transit (HTTPS for all API calls)
 
-- [ ] Cloud Logging enabled for all services
-- [ ] Log retention period configured (90 days minimum)
-- [ ] Error alerting configured
-- [ ] Budget alerts configured
-- [ ] Performance monitoring enabled
-- [ ] Failed authentication attempts logged and alerted
-- [ ] Function invocation metrics tracked
-- [ ] BigQuery query costs monitored
-- [ ] API rate limits monitored
-- [ ] Dashboard access logged
-- [ ] Scheduler job failures alerted
-- [ ] Health check failures trigger alerts
-- [ ] Security audit logs reviewed weekly
+### Monitoring & Logging
 
-### Cost Management (5 items)
+- [ ] ✅ Cloud Logging enabled and retained appropriately
+- [ ] ✅ Log retention policy configured (90 days minimum)
+- [ ] ✅ Alerts configured for critical errors
+- [ ] ✅ Dashboard monitoring active
+- [ ] ✅ Email notifications configured
+- [ ] ✅ BigQuery audit logs enabled
+- [ ] ✅ No sensitive data logged (tokens, passwords, etc.)
 
-- [ ] Billing budget alerts configured
-- [ ] Cost breakdown by service reviewed monthly
-- [ ] Function min-instances set to 0 (scale to zero)
-- [ ] BigQuery table partitioning configured
-- [ ] Scheduled query costs tracked
+### Access Control
 
-### Compliance & Governance (7 items)
+- [ ] ✅ Project Owner/Admin role limited to necessary users
+- [ ] ✅ Service accounts have minimal required permissions
+- [ ] ✅ IAM policies reviewed and documented
+- [ ] ✅ No overly permissive roles (e.g., `roles/owner` on service accounts)
+- [ ] ✅ Regular access reviews scheduled (quarterly recommended)
+- [ ] ✅ Unused service accounts disabled or deleted
 
-- [ ] Security incident response plan documented
-- [ ] Disaster recovery plan documented
-- [ ] Data privacy policy compliant with regulations
-- [ ] Third-party integrations reviewed and approved
-- [ ] Vendor risk assessment completed (Amazon, Google, Vercel)
-- [ ] Compliance documentation maintained
-- [ ] Regular security assessments scheduled
+### Compliance & Governance
+
+- [ ] ✅ Data handling complies with privacy regulations (GDPR, CCPA, etc.)
+- [ ] ✅ Terms of Service reviewed for Amazon Ads API
+- [ ] ✅ Google Cloud Terms of Service acknowledged
+- [ ] ✅ Budget alerts configured to prevent cost overruns
+- [ ] ✅ Resource quotas set appropriately
+- [ ] ✅ Disaster recovery plan documented
+
+### Code Security
+
+- [ ] ✅ Dependencies up to date (`pip install --upgrade`)
+- [ ] ✅ No known vulnerabilities in dependencies
+- [ ] ✅ Code review completed before deployment
+- [ ] ✅ No debug mode enabled in production
+- [ ] ✅ Error messages don't expose sensitive information
+- [ ] ✅ Input validation for all user-provided data
+- [ ] ✅ Rate limiting prevents API abuse
+
+### Operational Security
+
+- [ ] ✅ Deployment process documented
+- [ ] ✅ Rollback procedure tested
+- [ ] ✅ Incident response plan in place
+- [ ] ✅ Contact information for support team documented
+- [ ] ✅ Regular backups of critical data (BigQuery exports)
+- [ ] ✅ Testing environment separate from production
+- [ ] ✅ Change management process followed
 
 ### Regular Maintenance Tasks
 
-#### Daily
-- [ ] Check health check status
-- [ ] Review error logs
-- [ ] Verify scheduler executions
+**Weekly:**
+- [ ] Review Cloud Function logs for errors
+- [ ] Check BigQuery data quality
+- [ ] Verify dashboard is updating correctly
 
-#### Weekly
-- [ ] Review BigQuery data quality
-- [ ] Check dashboard functionality
-- [ ] Review cost reports
-- [ ] Audit security logs
+**Monthly:**
+- [ ] Review IAM permissions and access logs
+- [ ] Check for dependency updates
+- [ ] Review optimization performance and adjust rules
 
-#### Monthly
-- [ ] Update dependencies (requirements.txt)
-- [ ] Review and update IAM permissions
-- [ ] Test disaster recovery procedures
-- [ ] Review and optimize configuration
-- [ ] Audit secret access logs
-- [ ] Review cost optimization opportunities
-
-#### Quarterly (Every 90 Days)
-- [ ] Rotate all secrets and API keys
-- [ ] Update service account keys
-- [ ] Security assessment and penetration testing
+**Quarterly:**
+- [ ] Rotate API keys and secrets
+- [ ] Conduct access review (who has what permissions)
 - [ ] Review and update documentation
-- [ ] Audit compliance with policies
-- [ ] Review third-party integrations
+- [ ] Test disaster recovery procedures
+- [ ] Review costs and optimize resources
+
+**Annually:**
+- [ ] Complete security audit
+- [ ] Review compliance with updated regulations
+- [ ] Update Terms of Service acknowledgments
+- [ ] Review and update incident response plan
+
+### Verification Commands
+
+Run these commands to verify security configuration:
+
+```bash
+export PROJECT_ID="amazon-ppc-474902"
+export REGION="us-central1"
+export FUNCTION_NAME="amazon-ppc-optimizer"
+
+# Check function authentication requirement
+gcloud functions describe $FUNCTION_NAME \
+  --region=$REGION \
+  --gen2 \
+  --format="value(serviceConfig.ingressSettings)" \
+  --project=$PROJECT_ID
+
+# List all secrets
+gcloud secrets list --project=$PROJECT_ID
+
+# Check service account permissions
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+gcloud projects get-iam-policy $PROJECT_ID \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:${COMPUTE_SA}" \
+  --format="table(bindings.role)"
+
+# Check for publicly accessible resources
+gcloud functions get-iam-policy $FUNCTION_NAME \
+  --region=$REGION \
+  --project=$PROJECT_ID | grep allUsers
+
+# If output contains allUsers, function is publicly accessible (fix required)
+```
 
 ---
 
 ## Summary
 
-You've now completed the full deployment from setup to production verification! 🎉
+You've now completed the full deployment and setup of the Amazon PPC Optimizer! 
 
-**Key Achievements**:
-✅ GitHub CI/CD configured with 9 secrets
-✅ BigQuery infrastructure deployed and verified
-✅ Local testing environment set up
-✅ Cloud Function deployed with security best practices
-✅ Cloud Scheduler configured with OIDC authentication
-✅ Production verification completed
-✅ Live data flowing to dashboard
-✅ Comprehensive security checklist implemented
+**What you've accomplished:**
 
-**Next Steps**:
-1. Monitor the first few optimization runs
-2. Fine-tune configuration based on performance
-3. Set up additional alerting as needed
-4. Schedule regular maintenance tasks
-5. Review and improve based on actual usage
+1. ✅ Set up GitHub CI/CD with automated health checks and email notifications
+2. ✅ Configured BigQuery infrastructure for data storage and analysis
+3. ✅ Tested the optimizer locally in dry-run mode
+4. ✅ Deployed to Google Cloud Functions with secure Secret Manager configuration
+5. ✅ Verified production deployment with comprehensive testing
+6. ✅ Established monitoring, logging, and alerting
+7. ✅ Implemented security best practices
 
-**Support**:
-- Documentation: [README.md](README.md)
-- Troubleshooting: This guide section 6
+**Next steps:**
+
+1. Monitor the first few automated runs via Cloud Scheduler
+2. Review optimization results on the dashboard
+3. Fine-tune configuration based on performance
+4. Set up alerts for critical errors
+5. Schedule regular security reviews
+
+**Resources:**
+
+- [README.md](README.md) - Main project documentation
+- [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) - Detailed deployment reference
+- [VERIFICATION_GUIDE.md](VERIFICATION_GUIDE.md) - Testing and verification procedures
+- [BIGQUERY_INTEGRATION.md](BIGQUERY_INTEGRATION.md) - BigQuery setup and troubleshooting
+- [DASHBOARD_INTEGRATION.md](DASHBOARD_INTEGRATION.md) - Dashboard integration details
+
+**Support:**
+
+For issues or questions:
+- Check Cloud Function logs: `gcloud functions logs read amazon-ppc-optimizer --region=$REGION --gen2 --limit=50`
+- Review troubleshooting section above
 - Contact: james@natureswaysoil.com
 
 ---
 
-**Last Updated**: November 6, 2024
+**Last Updated**: November 6, 2025  
 **Version**: 1.0.0
