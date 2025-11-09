@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import type { PublishResult, SocialPublisher, VideoJob } from './core';
+import type { PublishResult, SocialPublisher, VideoJob } from './processor-core';
 
 const REQUIRED_ENV_VARS = ['PINTEREST_ACCESS_TOKEN', 'PINTEREST_BOARD_ID'];
 
