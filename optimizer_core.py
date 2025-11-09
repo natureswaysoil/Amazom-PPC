@@ -52,9 +52,10 @@ import requests
 
 try:
     import yaml
-except ImportError:
-    print("ERROR: pyyaml is required. Install with: pip install pyyaml")
-    sys.exit(1)
+except ImportError as e:
+    print(f"ERROR: pyyaml is required. Install with: pip install pyyaml. Error: {e}")
+    # Don't sys.exit during import - let the function handler deal with it
+    yaml = None
 
 try:
     import pytz
