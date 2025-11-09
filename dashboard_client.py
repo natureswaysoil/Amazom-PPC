@@ -131,6 +131,16 @@ class DashboardClient:
         try:
             url = f"{self.url}{endpoint}"
             
+            # Log request details (mask API key)
+            safe_headers = self._get_headers()
+            if safe_headers and 'X-API-Key' in safe_headers:
+                safe_headers_log = {**safe_headers, 'X-API-Key': 'REDACTED'}
+            else:
+                safe_headers_log = safe_headers
+            logger.debug(f"Dashboard {method} {url}")
+            logger.debug(f"Request headers: {safe_headers_log}")
+            logger.debug(f"Request payload preview: {str(payload)[:500]}")
+            
             response = self.session.request(
                 method=method,
                 url=url,
@@ -141,6 +151,7 @@ class DashboardClient:
             
             # Log response details
             logger.info(f"Dashboard {method} {endpoint}: HTTP {response.status_code}")
+            logger.debug(f"Response headers: {dict(response.headers)}")
             
             if response.status_code == 200:
                 return response.json() if response.content else {}
@@ -149,18 +160,22 @@ class DashboardClient:
                 retry_after = response.headers.get('Retry-After', '60')
                 logger.info(f"Retry after {retry_after} seconds")
             else:
-                logger.warning(f"Dashboard returned {response.status_code}: {response.text}")
+                # Log full response body for non-200 status codes (especially 400 errors)
+                body_preview = response.text[:1000] if response.text else 'Empty response'
+                logger.warning(f"Dashboard returned {response.status_code}: {body_preview}")
+                logger.debug(f"Full response headers: {dict(response.headers)}")
             
             return None
             
         except requests.exceptions.Timeout:
-            logger.error(f"Dashboard request timeout after {self.timeout}s")
+            logger.error(f"Dashboard request timeout after {self.timeout}s to {url}")
             return None
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"Dashboard connection error: {str(e)}")
+            logger.error(f"Dashboard connection error to {url}: {str(e)}")
             return None
         except Exception as e:
-            logger.error(f"Dashboard request failed: {str(e)}")
+            logger.error(f"Dashboard request failed to {url}: {str(e)}")
+            logger.debug(f"Exception details: {type(e).__name__}: {str(e)}")
             return None
     
     def start_run(self, dry_run: bool = False) -> str:

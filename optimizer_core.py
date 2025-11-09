@@ -483,13 +483,25 @@ class AmazonAdsAPI:
         
         for attempt in range(max_retries):
             try:
+                # Log request details (mask sensitive headers)
+                headers = self._headers()
+                safe_headers = {k: ('REDACTED' if 'auth' in k.lower() else v) for k, v in headers.items()}
+                logger.debug(f"Amazon API {method} {url} (attempt {attempt + 1}/{max_retries})")
+                logger.debug(f"Request headers: {safe_headers}")
+                if 'json' in kwargs:
+                    logger.debug(f"Request body preview: {str(kwargs['json'])[:500]}")
+                
                 response = self.session.request(
                     method=method,
                     url=url,
-                    headers=self._headers(),
+                    headers=headers,
                     timeout=30,
                     **kwargs
                 )
+                
+                # Log response details
+                logger.debug(f"Response status: {response.status_code}")
+                logger.debug(f"Response headers: {dict(response.headers)}")
                 
                 if response.status_code == 429:  # Rate limit
                     retry_after = int(response.headers.get('Retry-After', retry_delay * (attempt + 1)))
@@ -497,14 +509,29 @@ class AmazonAdsAPI:
                     time.sleep(retry_after)
                     continue
                 
+                # Log response body preview for errors
+                if response.status_code >= 400:
+                    body_preview = response.text[:1000] if response.text else 'Empty response'
+                    logger.error(f"Amazon API error {response.status_code}: {body_preview}")
+                
                 response.raise_for_status()
                 return response
                 
             except requests.exceptions.HTTPError as e:
                 if attempt == max_retries - 1:
                     logger.error(f"Request failed after {max_retries} attempts: {e}")
+                    if hasattr(e, 'response') and e.response is not None:
+                        logger.error(f"Final error response body: {e.response.text[:1000]}")
                     raise
                 logger.warning(f"Request failed (attempt {attempt + 1}/{max_retries}): {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.debug(f"Error response body: {e.response.text[:500]}")
+                time.sleep(retry_delay * (attempt + 1))
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Request exception after {max_retries} attempts: {e}")
+                    raise
+                logger.warning(f"Request exception (attempt {attempt + 1}/{max_retries}): {e}")
                 time.sleep(retry_delay * (attempt + 1))
         
         raise Exception("Max retries exceeded")
@@ -860,34 +887,64 @@ class AmazonAdsAPI:
             return {}
     
     def download_report(self, report_url: str) -> List[Dict]:
-        """Download and parse report"""
-        try:
-            response = requests.get(report_url, timeout=60)
-            response.raise_for_status()
-            
-            # Try to decompress as gzip or zip
-            content = response.content
-            
+        """Download and parse report with retry logic"""
+        max_retries = 3
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
             try:
-                # Try ZIP format first
-                with zipfile.ZipFile(io.BytesIO(content)) as z:
-                    names = z.namelist()
-                    with z.open(names[0]) as f:
-                        text = io.TextIOWrapper(f, encoding='utf-8', newline='')
-                        return list(csv.DictReader(text))
-            except zipfile.BadZipFile:
-                # Try GZIP format
+                logger.debug(f"Downloading report from {report_url} (attempt {attempt + 1}/{max_retries})")
+                response = requests.get(report_url, timeout=60)
+                
+                # Log response details for debugging
+                logger.debug(f"Report download status: {response.status_code}, Content-Type: {response.headers.get('Content-Type')}, Size: {len(response.content)} bytes")
+                
+                if response.status_code >= 400:
+                    logger.error(f"Report download failed with status {response.status_code}: {response.text[:500]}")
+                
+                response.raise_for_status()
+                
+                # Try to decompress as gzip or zip
+                content = response.content
+                
                 try:
-                    with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz:
-                        text = io.TextIOWrapper(gz, encoding='utf-8', newline='')
-                        return list(csv.DictReader(text))
-                except Exception:
-                    # Try as plain text
-                    text = io.StringIO(content.decode('utf-8'))
-                    return list(csv.DictReader(text))
-        except Exception as e:
-            logger.error(f"Failed to download report: {e}")
-            return []
+                    # Try ZIP format first
+                    with zipfile.ZipFile(io.BytesIO(content)) as z:
+                        names = z.namelist()
+                        with z.open(names[0]) as f:
+                            text = io.TextIOWrapper(f, encoding='utf-8', newline='')
+                            data = list(csv.DictReader(text))
+                            logger.info(f"Successfully parsed ZIP report with {len(data)} rows")
+                            return data
+                except zipfile.BadZipFile:
+                    # Try GZIP format
+                    try:
+                        with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz:
+                            text = io.TextIOWrapper(gz, encoding='utf-8', newline='')
+                            data = list(csv.DictReader(text))
+                            logger.info(f"Successfully parsed GZIP report with {len(data)} rows")
+                            return data
+                    except Exception:
+                        # Try as plain text
+                        text = io.StringIO(content.decode('utf-8'))
+                        data = list(csv.DictReader(text))
+                        logger.info(f"Successfully parsed plain text report with {len(data)} rows")
+                        return data
+                        
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to download report after {max_retries} attempts: {e}")
+                    return []
+                logger.warning(f"Report download failed (attempt {attempt + 1}/{max_retries}): {e}")
+                time.sleep(retry_delay * (attempt + 1))
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to parse report after {max_retries} attempts: {e}")
+                    return []
+                logger.warning(f"Report parsing failed (attempt {attempt + 1}/{max_retries}): {e}")
+                time.sleep(retry_delay * (attempt + 1))
+        
+        return []
     
     def wait_for_report(self, report_id: str, timeout: int = 300) -> Optional[str]:
         """Wait for report to be ready with adaptive polling (exponential backoff)"""

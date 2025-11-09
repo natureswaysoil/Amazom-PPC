@@ -200,6 +200,8 @@ def update_dashboard(results, config):
         for attempt in range(max_retries):
             try:
                 logger.info(f"Updating dashboard (attempt {attempt + 1}/{max_retries})...")
+                logger.debug(f"Dashboard URL: {api_endpoint}")
+                logger.debug(f"Payload preview: {str(payload)[:500]}")
                 
                 response = requests.post(
                     api_endpoint,
@@ -208,11 +210,15 @@ def update_dashboard(results, config):
                     timeout=30  # Increased from 10s to 30s
                 )
                 
+                logger.debug(f"Response status: {response.status_code}")
+                logger.debug(f"Response headers: {dict(response.headers)}")
+                
                 if response.status_code == 200:
                     logger.info("Dashboard updated successfully")
                     return
                 else:
-                    logger.warning(f"Dashboard update returned status {response.status_code}")
+                    body_preview = response.text[:1000] if response.text else 'Empty response'
+                    logger.warning(f"Dashboard update returned status {response.status_code}: {body_preview}")
                     if attempt < max_retries - 1:
                         wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
                         logger.info(f"Retrying in {wait_time}s...")
@@ -220,14 +226,18 @@ def update_dashboard(results, config):
                         time.sleep(wait_time)
                     
             except requests.exceptions.Timeout:
-                logger.warning(f"Dashboard request timeout (attempt {attempt + 1}/{max_retries})")
+                logger.warning(f"Dashboard request timeout to {api_endpoint} (attempt {attempt + 1}/{max_retries})")
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)
                     logger.info(f"Retrying in {wait_time}s...")
                     import time
                     time.sleep(wait_time)
             except requests.exceptions.RequestException as e:
-                logger.warning(f"Dashboard request failed (attempt {attempt + 1}/{max_retries}): {e}")
+                logger.warning(f"Dashboard request failed to {api_endpoint} (attempt {attempt + 1}/{max_retries}): {e}")
+                logger.debug(f"Exception type: {type(e).__name__}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.debug(f"Error response status: {e.response.status_code}")
+                    logger.debug(f"Error response body: {e.response.text[:500]}")
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)
                     logger.info(f"Retrying in {wait_time}s...")
