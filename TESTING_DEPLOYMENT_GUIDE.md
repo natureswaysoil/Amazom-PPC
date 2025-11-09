@@ -9,10 +9,16 @@
 gcloud config set project amazon-ppc-474902
 
 # Deploy the function with updated code
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
   --region=us-central1 \
+  --project="$PROJECT_ID" \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
@@ -168,9 +174,15 @@ gcloud logging read \
 **Solution:** Cloud Functions defaults to INFO level. Set LOG_LEVEL environment variable:
 
 ```bash
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   ... (other flags) \
+  --project="$PROJECT_ID" \
   --set-env-vars LOG_LEVEL=DEBUG
 ```
 
@@ -187,9 +199,15 @@ logging.basicConfig(level=getattr(logging, log_level))
 **Solution:** Use INFO level and only ERROR/WARNING will show request/response details:
 
 ```bash
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   ... (other flags) \
+  --project="$PROJECT_ID" \
   --set-env-vars LOG_LEVEL=INFO
 ```
 

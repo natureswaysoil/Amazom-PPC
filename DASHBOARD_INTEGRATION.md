@@ -67,7 +67,13 @@ For production, set dashboard configuration via environment variables:
 
 ```bash
 # In Google Cloud Functions deployment
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
+  --project="$PROJECT_ID" \
   --set-env-vars \
     DASHBOARD_URL="https://ppc-dashboard.abacusai.app",\
     DASHBOARD_API_KEY="your_api_key_here"

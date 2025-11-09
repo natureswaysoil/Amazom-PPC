@@ -22,10 +22,16 @@ git pull origin main
 ```bash
 gcloud config set project amazon-ppc-474902
 
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
   --region=us-central1 \
+  --project="$PROJECT_ID" \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \

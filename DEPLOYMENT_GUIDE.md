@@ -119,10 +119,16 @@ git clone https://github.com/natureswaysoil/Amazom-PPC.git
 cd Amazom-PPC
 
 # Deploy to Cloud Functions with Secret Manager
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
   --region=us-central1 \
+  --project="$PROJECT_ID" \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
@@ -145,10 +151,16 @@ gcloud functions deploy amazon-ppc-optimizer \
 
 ```bash
 # Deploy with environment variables
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
   --region=us-central1 \
+  --project="$PROJECT_ID" \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
@@ -199,7 +211,13 @@ PPC_CONFIG='{"amazon_api": {...}, "bid_optimization": {...}}'
 To update environment variables after deployment:
 
 ```bash
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
+  --project="$PROJECT_ID" \
   --update-env-vars AMAZON_REFRESH_TOKEN="new_refresh_token"
 ```
 
@@ -386,10 +404,16 @@ https://ppc-dashboard.abacusai.app
 
 1. **Redeploy with authentication** (CRITICAL):
    ```bash
+   PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+   # If this prints "(unset)", set your active project first:
+   # gcloud config set project YOUR_PROJECT_ID
+
    gcloud functions deploy amazon-ppc-optimizer \
      --gen2 \
      --runtime=python311 \
      --region=us-central1 \
+     --project="$PROJECT_ID" \
      --source=. \
      --entry-point=run_optimizer \
      --trigger-http \

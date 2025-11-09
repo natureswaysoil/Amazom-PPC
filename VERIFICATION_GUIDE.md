@@ -709,7 +709,13 @@ echo -n "your-api-key" | \
   gcloud secrets create dashboard-api-key --data-file=-
 
 # Deploy with secrets
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
+  --project="$PROJECT_ID" \
   --set-secrets=DASHBOARD_URL=dashboard-url:latest,DASHBOARD_API_KEY=dashboard-api-key:latest
 ```
 

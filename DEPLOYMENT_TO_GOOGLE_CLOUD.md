@@ -101,10 +101,16 @@ Use the config.json file in the repository (ensure credentials are valid):
 ### Basic Deployment
 
 ```bash
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
   --region=us-central1 \
+  --project="$PROJECT_ID" \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
@@ -116,11 +122,16 @@ gcloud functions deploy amazon-ppc-optimizer \
 ### Deployment with Environment Variables
 
 ```bash
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
   --gen2 \
   --runtime=python311 \
   --region=us-central1 \
-  --project=YOUR_PROJECT_ID \
+  --project="$PROJECT_ID" \
   --source=. \
   --entry-point=run_optimizer \
   --trigger-http \
@@ -304,7 +315,13 @@ Error: Function execution took 540001 ms, finished with status: 'timeout'
 **Solution**:
 ```bash
 # Increase timeout to 9 minutes
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
+  --project="$PROJECT_ID" \
   --timeout=540s \
   --update-env-vars="..." \
   [other flags...]
@@ -318,7 +335,13 @@ Error: Memory limit exceeded
 **Solution**:
 ```bash
 # Increase memory allocation
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+
+# If this prints "(unset)", set your active project first:
+# gcloud config set project YOUR_PROJECT_ID
+
 gcloud functions deploy amazon-ppc-optimizer \
+  --project="$PROJECT_ID" \
   --memory=1024MB \
   --update-env-vars="..." \
   [other flags...]
