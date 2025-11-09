@@ -1,11 +1,32 @@
-FROM python:3.10-slim
+# syntax=docker/dockerfile:1
+
+FROM node:20-bullseye-slim AS builder
 
 WORKDIR /app
-COPY . /app
 
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+# Copy package definition files first for better caching
+COPY package*.json ./
 
-ENV PYTHONUNBUFFERED=TRUE
+# Install dependencies including devDependencies for building TypeScript
+RUN npm install
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "main:run_health_check"]
+# Copy source files
+COPY tsconfig.json ./
+COPY src ./src
+COPY index.js ./
+
+# Build the TypeScript sources
+RUN npm run build
+
+FROM node:20-bullseye-slim
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+# Copy only the runtime artifacts
+COPY --from=builder /app/dist ./dist
+COPY index.js ./
+COPY package.json ./
+
+# Use the compiled server entrypoint by default
+CMD ["node", "dist/server.js"]
