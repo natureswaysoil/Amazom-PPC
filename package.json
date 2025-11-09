@@ -1,8 +1,15 @@
 {
-  "name": "amazon-ppc-docs",
-  "version": "1.0.0",
-  "description": "Documentation for Amazon PPC Optimizer",
+  "name": "amazon-ppc-sync",
+  "version": "1.1.0",
+  "description": "Amazon PPC data sync service for Cloud Run with documentation helper scripts",
+  "main": "index.js",
+  "private": true,
   "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js",
     "build:docs": "echo 'Documentation build complete - all markdown files are ready'"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
