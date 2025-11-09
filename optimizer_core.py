@@ -414,11 +414,13 @@ class AuditLogger:
 class AmazonAdsAPI:
     """Amazon Advertising API client with retry logic and rate limiting"""
     
-    def __init__(self, profile_id: str, region: str = "NA", max_requests_per_second: int = None, 
+    def __init__(self, profile_id: str, region: str = "NA", max_requests_per_second: int = None,
                  session: requests.Session = None):
         self.profile_id = profile_id
         self.region = region.upper()
         self.base_url = ENDPOINTS.get(self.region, ENDPOINTS["NA"])
+        # Ensure client ID attribute exists even if authentication fails early
+        self.client_id: Optional[str] = None
         self.auth = self._authenticate()
         self.rate_limiter = RateLimiter(max_requests_per_second or MAX_REQUESTS_PER_SECOND)
         self.session = session or requests.Session()
@@ -434,12 +436,18 @@ class AmazonAdsAPI:
         
         if not all([client_id, client_secret, refresh_token]):
             logger.error("Missing required environment variables")
-            raise AuthenticationError("Missing required environment variables: AMAZON_CLIENT_ID, AMAZON_CLIENT_SECRET, or AMAZON_REFRESH_TOKEN")
-        
+            raise AuthenticationError(
+                "Missing required environment variables: AMAZON_CLIENT_ID, "
+                "AMAZON_CLIENT_SECRET, or AMAZON_REFRESH_TOKEN"
+            )
+
         # Log credential status (masked)
         logger.debug(f"Auth attempt - client_id: {client_id[:8] if client_id else 'MISSING'}..., "
                     f"client_secret: {'SET' if client_secret else 'MISSING'}, "
                     f"refresh_token: {refresh_token[:12] if refresh_token else 'MISSING'}...")
+
+        # Cache client ID for use in request headers
+        self.client_id = client_id
         
         payload = {
             "grant_type": "refresh_token",
