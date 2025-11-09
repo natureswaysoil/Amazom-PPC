@@ -6,7 +6,9 @@ functions-framework==3.*
 
 # Google Cloud BigQuery
 google-cloud-bigquery==3.25.0
-google-cloud-bigquery-datatransfer==1.14.0
+# Latest google-cloud-bigquery-datatransfer releases support Python 3.11.
+# Pin to a compatible 3.x version to ensure deployment succeeds.
+google-cloud-bigquery-datatransfer==3.20.0
 
 # Core dependencies for optimizer
 requests==2.31.0
