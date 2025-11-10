@@ -1,0 +1,16 @@
+# Exclude development and VCS metadata
+.git
+.gitignore
+
+# Exclude local dependencies and build artifacts
+node_modules
+npm-debug.log*
+dist
+
+# Environment configuration files should be provided via secrets
+.env
+.env.*
+
+# Keep TypeScript sources and configuration in the build context
+!tsconfig.json
+!src/**/*

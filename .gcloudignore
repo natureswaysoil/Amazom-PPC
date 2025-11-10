@@ -37,3 +37,5 @@ tests/
 # Local development files
 *.local
 .envrc
+
+# Ensure essential build inputs are always included
