@@ -755,7 +755,7 @@ class AmazonAdsAPI:
     # ========================================================================
     
     def get_keywords(self, campaign_id: str = None, ad_group_id: str = None) -> List[Keyword]:
-        """Get keywords"""
+        """Get keywords using extended endpoint"""
         try:
             params = {}
             if campaign_id:
@@ -763,7 +763,8 @@ class AmazonAdsAPI:
             if ad_group_id:
                 params['adGroupIdFilter'] = ad_group_id
             
-            response = self._request('GET', '/v2/sp/keywords', params=params)
+            # Use extended keywords endpoint (v2/sp/keywords is deprecated)
+            response = self._request('GET', '/v2/sp/keywords/extended', params=params)
             keywords_data = response.json()
             
             keywords = []
