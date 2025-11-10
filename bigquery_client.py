@@ -14,6 +14,7 @@ Author: Nature's Way Soil
 Version: 1.0.0
 """
 
+import base64
 import logging
 import json
 import os
@@ -113,18 +114,31 @@ class BigQueryClient:
             try:
                 logger.debug(f"Attempting to parse service account JSON from {source_name}")
                 credentials_info = json.loads(raw_value)
-                if isinstance(credentials_info, dict) and credentials_info.get("type") == "service_account":
-                    return service_account.Credentials.from_service_account_info(credentials_info)
-                logger.warning(
-                    "Environment variable %s did not contain valid service account credentials", source_name
-                )
             except json.JSONDecodeError:
-                logger.debug(
-                    "Value in %s is not JSON; assuming Application Default Credentials will be used",
-                    source_name,
-                )
+                # Some deployments (e.g. GitHub/Vercel secrets) provide base64 encoded JSON
+                try:
+                    decoded_value = base64.b64decode(raw_value).decode("utf-8")
+                    logger.debug(
+                        "Value in %s appeared to be base64 encoded; attempting to decode and parse JSON",
+                        source_name,
+                    )
+                    credentials_info = json.loads(decoded_value)
+                except Exception:
+                    logger.debug(
+                        "Value in %s is not JSON or base64 encoded JSON; assuming Application Default Credentials will be used",
+                        source_name,
+                    )
+                    continue
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("Failed to load service account credentials from %s: %s", source_name, exc)
+                continue
+
+            if isinstance(credentials_info, dict) and credentials_info.get("type") == "service_account":
+                return service_account.Credentials.from_service_account_info(credentials_info)
+
+            logger.warning(
+                "Environment variable %s did not contain valid service account credentials", source_name
+            )
 
         return None
     

@@ -1,5 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Buffer } from 'buffer';
 import { BigQuery } from '@google-cloud/bigquery';
+
+function parseServiceAccount(value: string | undefined, source: string): any | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    console.log(`Attempting to parse ${source} as JSON credentials`);
+    return JSON.parse(value);
+  } catch (jsonError) {
+    try {
+      console.log(`Value in ${source} is not JSON; attempting base64 decode`);
+      const decoded = Buffer.from(value, 'base64').toString('utf8');
+      return JSON.parse(decoded);
+    } catch (decodeError) {
+      console.log(`Value in ${source} is not valid JSON or base64 encoded JSON`);
+      return undefined;
+    }
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -20,36 +41,28 @@ export async function GET(request: NextRequest) {
     let credentials: any = undefined;
     
     if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
-      try {
-        credentials = JSON.parse(process.env.GCP_SERVICE_ACCOUNT_KEY);
-        // Extract project ID from service account credentials if not already set
-        // Type-safe check for project_id property
-        if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
-          projectId = credentials.project_id;
-          console.log('Using project ID from GCP_SERVICE_ACCOUNT_KEY:', projectId);
-        }
-      } catch (e) {
-        console.error('Failed to parse GCP_SERVICE_ACCOUNT_KEY:', e);
-        return NextResponse.json({ 
+      credentials = parseServiceAccount(process.env.GCP_SERVICE_ACCOUNT_KEY, 'GCP_SERVICE_ACCOUNT_KEY');
+      if (!credentials) {
+        return NextResponse.json({
           error: 'Configuration error',
-          message: 'GCP_SERVICE_ACCOUNT_KEY is not valid JSON',
-          details: 'The GCP_SERVICE_ACCOUNT_KEY environment variable must contain a valid JSON string. Please check the format and redeploy.',
+          message: 'GCP_SERVICE_ACCOUNT_KEY is not valid JSON or base64 encoded JSON',
+          details: 'Provide the raw JSON service account key or a base64 encoded version of it in the GCP_SERVICE_ACCOUNT_KEY environment variable, then redeploy.',
         }, { status: 500 });
       }
+
+      if (!projectId && typeof credentials === 'object' && credentials.project_id) {
+        projectId = credentials.project_id;
+        console.log('Using project ID from GCP_SERVICE_ACCOUNT_KEY:', projectId);
+      }
     } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-      // Try to parse as JSON string (Vercel pattern)
-      try {
-        credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
-        // Extract project ID from service account credentials if not already set
-        // Type-safe check for project_id property
-        if (!projectId && credentials && typeof credentials === 'object' && credentials.project_id) {
-          projectId = credentials.project_id;
-          console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS:', projectId);
-        }
-      } catch (e) {
-        // If not JSON, assume it's a file path (local development)
-        // BigQuery client will handle file path automatically
+      credentials = parseServiceAccount(process.env.GOOGLE_APPLICATION_CREDENTIALS, 'GOOGLE_APPLICATION_CREDENTIALS');
+
+      if (!credentials) {
+        // If not JSON or base64 JSON, assume it's a file path (local development)
         credentials = undefined;
+      } else if (!projectId && typeof credentials === 'object' && credentials.project_id) {
+        projectId = credentials.project_id;
+        console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS:', projectId);
       }
     }
     
