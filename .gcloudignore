@@ -37,3 +37,9 @@ tests/
 # Local development files
 *.local
 .envrc
+
+# Ensure essential build inputs are always included
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/**/*
