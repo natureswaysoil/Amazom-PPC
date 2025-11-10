@@ -53,8 +53,17 @@ echo "=========================================="
 echo "Profile Analysis"
 echo "=========================================="
 
-# Check if current profile ID exists in the list
-if echo "$PROFILES" | grep -q "\"profileId\": $CURRENT_PROFILE_ID"; then
+# Check if current profile ID exists in the list (handle both string and number comparison)
+if echo "$PROFILES" | python3 -c "
+import sys, json
+try:
+    profiles = json.load(sys.stdin)
+    current = '$CURRENT_PROFILE_ID'
+    found = any(str(p.get('profileId')) == current or str(p.get('profileId')) == current.strip() for p in profiles)
+    sys.exit(0 if found else 1)
+except:
+    sys.exit(1)
+" <<< "$PROFILES"; then
     echo "✅ Current profile ID ($CURRENT_PROFILE_ID) FOUND in available profiles"
     echo ""
     echo "Profile details:"
