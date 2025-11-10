@@ -757,14 +757,29 @@ class AmazonAdsAPI:
     def get_keywords(self, campaign_id: str = None, ad_group_id: str = None) -> List[Keyword]:
         """Get keywords using extended endpoint"""
         try:
+            # v2 keywords endpoint requires filtering by campaign or ad group
+            # Cannot list all keywords without filters
+            if not campaign_id and not ad_group_id:
+                logger.warning("Keywords endpoint requires campaignIdFilter or adGroupIdFilter. Fetching by campaign...")
+                # Get all campaigns first
+                campaigns = self.get_campaigns()
+                all_keywords = []
+                for camp in campaigns[:10]:  # Limit to first 10 campaigns to avoid rate limits
+                    try:
+                        camp_keywords = self.get_keywords(campaign_id=camp.campaign_id)
+                        all_keywords.extend(camp_keywords)
+                    except Exception as e:
+                        logger.error(f"Failed to get keywords for campaign {camp.campaign_id}: {e}")
+                return all_keywords
+            
             params = {}
             if campaign_id:
                 params['campaignIdFilter'] = campaign_id
             if ad_group_id:
                 params['adGroupIdFilter'] = ad_group_id
             
-            # Use extended keywords endpoint (v2/sp/keywords is deprecated)
-            response = self._request('GET', '/v2/sp/keywords/extended', params=params)
+            # Use standard v2 keywords endpoint with filters
+            response = self._request('GET', '/v2/sp/keywords', params=params)
             keywords_data = response.json()
             
             keywords = []
