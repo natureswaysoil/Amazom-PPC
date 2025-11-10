@@ -3,11 +3,19 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function POST(request: NextRequest) {
   try {
     // Verify API key
-    const authHeader = request.headers.get('authorization');
     const apiKey = process.env.DASHBOARD_API_KEY;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== apiKey) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const authHeader = request.headers.get('authorization');
+    const bearerToken = authHeader?.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : authHeader || undefined;
+    const headerApiKey = request.headers.get('x-api-key') ?? undefined;
+
+    if (apiKey) {
+      if (bearerToken !== apiKey && headerApiKey !== apiKey) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+    } else {
+      console.warn('DASHBOARD_API_KEY is not set. Skipping authentication.');
     }
 
     const body = await request.json();
