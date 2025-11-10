@@ -1,5 +1,5 @@
 import http from 'http';
-import { createDefaultProcessor, PlatformName, PublishOptions, VideoJob } from './processor-core';
+import { createDefaultProcessor, PlatformName, PublishOptions, VideoJob } from './core';
 
 export interface ServerConfig {
   port?: number;

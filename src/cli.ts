@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createDefaultProcessor, loadJobFromFile, PlatformName } from './processor-core';
+import { createDefaultProcessor, loadJobFromFile, PlatformName } from './core';
 
 interface CliOptions {
   jobFile: string;

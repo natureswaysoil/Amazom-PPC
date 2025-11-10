@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import type { PublishResult, SocialPublisher, VideoJob } from './processor-core';
+import type { PublishResult, SocialPublisher, VideoJob } from './core';
 
 const REQUIRED_ENV_VARS = ['INSTAGRAM_ACCESS_TOKEN', 'INSTAGRAM_BUSINESS_ACCOUNT_ID'];
 
