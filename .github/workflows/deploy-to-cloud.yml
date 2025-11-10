@@ -29,7 +29,35 @@ env:
   BIGQUERY_LOCATION: us-east4
 
 jobs:
+  secrets-check:
+    name: Validate deployment prerequisites
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.evaluate.outputs.proceed }}
+    steps:
+      - name: Evaluate required secrets
+        id: evaluate
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          if [ -z "${GCP_PROJECT_ID}" ] || [ -z "${GCP_SA_KEY}" ]; then
+            echo "⚠️  Missing required deployment secrets. Skipping deploy job."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Deployment skipped";
+              echo "";
+              echo "The deploy-to-cloud workflow requires \`GCP_PROJECT_ID\` and \`GCP_SA_KEY\` secrets.";
+              echo "Add these secrets to enable automatic Google Cloud deployments.";
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "✅ Required secrets detected. Proceeding with deployment."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy:
+    needs: secrets-check
+    if: needs.secrets-check.outputs.proceed == 'true'
     name: Deploy to Google Cloud Functions
     runs-on: ubuntu-latest
     permissions:
@@ -321,9 +349,11 @@ jobs:
 
   notify:
     name: Send notification
-    needs: deploy
+    needs:
+      - secrets-check
+      - deploy
     runs-on: ubuntu-latest
-    if: always()
+    if: needs.secrets-check.outputs.proceed == 'true' && always()
     permissions:
       contents: read
     
@@ -333,7 +363,7 @@ jobs:
     
     steps:
       - name: Send deployment notification
-        if: success() && env.GMAIL_USER != '' && env.GMAIL_PASS != ''
+        if: needs.deploy.result == 'success' && env.GMAIL_USER != '' && env.GMAIL_PASS != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -358,7 +388,7 @@ jobs:
             Next: The health check workflow will verify the deployment.
       
       - name: Send failure notification
-        if: failure() && env.GMAIL_USER != '' && env.GMAIL_PASS != ''
+        if: needs.deploy.result != 'success' && env.GMAIL_USER != '' && env.GMAIL_PASS != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
