@@ -7,10 +7,6 @@ node_modules
 npm-debug.log*
 dist
 
-# Python cache directories that may appear during local tooling runs
-__pycache__/
-*.py[cod]
-
 # Environment configuration files should be provided via secrets
 .env
 .env.*
