@@ -103,9 +103,10 @@ class DashboardClient:
             'Content-Type': 'application/json',
             'User-Agent': 'NWS-PPC-Optimizer/2.0'
         }
-        
+
         if self.api_key:
             headers['Authorization'] = f'Bearer {self.api_key}'
+            headers['X-API-Key'] = self.api_key
         
         if self.profile_id:
             headers['X-Profile-ID'] = str(self.profile_id)
@@ -130,11 +131,15 @@ class DashboardClient:
         
         try:
             url = f"{self.url}{endpoint}"
-            
+
             # Log request details (mask API key)
             safe_headers = self._get_headers()
-            if safe_headers and 'X-API-Key' in safe_headers:
-                safe_headers_log = {**safe_headers, 'X-API-Key': 'REDACTED'}
+            if safe_headers:
+                safe_headers_log = safe_headers.copy()
+                if 'Authorization' in safe_headers_log:
+                    safe_headers_log['Authorization'] = 'Bearer ***REDACTED***'
+                if 'X-API-Key' in safe_headers_log:
+                    safe_headers_log['X-API-Key'] = 'REDACTED'
             else:
                 safe_headers_log = safe_headers
             logger.debug(f"Dashboard {method} {url}")

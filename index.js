@@ -12,6 +12,8 @@ const API_HOSTS = {
 
 const TOKEN_ENDPOINT = 'https://api.amazon.com/auth/o2/token';
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 1000; // refresh one minute before expiry
+const SP_API_VERSION = '2024-05-01';
+const REPORTS_API_VERSION = '2024-05-01';
 
 class AmazonAdvertisingClient {
   constructor(options = {}) {
@@ -132,13 +134,15 @@ class AmazonAdvertisingClient {
       signal,
     } = options;
 
-    const url = this._buildUrl(path, query);
+    const upgradedPath = this._upgradePath(typeof path === 'string' ? path : '');
+    const url = this._buildUrl(upgradedPath, query);
 
     const attempt = async (forceRefresh = false) => {
       const token = await this.getAccessToken({ forceRefresh });
       const requestHeaders = {
         'Authorization': `Bearer ${token}`,
         'Amazon-Advertising-API-ClientId': this.clientId,
+        'Accept': 'application/json',
         ...headers,
       };
 
@@ -221,6 +225,30 @@ class AmazonAdvertisingClient {
     });
 
     return Array.isArray(response) ? response : [];
+  }
+
+  _upgradePath(path) {
+    if (!path.startsWith('/v2/')) {
+      return path;
+    }
+
+    const replacements = [
+      ['/v2/sp/campaigns', `/sp/campaigns/${SP_API_VERSION}`],
+      ['/v2/sp/adGroups', `/sp/adGroups/${SP_API_VERSION}`],
+      ['/v2/sp/keywords/extended', `/sp/keywords/extended/${SP_API_VERSION}`],
+      ['/v2/sp/keywords', `/sp/keywords/${SP_API_VERSION}`],
+      ['/v2/sp/negativeKeywords', `/sp/negativeKeywords/${SP_API_VERSION}`],
+      ['/v2/sp/targets/keywords/recommendations', `/sp/targets/keywords/recommendations/${SP_API_VERSION}`],
+      ['/v2/reports', `/reports/${REPORTS_API_VERSION}`],
+    ];
+
+    for (const [legacy, modern] of replacements) {
+      if (path.startsWith(legacy)) {
+        return `${modern}${path.slice(legacy.length)}`;
+      }
+    }
+
+    return path;
   }
 
   _buildUrl(path, query) {

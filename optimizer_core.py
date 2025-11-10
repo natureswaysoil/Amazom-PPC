@@ -77,6 +77,10 @@ ENDPOINTS = {
 TOKEN_URL = "https://api.amazon.com/auth/o2/token"
 USER_AGENT = "NWS-PPC-Automation/2.0"
 
+# Amazon Ads API versions (v2 deprecated as of November 2025)
+SP_API_VERSION = "2024-05-01"
+REPORTS_API_VERSION = "2024-05-01"
+
 # Rate limiting - Amazon Advertising API supports 10 requests/second
 MAX_REQUESTS_PER_SECOND = 10
 REQUEST_INTERVAL = 1.0 / MAX_REQUESTS_PER_SECOND
@@ -504,12 +508,38 @@ class AmazonAdsAPI:
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
         }
-    
+
+    def _upgrade_endpoint(self, endpoint: str) -> str:
+        """Translate deprecated v2 endpoints to the v3-style versioned paths."""
+
+        if not endpoint.startswith("/v2/"):
+            return endpoint
+
+        replacements = {
+            "/v2/sp/campaigns": f"/sp/campaigns/{SP_API_VERSION}",
+            "/v2/sp/adGroups": f"/sp/adGroups/{SP_API_VERSION}",
+            "/v2/sp/keywords/extended": f"/sp/keywords/extended/{SP_API_VERSION}",
+            "/v2/sp/keywords": f"/sp/keywords/{SP_API_VERSION}",
+            "/v2/sp/negativeKeywords": f"/sp/negativeKeywords/{SP_API_VERSION}",
+            "/v2/sp/targets/keywords/recommendations": (
+                f"/sp/targets/keywords/recommendations/{SP_API_VERSION}"
+            ),
+            "/v2/reports": f"/reports/{REPORTS_API_VERSION}",
+        }
+
+        for old_prefix, new_prefix in replacements.items():
+            if endpoint.startswith(old_prefix):
+                suffix = endpoint[len(old_prefix):]
+                return f"{new_prefix}{suffix}"
+
+        return endpoint
+
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         """Make API request with retry logic and rate limiting using connection pooling"""
         self.rate_limiter.wait_if_needed()
-        
-        url = f"{self.base_url}{endpoint}"
+
+        upgraded_endpoint = self._upgrade_endpoint(endpoint)
+        url = f"{self.base_url}{upgraded_endpoint}"
         max_retries = 3
         retry_delay = 1
         
@@ -545,7 +575,7 @@ class AmazonAdsAPI:
                 if response.status_code >= 400:
                     body_preview = response.text[:1000] if response.text else 'Empty response'
                     logger.error(f"Amazon API error {response.status_code}: {body_preview}")
-                
+
                 response.raise_for_status()
                 return response
                 
@@ -885,18 +915,113 @@ class AmazonAdsAPI:
     # REPORTS
     # ========================================================================
     
-    def create_report(self, report_type: str, metrics: List[str], 
+    def create_report(self, report_type: str, metrics: List[str],
                      report_date: str = None, segment: str = None) -> Optional[str]:
-        """Create performance report - TEMPORARILY DISABLED (v2 reporting deprecated)"""
-        logger.warning(f"Report creation disabled - v2 reporting API deprecated. Skipping {report_type} report.")
-        logger.info("Note: Campaigns can still be managed without reports. To re-enable, migrate to v3 reporting API.")
-        return None
-    
+        """Create performance report using the Amazon Ads Reporting v3 API."""
+
+        report_type = (report_type or '').lower()
+        segment = (segment or '').lower() or None
+
+        report_definitions = {
+            'campaigns': {
+                'reportTypeId': 'spCampaigns',
+                'groupBy': ['campaign'],
+            },
+            'keywords': {
+                'reportTypeId': 'spKeywords',
+                'groupBy': ['campaign', 'adGroup', 'keyword'],
+            },
+            'targets': {
+                'reportTypeId': 'spTargets',
+                'groupBy': ['campaign', 'adGroup', 'targeting'],
+            },
+            'targets:query': {
+                'reportTypeId': 'spSearchTerm',
+                'groupBy': ['campaign', 'adGroup', 'searchTerm'],
+            },
+        }
+
+        definition_key = report_type if segment is None else f"{report_type}:{segment}"
+        definition = report_definitions.get(definition_key)
+
+        if not definition:
+            logger.error(f"Unsupported report configuration: type={report_type}, segment={segment}")
+            return None
+
+        try:
+            if report_date:
+                if len(report_date) == 8:
+                    start_date = datetime.strptime(report_date, '%Y%m%d').date()
+                else:
+                    start_date = datetime.strptime(report_date, '%Y-%m-%d').date()
+            else:
+                start_date = (datetime.utcnow() - timedelta(days=1)).date()
+            end_date = start_date
+        except ValueError as exc:
+            logger.error(f"Invalid report date '{report_date}': {exc}")
+            return None
+
+        columns = metrics or []
+
+        payload = {
+            'name': f"{report_type}-report-{start_date.isoformat()}",
+            'startDate': start_date.isoformat(),
+            'endDate': end_date.isoformat(),
+            'format': 'GZIP_JSON',
+            'timeUnit': 'SUMMARY',
+            'configuration': {
+                'adProduct': 'SPONSORED_PRODUCTS',
+                'reportTypeId': definition['reportTypeId'],
+                'columns': columns,
+                'metrics': columns,
+            }
+        }
+
+        if definition.get('groupBy'):
+            payload['configuration']['groupBy'] = definition['groupBy']
+
+        try:
+            response = self._request('POST', f'/reports/{REPORTS_API_VERSION}', json=payload)
+            data = response.json() if response.content else {}
+            report_id = data.get('reportId') or data.get('report_id')
+
+            if not report_id:
+                logger.error(f"Unexpected create_report response: {data}")
+                return None
+
+            logger.info(f"Created report {report_id} ({definition['reportTypeId']})")
+            return report_id
+        except Exception as exc:
+            logger.error(f"Failed to create report: {exc}")
+            return None
+
     def get_report_status(self, report_id: str) -> Dict:
         """Get report status"""
         try:
-            response = self._request('GET', f'/v2/reports/{report_id}')
-            return response.json()
+            endpoint = f"/reports/{REPORTS_API_VERSION}/{report_id}"
+            response = self._request('GET', endpoint)
+            data = response.json() if response.content else {}
+
+            # Normalise status fields so downstream logic can continue to work.
+            if 'status' not in data:
+                if 'processingStatus' in data:
+                    data['status'] = data['processingStatus']
+                elif 'state' in data:
+                    data['status'] = data['state']
+
+            # Normalise download location keys
+            if 'location' not in data:
+                location = None
+                if isinstance(data.get('url'), str):
+                    location = data['url']
+                elif isinstance(data.get('report'), dict):
+                    location = data['report'].get('url') or data['report'].get('downloadUrl')
+                elif isinstance(data.get('file'), dict):
+                    location = data['file'].get('url')
+                if location:
+                    data['location'] = location
+
+            return data
         except Exception as e:
             logger.error(f"Failed to get report status: {e}")
             return {}
@@ -969,13 +1094,13 @@ class AmazonAdsAPI:
         
         while time.time() - start_time < timeout:
             status_data = self.get_report_status(report_id)
-            status = status_data.get('status')
-            
-            if status == 'SUCCESS':
+            status = (status_data.get('status') or '').upper()
+
+            if status in {'SUCCESS', 'COMPLETED', 'DONE'}:
                 elapsed = time.time() - start_time
                 logger.info(f"Report {report_id} ready in {elapsed:.1f}s")
                 return status_data.get('location')
-            elif status in ['FAILURE', 'CANCELLED']:
+            elif status in {'FAILURE', 'FAILED', 'CANCELLED'}:
                 logger.error(f"Report {report_id} failed: {status}")
                 return None
             
