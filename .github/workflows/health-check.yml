@@ -51,15 +51,26 @@ jobs:
         with:
           version: '>= 471.0.0'
 
-      - name: Auth to Google Cloud (if configured)
-        if: ${{ env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true }}
+      - name: Auth to Google Cloud via Workload Identity
+        if: ${{ (env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true) && secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' }}
         uses: google-github-actions/auth@v2
         with:
-          # Prefer workload identity federation
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          # Fallback to JSON key if provided (less secure)
+
+      - name: Auth to Google Cloud via JSON key
+        if: ${{ (env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true) && (secrets.GCP_WORKLOAD_IDENTITY_PROVIDER == '' || secrets.GCP_WORKLOAD_IDENTITY_PROVIDER == null || secrets.GCP_SERVICE_ACCOUNT == '' || secrets.GCP_SERVICE_ACCOUNT == null) && secrets.GCP_SA_KEY != '' }}
+        uses: google-github-actions/auth@v2
+        with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Fail if Google Cloud auth is required but not configured
+        if: ${{ (env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true) && (secrets.GCP_WORKLOAD_IDENTITY_PROVIDER == '' || secrets.GCP_WORKLOAD_IDENTITY_PROVIDER == null || secrets.GCP_SERVICE_ACCOUNT == '' || secrets.GCP_SERVICE_ACCOUNT == null) && (secrets.GCP_SA_KEY == '' || secrets.GCP_SA_KEY == null) }}
+        run: |
+          echo "::error::Google Cloud auth is required but no valid credentials were provided."
+          echo "Set GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT secrets for workload identity,"
+          echo "or provide GCP_SA_KEY for JSON key authentication."
+          exit 1
 
       - name: Resolve FUNCTION_URL
         id: resolve_url
