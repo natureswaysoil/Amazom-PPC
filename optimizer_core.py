@@ -500,10 +500,14 @@ class AmazonAdsAPI:
         """Get API request headers"""
         self._refresh_auth_if_needed()
 
+        client_id = self.client_id or os.getenv("AMAZON_CLIENT_ID", "")
+        if not client_id:
+            logger.warning("Amazon client ID missing when preparing headers")
+
         return {
-            "Authorization": f"{self.auth.token_type} {self.auth.access_token}",
+            "Authorization": f"Bearer {self.auth.access_token}",
             "Content-Type": "application/json",
-            "Amazon-Advertising-API-ClientId": self.client_id,
+            "Amazon-Advertising-API-ClientId": client_id,
             "Amazon-Advertising-API-Scope": self.profile_id,
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
@@ -543,6 +547,8 @@ class AmazonAdsAPI:
         max_retries = 3
         retry_delay = 1
         
+        reauth_attempted = False
+
         for attempt in range(max_retries):
             try:
                 # Log request details (mask sensitive headers)
@@ -570,15 +576,25 @@ class AmazonAdsAPI:
                     logger.warning(f"Rate limit hit, waiting {retry_after}s...")
                     time.sleep(retry_after)
                     continue
-                
+
                 # Log response body preview for errors
                 if response.status_code >= 400:
                     body_preview = response.text[:1000] if response.text else 'Empty response'
                     logger.error(f"Amazon API error {response.status_code}: {body_preview}")
 
+                    if response.status_code in (401, 403) and not reauth_attempted:
+                        logger.info(
+                            "Received %s from Amazon Ads API; refreshing credentials and retrying",
+                            response.status_code,
+                        )
+                        self.auth = self._authenticate()
+                        reauth_attempted = True
+                        time.sleep(retry_delay * (attempt + 1))
+                        continue
+
                 response.raise_for_status()
                 return response
-                
+
             except requests.exceptions.HTTPError as e:
                 if attempt == max_retries - 1:
                     logger.error(f"Request failed after {max_retries} attempts: {e}")
