@@ -886,30 +886,10 @@ class AmazonAdsAPI:
     
     def create_report(self, report_type: str, metrics: List[str], 
                      report_date: str = None, segment: str = None) -> Optional[str]:
-        """Create performance report"""
-        try:
-            if report_date is None:
-                report_date = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
-            
-            payload = {
-                'reportDate': report_date,
-                'metrics': ','.join(metrics)
-            }
-            
-            if segment:
-                payload['segment'] = segment
-            
-            # Amazon Ads API v2 - still supported for Sponsored Products
-            # Note: Some accounts may need migration to v3/SigV4
-            endpoint = f'/v2/sp/{report_type}/report'
-            response = self._request('POST', endpoint, json=payload)
-            report_id = response.json().get('reportId')
-            
-            logger.info(f"Created report {report_id} (type: {report_type})")
-            return report_id
-        except Exception as e:
-            logger.error(f"Failed to create report: {e}")
-            return None
+        """Create performance report - TEMPORARILY DISABLED (v2 reporting deprecated)"""
+        logger.warning(f"Report creation disabled - v2 reporting API deprecated. Skipping {report_type} report.")
+        logger.info("Note: Campaigns can still be managed without reports. To re-enable, migrate to v3 reporting API.")
+        return None
     
     def get_report_status(self, report_id: str) -> Dict:
         """Get report status"""
