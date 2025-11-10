@@ -5,7 +5,7 @@ import sys
 import tempfile
 import traceback
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple, Any
 import functions_framework
 import smtplib
@@ -75,6 +75,128 @@ if _log_level_fallback and _raw_log_level is not None:
     logger.warning(
         "Invalid LOG_LEVEL value '%s'; defaulting to INFO", _raw_log_level
     )
+
+
+DEFAULT_MIN_RUN_INTERVAL_MINUTES = 120
+LAST_RUN_CACHE_PATH = "/tmp/ppc_optimizer_last_run.txt"
+_LAST_RUN_MEMORY: Optional[datetime] = None
+
+
+def _normalise_timestamp(value: Optional[datetime]) -> Optional[datetime]:
+    """Convert timestamp to naive UTC for consistent comparisons."""
+
+    if not isinstance(value, datetime):
+        return None
+
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return value
+
+
+def _get_last_run_memory() -> Optional[datetime]:
+    """Return the last run timestamp stored in process memory."""
+
+    return _LAST_RUN_MEMORY
+
+
+def _update_last_run_memory(timestamp: datetime) -> None:
+    """Persist last run timestamp in process memory (naive UTC)."""
+
+    global _LAST_RUN_MEMORY
+    _LAST_RUN_MEMORY = _normalise_timestamp(timestamp)
+
+
+def _read_last_run_from_cache(path: str = LAST_RUN_CACHE_PATH) -> Optional[datetime]:
+    """Read last run timestamp from local cache file."""
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw_value = handle.read().strip()
+
+        if not raw_value:
+            return None
+
+        try:
+            parsed = datetime.fromisoformat(raw_value)
+        except ValueError:
+            logger.warning("Invalid timestamp cached at %s; ignoring", path)
+            return None
+
+        return _normalise_timestamp(parsed)
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logger.debug("Failed to read last-run cache from %s: %s", path, exc)
+        return None
+
+
+def _write_last_run_to_cache(timestamp: datetime, path: str = LAST_RUN_CACHE_PATH) -> None:
+    """Write last run timestamp to local cache file (best effort)."""
+
+    normalised = _normalise_timestamp(timestamp)
+    if normalised is None:
+        return
+
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(normalised.isoformat())
+    except Exception as exc:
+        logger.debug("Failed to update last-run cache at %s: %s", path, exc)
+
+
+def _select_latest_timestamp(*timestamps: Optional[datetime]) -> Optional[datetime]:
+    """Return the most recent timestamp from the provided values."""
+
+    valid = [ts for ts in timestamps if isinstance(ts, datetime)]
+    if not valid:
+        return None
+
+    return max(valid)
+
+
+def _parse_positive_int(value: Any, source: str) -> Optional[int]:
+    """Parse a positive integer (>=0) from value; log on failure."""
+
+    if value is None:
+        return None
+
+    try:
+        value_str = str(value).strip()
+    except Exception:
+        logger.warning("Invalid %s value '%s'; ignoring", source, value)
+        return None
+
+    if not value_str:
+        return None
+
+    try:
+        parsed = int(value_str)
+        if parsed < 0:
+            raise ValueError
+        return parsed
+    except ValueError:
+        logger.warning("Invalid %s value '%s'; ignoring", source, value)
+        return None
+
+
+def _get_min_run_interval_minutes(config: Dict[str, Any]) -> int:
+    """Determine the minimum run interval from env or configuration."""
+
+    env_override = _parse_positive_int(os.getenv("MIN_RUN_INTERVAL_MINUTES"), "MIN_RUN_INTERVAL_MINUTES")
+    if env_override is not None:
+        return env_override
+
+    schedule_config = config.get("schedule") if isinstance(config, dict) else None
+    if isinstance(schedule_config, dict):
+        config_value = _parse_positive_int(
+            schedule_config.get("min_run_interval_minutes"),
+            "schedule.min_run_interval_minutes",
+        )
+        if config_value is not None:
+            return config_value
+
+    return DEFAULT_MIN_RUN_INTERVAL_MINUTES
 
 
 @contextmanager
@@ -439,6 +561,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     - ?health=true: Quick health check without running optimization
     - ?verify_connection=true: Verify Amazon Ads API connection with small sample
     - ?dry_run=true: Run optimization without making actual changes
+    - ?force=true: Bypass the minimum run interval guard (use sparingly)
     - Normal execution: Full optimization run
     
     The optimizer automatically refreshes the Amazon Advertising API access token
@@ -468,6 +591,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     dashboard_client = None
     bigquery_client = None
     dry_run = False
+    run_id: Optional[str] = None
     
     try:
         # Parse request JSON if available
@@ -492,7 +616,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
         
         # Initialize dashboard client
         dashboard_client = DashboardClient(config)
-        
+
         # Initialize BigQuery client (if configured)
         bigquery_config = config.get('bigquery', {})
         if bigquery_config.get('enabled', False):
@@ -510,11 +634,86 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
                     logger.warning("BigQuery enabled but no project_id configured")
             except Exception as bq_err:
                 logger.warning(f"Failed to initialize BigQuery client (non-blocking): {bq_err}")
-        
+
+        # Determine run cadence and enforce minimum interval
+        now_utc = datetime.utcnow()
+        min_interval_minutes = _get_min_run_interval_minutes(config)
+        force_run = request.args.get('force', '').lower() == 'true' or bool(request_json.get('force'))
+
+        if not force_run and min_interval_minutes > 0:
+            last_run_candidates = [
+                _get_last_run_memory(),
+                _read_last_run_from_cache(),
+            ]
+
+            if bigquery_client:
+                try:
+                    last_event = bigquery_client.get_last_run_event_timestamp()
+                    if last_event:
+                        last_run_candidates.append(last_event)
+                except Exception as guard_err:
+                    logger.warning(f"Failed to read last run event timestamp: {guard_err}")
+
+                try:
+                    last_success = bigquery_client.get_last_result_timestamp(statuses=['success'])
+                    if last_success:
+                        last_run_candidates.append(last_success)
+                except Exception as guard_err:
+                    logger.warning(f"Failed to read last successful run timestamp: {guard_err}")
+
+            last_run_time = _select_latest_timestamp(*last_run_candidates)
+
+            if last_run_time:
+                elapsed = now_utc - last_run_time
+                required_delta = timedelta(minutes=min_interval_minutes)
+
+                if elapsed < required_delta:
+                    remaining = required_delta - elapsed
+                    minutes_since = round(elapsed.total_seconds() / 60.0, 2)
+                    minutes_remaining = max(round(remaining.total_seconds() / 60.0, 2), 0.0)
+
+                    logger.warning(
+                        "Skipping optimizer run: last run at %s UTC (%.2f minutes ago). "
+                        "Minimum interval is %d minutes.",
+                        last_run_time.isoformat(),
+                        minutes_since,
+                        min_interval_minutes,
+                    )
+
+                    return {
+                        'status': 'skipped',
+                        'reason': 'run_interval_enforced',
+                        'timestamp': now_utc.isoformat(),
+                        'last_run_at': last_run_time.isoformat(),
+                        'min_interval_minutes': min_interval_minutes,
+                        'minutes_since_last_run': minutes_since,
+                        'minutes_until_next_run': minutes_remaining,
+                        'force_run_available': True,
+                    }, 200
+
+        if force_run:
+            logger.info("Force run requested - bypassing minimum interval check")
+
         # Start optimization run (generates unique run_id)
         run_id = dashboard_client.start_run(dry_run=dry_run)
+        _update_last_run_memory(now_utc)
+        _write_last_run_to_cache(now_utc)
         logger.info(f"Started optimization run: {run_id}")
-        
+
+        if bigquery_client:
+            try:
+                bigquery_client.record_run_event(
+                    run_id,
+                    'started',
+                    {
+                        'dry_run': dry_run,
+                        'forced': force_run,
+                        'min_interval_minutes': min_interval_minutes,
+                    }
+                )
+            except Exception as event_err:
+                logger.debug(f"Failed to record run start event: {event_err}")
+
         # Use context manager for temp config file (ensures cleanup)
         with create_config_file(config) as config_file_path:
             # Get profile ID with default value
@@ -567,15 +766,32 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
         
         # Prepare summary
         summary = format_results_summary(results, duration, dry_run)
-        
+
         # Send email notification
         if config.get('email_notifications', {}).get('send_on_completion', True):
             subject = f"Amazon PPC Optimization {'(DRY RUN) ' if dry_run else ''}Completed Successfully"
             send_email_notification(subject, summary, config)
-        
+
         dashboard_client.send_progress("Optimization completed successfully", 100.0)
         logger.info(f"=== Optimization Completed in {duration:.2f} seconds ===")
-        
+
+        completion_utc = datetime.utcnow()
+        _update_last_run_memory(completion_utc)
+        _write_last_run_to_cache(completion_utc)
+
+        if bigquery_client:
+            try:
+                bigquery_client.record_run_event(
+                    run_id,
+                    'completed',
+                    {
+                        'duration_seconds': duration,
+                        'dry_run': dry_run,
+                    }
+                )
+            except Exception as event_err:
+                logger.debug(f"Failed to record completion event: {event_err}")
+
         return {
             'status': 'success',
             'message': 'Optimization completed successfully',
@@ -583,15 +799,16 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
             'results': results,
             'duration_seconds': duration,
             'dry_run': dry_run,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'min_run_interval_minutes': min_interval_minutes,
         }, 200
-        
+
     except Exception as e:
         error_msg = str(e)
         error_trace = traceback.format_exc()
         logger.error(f"Optimization failed: {error_msg}")
         logger.error(error_trace)
-        
+
         # Send error to dashboard (if dashboard_client was initialized)
         if dashboard_client:
             try:
@@ -603,7 +820,20 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
                 dashboard_client.send_error(e, context)
             except Exception as dashboard_err:
                 logger.warning(f"Failed to send error to dashboard: {dashboard_err}")
-        
+
+        if bigquery_client and run_id:
+            try:
+                bigquery_client.record_run_event(
+                    run_id,
+                    'failed',
+                    {
+                        'error': error_msg,
+                        'dry_run': dry_run,
+                    }
+                )
+            except Exception as event_err:
+                logger.debug(f"Failed to record failure event: {event_err}")
+
         # Send error notification (if config was loaded)
         if config:
             try:

@@ -17,13 +17,35 @@ Version: 1.0.0
 import logging
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 from google.oauth2 import service_account
+from google.api_core import exceptions as core_exceptions
 
 logger = logging.getLogger(__name__)
+
+
+RUN_EVENTS_TABLE = "optimizer_run_events"
+RUN_EVENTS_SCHEMA = [
+    bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
+    bigquery.SchemaField("run_id", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("details", "STRING"),
+]
+
+
+def _normalise_timestamp(value: Optional[datetime]) -> Optional[datetime]:
+    """Convert BigQuery timestamps to naive UTC datetimes."""
+
+    if not isinstance(value, datetime):
+        return None
+
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return value
 
 
 class BigQueryClient:
@@ -336,7 +358,7 @@ class BigQueryClient:
     def write_error(self, error_data: Dict) -> bool:
         """
         Write optimization error to BigQuery
-        
+
         Args:
             error_data: Error data payload
             
@@ -379,7 +401,88 @@ class BigQueryClient:
             
             logger.info(f"Successfully wrote error log to BigQuery (run_id: {row['run_id']})")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to write error to BigQuery: {str(e)}")
             return False
+
+    def record_run_event(self, run_id: str, status: str, details: Optional[Dict[str, Any]] = None) -> None:
+        """Record lifecycle events for optimizer runs."""
+
+        if not run_id or not status:
+            logger.debug("Skipping run event record - run_id or status missing")
+            return
+
+        try:
+            self._ensure_table_exists(RUN_EVENTS_TABLE, RUN_EVENTS_SCHEMA)
+
+            payload = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "run_id": str(run_id),
+                "status": str(status),
+                "details": json.dumps(details, default=str) if details else None,
+            }
+
+            table_ref = f"{self.dataset_ref}.{RUN_EVENTS_TABLE}"
+            errors = self.client.insert_rows_json(table_ref, [payload])
+
+            if errors:
+                logger.warning(f"Error inserting run event to BigQuery: {errors}")
+        except Exception as exc:
+            logger.debug(f"Failed to record run event in BigQuery: {exc}")
+
+    def _execute_single_timestamp_query(
+        self,
+        query: str,
+        job_config: Optional[bigquery.QueryJobConfig] = None,
+    ) -> Optional[datetime]:
+        """Execute a query expected to return a single timestamp column."""
+
+        try:
+            job = self.client.query(query, job_config=job_config)
+            result = job.result(timeout=30)
+
+            for row in result:
+                candidate = getattr(row, "last_run", None)
+                normalised = _normalise_timestamp(candidate)
+                if normalised:
+                    return normalised
+
+        except (core_exceptions.NotFound, NotFound):
+            logger.debug("Query target not found for timestamp query: %s", query)
+        except core_exceptions.BadRequest as exc:
+            logger.warning(f"Bad request when executing timestamp query: {exc}")
+        except Exception as exc:
+            logger.warning(f"Failed to execute timestamp query: {exc}")
+
+        return None
+
+    def get_last_run_event_timestamp(self, statuses: Optional[List[str]] = None) -> Optional[datetime]:
+        """Return the timestamp of the most recent run event."""
+
+        table_ref = f"`{self.dataset_ref}.{RUN_EVENTS_TABLE}`"
+        query = f"SELECT MAX(timestamp) AS last_run FROM {table_ref}"
+        job_config = None
+
+        if statuses:
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[bigquery.ArrayQueryParameter("statuses", "STRING", statuses)]
+            )
+            query += " WHERE status IN UNNEST(@statuses)"
+
+        return self._execute_single_timestamp_query(query, job_config)
+
+    def get_last_result_timestamp(self, statuses: Optional[List[str]] = None) -> Optional[datetime]:
+        """Return the timestamp of the most recent optimizer result."""
+
+        table_ref = f"`{self.dataset_ref}.optimization_results`"
+        query = f"SELECT MAX(timestamp) AS last_run FROM {table_ref}"
+        job_config = None
+
+        if statuses:
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[bigquery.ArrayQueryParameter("statuses", "STRING", statuses)]
+            )
+            query += " WHERE status IN UNNEST(@statuses)"
+
+        return self._execute_single_timestamp_query(query, job_config)
