@@ -68,7 +68,9 @@ TransferRun only supports numeric values in organization id
 
 update the transfer configuration so that the `organization_id` is a
 numeric string.  This repository includes a helper script that performs
-the validation and update for you:
+the validation and update for you.  It will even normalize values such as
+`organizations/123456` down to the numeric portion automatically so that
+you do not have to edit the value by hand:
 
 ```bash
 python fix_bigquery_transfer.py \
@@ -82,8 +84,9 @@ python fix_bigquery_transfer.py \
   the data source.
 - Use `--dry-run` to preview the change without updating the transfer.
 
-The script will raise a validation error if a non-numeric value is
-provided, preventing misconfiguration before the transfer run starts.
+The script will raise a validation error if no digits are present at all
+in the supplied value, preventing misconfiguration before the transfer
+run starts.
 
 ### Step 4: Grant Permissions
 
