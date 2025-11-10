@@ -39,7 +39,3 @@ tests/
 .envrc
 
 # Ensure essential build inputs are always included
-!package.json
-!package-lock.json
-!tsconfig.json
-!src/**/*
