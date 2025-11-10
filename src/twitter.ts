@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import type { PublishResult, SocialPublisher, VideoJob } from './processor-core';
+import type { PublishResult, SocialPublisher, VideoJob } from './core';
 
 const REQUIRED_ENV_VARS = ['TWITTER_BEARER_TOKEN'];
 
