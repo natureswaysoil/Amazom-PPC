@@ -22,8 +22,9 @@ transfer configuration via the BigQuery Data Transfer API.
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
+import logging
+import re
 from typing import Optional
 
 from google.api_core import exceptions
@@ -33,6 +34,13 @@ from google.protobuf import field_mask_pb2, struct_pb2
 
 def _ensure_numeric(value: str, *, field_name: str) -> str:
     """Validate that ``value`` contains only decimal digits.
+
+    Historically some transfer configurations were populated with values such
+    as ``"organizations/123456"`` or other descriptive identifiers.  The
+    BigQuery Data Transfer API now enforces that the ``organization_id`` field
+    contain only digits.  To make the remediation workflow smoother, the helper
+    accepts inputs containing additional characters but attempts to recover the
+    numeric portion automatically.
 
     Args:
         value: User-supplied value to validate.
@@ -50,12 +58,19 @@ def _ensure_numeric(value: str, *, field_name: str) -> str:
         raise ValueError(f"{field_name} is required and cannot be blank")
 
     normalized = value.strip()
-    if not normalized.isdigit():
-        raise ValueError(
-            f"{field_name} must be a numeric string. Received: {value!r}"
-        )
+    if normalized.isdigit():
+        return normalized
 
-    return normalized
+    digits_only = re.sub(r"\D", "", normalized)
+    if digits_only:
+        logging.warning(
+            "%s contained non-digit characters; using normalized numeric value %s",
+            field_name,
+            digits_only,
+        )
+        return digits_only
+
+    raise ValueError(f"{field_name} must be a numeric string. Received: {value!r}")
 
 
 def update_transfer_organization_id(
