@@ -43,7 +43,7 @@ import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Set, Any
+from typing import Any, Dict, List, Optional, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
 import traceback
