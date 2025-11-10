@@ -574,7 +574,7 @@ class AmazonAdsAPI:
         try:
             response = self._request(
                 "GET",
-                "/v2/sp/campaigns",
+                "/v4/sp/campaigns",
                 params={"startIndex": 0, "count": max(sample_size, 1)}
             )
             campaigns = response.json() or []
@@ -623,7 +623,7 @@ class AmazonAdsAPI:
             if state_filter:
                 params['stateFilter'] = state_filter
             
-            response = self._request('GET', '/v2/sp/campaigns', params=params)
+            response = self._request('GET', '/v4/sp/campaigns', params=params)
             campaigns_data = response.json()
             
             if not isinstance(campaigns_data, list):
@@ -665,7 +665,7 @@ class AmazonAdsAPI:
         try:
             response = self._request(
                 'PUT',
-                f'/v2/sp/campaigns/{campaign_id}',
+                f'/v4/sp/campaigns/{campaign_id}',
                 json=updates
             )
             logger.info(f"Updated campaign {campaign_id}")
@@ -678,7 +678,7 @@ class AmazonAdsAPI:
     def create_campaign(self, campaign_data: Dict) -> Optional[str]:
         """Create new campaign"""
         try:
-            response = self._request('POST', '/v2/sp/campaigns', json=[campaign_data])
+            response = self._request('POST', '/v4/sp/campaigns', json=[campaign_data])
             result = response.json()
             
             if result and len(result) > 0:
@@ -706,7 +706,7 @@ class AmazonAdsAPI:
             if campaign_id:
                 params['campaignIdFilter'] = campaign_id
             
-            response = self._request('GET', '/v2/sp/adGroups', params=params)
+            response = self._request('GET', '/v4/sp/adGroups', params=params)
             ad_groups_data = response.json()
             
             ad_groups = []
@@ -738,7 +738,7 @@ class AmazonAdsAPI:
     def create_ad_group(self, ad_group_data: Dict) -> Optional[str]:
         """Create new ad group"""
         try:
-            response = self._request('POST', '/v2/sp/adGroups', json=[ad_group_data])
+            response = self._request('POST', '/v4/sp/adGroups', json=[ad_group_data])
             result = response.json()
             
             if result and len(result) > 0:
@@ -763,7 +763,7 @@ class AmazonAdsAPI:
             if ad_group_id:
                 params['adGroupIdFilter'] = ad_group_id
             
-            response = self._request('GET', '/v2/sp/keywords', params=params)
+            response = self._request('GET', '/v4/sp/keywords', params=params)
             keywords_data = response.json()
             
             keywords = []
@@ -792,7 +792,7 @@ class AmazonAdsAPI:
             if state:
                 updates['state'] = state
             
-            response = self._request('PUT', '/v2/sp/keywords', json=[updates])
+            response = self._request('PUT', '/v4/sp/keywords', json=[updates])
             logger.debug(f"Updated keyword {keyword_id} bid to ${bid:.2f}")
             return True
         except Exception as e:
@@ -811,7 +811,7 @@ class AmazonAdsAPI:
         for i in range(0, len(updates), batch_size):
             batch = updates[i:i+batch_size]
             try:
-                response = self._request('PUT', '/v2/sp/keywords', json=batch)
+                response = self._request('PUT', '/v4/sp/keywords', json=batch)
                 result = response.json()
                 
                 for r in result:
@@ -832,7 +832,7 @@ class AmazonAdsAPI:
     def create_keywords(self, keywords_data: List[Dict]) -> List[str]:
         """Create new keywords"""
         try:
-            response = self._request('POST', '/v2/sp/keywords', json=keywords_data)
+            response = self._request('POST', '/v4/sp/keywords', json=keywords_data)
             result = response.json()
             
             created_ids = []
@@ -857,7 +857,7 @@ class AmazonAdsAPI:
             if campaign_id:
                 params['campaignIdFilter'] = campaign_id
             
-            response = self._request('GET', '/v2/sp/negativeKeywords', params=params)
+            response = self._request('GET', '/v4/sp/negativeKeywords', params=params)
             return response.json()
         except Exception as e:
             logger.error(f"Failed to get negative keywords: {e}")
@@ -866,7 +866,7 @@ class AmazonAdsAPI:
     def create_negative_keywords(self, negative_keywords_data: List[Dict]) -> List[str]:
         """Create negative keywords"""
         try:
-            response = self._request('POST', '/v2/sp/negativeKeywords', json=negative_keywords_data)
+            response = self._request('POST', '/v4/sp/negativeKeywords', json=negative_keywords_data)
             result = response.json()
             
             created_ids = []
@@ -899,7 +899,7 @@ class AmazonAdsAPI:
             if segment:
                 payload['segment'] = segment
             
-            endpoint = f'/v2/sp/{report_type}/report'
+            endpoint = f'/v4/sp/{report_type}/report'
             response = self._request('POST', endpoint, json=payload)
             report_id = response.json().get('reportId')
             
@@ -1103,7 +1103,7 @@ class AmazonAdsAPI:
                 'maxRecommendations': max_suggestions
             }
             
-            response = self._request('POST', '/v2/sp/targets/keywords/recommendations', json=payload)
+            response = self._request('POST', '/v4/sp/targets/keywords/recommendations', json=payload)
             recommendations = response.json()
             
             suggested_keywords = []
