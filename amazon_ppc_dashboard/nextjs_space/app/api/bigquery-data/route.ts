@@ -2,6 +2,86 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Buffer } from 'buffer';
 import { BigQuery } from '@google-cloud/bigquery';
 
+type ServiceAccountCredentials = {
+  project_id?: string;
+  client_email: string;
+  private_key: string;
+};
+
+const SERVICE_ACCOUNT_EMAIL_ENV_NAMES = [
+  'GCP_SERVICE_ACCOUNT_EMAIL',
+  'GCP_CLIENT_EMAIL',
+  'GOOGLE_CLIENT_EMAIL',
+  'BIGQUERY_CLIENT_EMAIL',
+  'BQ_CLIENT_EMAIL',
+];
+
+const SERVICE_ACCOUNT_KEY_ENV_NAMES = [
+  'GCP_SERVICE_ACCOUNT_KEY_RAW',
+  'GCP_PRIVATE_KEY',
+  'GOOGLE_PRIVATE_KEY',
+  'BIGQUERY_PRIVATE_KEY',
+  'BQ_PRIVATE_KEY',
+];
+
+const PROJECT_ID_ENV_NAMES = [
+  'GCP_PROJECT',
+  'GOOGLE_CLOUD_PROJECT',
+  'GOOGLE_PROJECT_ID',
+  'GCP_PROJECT_ID',
+  'BIGQUERY_PROJECT_ID',
+  'BQ_PROJECT_ID',
+];
+
+function getFirstSetEnv(names: string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function normalisePrivateKey(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  // Many hosting providers require escaped newlines for private keys.
+  if (trimmed.includes('\\n')) {
+    return trimmed.replace(/\\n/g, '\n');
+  }
+
+  return trimmed;
+}
+
+function buildCredentialsFromEnvironmentParts(): ServiceAccountCredentials | undefined {
+  const clientEmail = getFirstSetEnv(SERVICE_ACCOUNT_EMAIL_ENV_NAMES);
+  const privateKey = normalisePrivateKey(getFirstSetEnv(SERVICE_ACCOUNT_KEY_ENV_NAMES));
+  const projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
+
+  if (clientEmail && privateKey) {
+    const credentials: ServiceAccountCredentials = {
+      client_email: clientEmail,
+      private_key: privateKey,
+    };
+
+    if (projectId) {
+      credentials.project_id = projectId;
+    }
+
+    return credentials;
+  }
+
+  return undefined;
+}
+
 function parseServiceAccount(value: string | undefined, source: string): any | undefined {
   if (!value) {
     return undefined;
@@ -29,7 +109,7 @@ export async function GET(request: NextRequest) {
     let projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
     const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
     const location = process.env.BQ_LOCATION || 'us-east4';
-    
+
     // Default project ID from config.json (fallback when env vars not set)
     const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
     
@@ -64,8 +144,23 @@ export async function GET(request: NextRequest) {
         projectId = credentials.project_id;
         console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS:', projectId);
       }
+    } else {
+      const credentialsFromParts = buildCredentialsFromEnvironmentParts();
+      if (credentialsFromParts) {
+        credentials = {
+          client_email: credentialsFromParts.client_email,
+          private_key: credentialsFromParts.private_key,
+          project_id: credentialsFromParts.project_id,
+          type: 'service_account',
+        };
+
+        if (!projectId && credentialsFromParts.project_id) {
+          projectId = credentialsFromParts.project_id;
+          console.log('Using project ID from credential parts:', projectId);
+        }
+      }
     }
-    
+
     // Use default project ID if none found in environment or credentials
     if (!projectId) {
       projectId = DEFAULT_PROJECT_ID;
@@ -93,7 +188,8 @@ export async function GET(request: NextRequest) {
         documentation: 'See amazon_ppc_dashboard/nextjs_space/README_BIGQUERY.md for detailed setup instructions.',
         troubleshooting: [
           'In Vercel, add GCP_SERVICE_ACCOUNT_KEY as an Environment Variable (use the JSON from your service account key).',
-          'Alternatively, set GOOGLE_APPLICATION_CREDENTIALS to the JSON string (not a file path).',
+          'Alternatively, provide credential parts: GCP_CLIENT_EMAIL / GOOGLE_CLIENT_EMAIL and GCP_PRIVATE_KEY / GOOGLE_PRIVATE_KEY (with newlines escaped as \\n).',
+          'You can also set GOOGLE_APPLICATION_CREDENTIALS to the JSON string (not a file path).',
           'After updating variables, redeploy the dashboard.'
         ],
       }, { status: 500 });
