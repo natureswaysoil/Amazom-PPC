@@ -214,8 +214,13 @@ class AmazonAdvertisingClient {
     };
 
     if (startDate) {
+      query.startDate = startDate;
       query.startIndex = 0;
       query.count = 1000;
+    }
+
+    if (endDate) {
+      query.endDate = endDate;
     }
 
     const response = await this.makeRequest('/v2/sp/campaigns', {
