@@ -505,9 +505,12 @@ def run_verify_connection(request) -> Tuple[Dict[str, Any], int]:
         from optimizer_core import PPCAutomation
         
         with create_config_file(config) as config_file_path:
-            profile_id = config.get('amazon_api', {}).get('profile_id', '')
+            # Prioritize environment variable over config file
+            profile_id = os.environ.get('AMAZON_PROFILE_ID', '').strip()
             if not profile_id:
-                raise ValueError("profile_id is required in amazon_api configuration")
+                profile_id = config.get('amazon_api', {}).get('profile_id', '')
+            if not profile_id:
+                raise ValueError("profile_id is required (set AMAZON_PROFILE_ID env var or amazon_api.profile_id in config)")
             
             # Create optimizer instance (this will authenticate)
             optimizer = PPCAutomation(
@@ -716,10 +719,12 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
 
         # Use context manager for temp config file (ensures cleanup)
         with create_config_file(config) as config_file_path:
-            # Get profile ID with default value
-            profile_id = config.get('amazon_api', {}).get('profile_id', '')
+            # Prioritize environment variable over config file
+            profile_id = os.environ.get('AMAZON_PROFILE_ID', '').strip()
             if not profile_id:
-                raise ValueError("profile_id is required in amazon_api configuration")
+                profile_id = config.get('amazon_api', {}).get('profile_id', '')
+            if not profile_id:
+                raise ValueError("profile_id is required (set AMAZON_PROFILE_ID env var or amazon_api.profile_id in config)")
             
             # Initialize optimizer
             logger.info("Initializing optimizer...")
@@ -942,6 +947,7 @@ def set_environment_variables(config: Dict[str, Any]) -> None:
     _set_if_missing('AMAZON_CLIENT_ID', 'client_id')
     _set_if_missing('AMAZON_CLIENT_SECRET', 'client_secret')
     _set_if_missing('AMAZON_REFRESH_TOKEN', 'refresh_token')
+    _set_if_missing('AMAZON_PROFILE_ID', 'profile_id')
 
     logger.debug("Environment variables prepared for optimizer (sources: env > config)")
 

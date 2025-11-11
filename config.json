@@ -6,7 +6,7 @@
   },
   "amazon_api": {
     "region": "NA",
-    "profile_id": "YOUR_PROFILE_ID",
+    "profile_id": "1780498399290938",
     "client_id": "amzn1.application-oa2-client.xxxxx",
     "client_secret": "amzn1.oa2-cs.v1.xxxxx",
     "refresh_token": "Atzr|IwEBIxxxxx",
