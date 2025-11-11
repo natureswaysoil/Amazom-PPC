@@ -52,6 +52,23 @@ export async function GET(request: NextRequest) {
           appears_to_be_json: process.env.GOOGLE_APPLICATION_CREDENTIALS?.startsWith('{') || false,
           appears_to_be_path: process.env.GOOGLE_APPLICATION_CREDENTIALS?.includes('/') || false,
         },
+        split_env: (() => {
+          const emailEnv = ['GCP_SERVICE_ACCOUNT_EMAIL', 'GCP_CLIENT_EMAIL', 'GOOGLE_CLIENT_EMAIL', 'BIGQUERY_CLIENT_EMAIL', 'BQ_CLIENT_EMAIL'];
+          const keyEnv = ['GCP_SERVICE_ACCOUNT_KEY_RAW', 'GCP_PRIVATE_KEY', 'GOOGLE_PRIVATE_KEY', 'BIGQUERY_PRIVATE_KEY', 'BQ_PRIVATE_KEY'];
+          const projectEnv = ['GCP_PROJECT', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_PROJECT_ID', 'GCP_PROJECT_ID', 'BIGQUERY_PROJECT_ID', 'BQ_PROJECT_ID'];
+
+          const resolvedEmail = emailEnv.find((name) => !!(process.env[name]?.trim()));
+          const resolvedKey = keyEnv.find((name) => !!(process.env[name]?.trim()));
+          const resolvedProject = projectEnv.find((name) => !!(process.env[name]?.trim()));
+
+          return {
+            email_env: resolvedEmail || null,
+            private_key_env: resolvedKey || null,
+            project_id_env: resolvedProject || null,
+            private_key_contains_newlines: resolvedKey ? /\n/.test(process.env[resolvedKey] || '') : null,
+            ready: Boolean(resolvedEmail && resolvedKey),
+          };
+        })(),
       },
       dashboard_api_key: {
         set: !!process.env.DASHBOARD_API_KEY,
@@ -69,11 +86,15 @@ export async function GET(request: NextRequest) {
     checks.diagnosis.push('✅ GCP project ID is configured');
   }
 
-  if (!checks.configuration.credentials.gcp_service_account_key.set && 
-      !checks.configuration.credentials.google_application_credentials.set) {
-    checks.diagnosis.push('⚠️  No Google Cloud credentials found (GCP_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS)');
+  const splitCredentialConfig = checks.configuration.credentials.split_env;
+
+  if (!checks.configuration.credentials.gcp_service_account_key.set &&
+      !checks.configuration.credentials.google_application_credentials.set &&
+      !splitCredentialConfig.ready) {
+    checks.diagnosis.push('⚠️  No Google Cloud credentials found (GCP_SERVICE_ACCOUNT_KEY, GOOGLE_APPLICATION_CREDENTIALS, or credential parts)');
     checks.recommendations.push('Add GCP_SERVICE_ACCOUNT_KEY with your service account JSON credentials as a string');
     checks.recommendations.push('Or add GOOGLE_APPLICATION_CREDENTIALS with the service account JSON');
+    checks.recommendations.push('Alternatively, provide credential parts using variables like GCP_CLIENT_EMAIL and GCP_PRIVATE_KEY (escape newlines as \\n)');
   } else if (checks.configuration.credentials.gcp_service_account_key.set) {
     if (checks.configuration.credentials.gcp_service_account_key.valid_json) {
       if (checks.configuration.credentials.gcp_service_account_key.has_required_fields) {
@@ -92,6 +113,11 @@ export async function GET(request: NextRequest) {
     } else if (checks.configuration.credentials.google_application_credentials.appears_to_be_path) {
       checks.diagnosis.push('⚠️  GOOGLE_APPLICATION_CREDENTIALS appears to be a file path (this works locally but not on Vercel)');
       checks.recommendations.push('For Vercel deployment, use GCP_SERVICE_ACCOUNT_KEY with the JSON content instead of a file path');
+    }
+  } else if (splitCredentialConfig.ready) {
+    checks.diagnosis.push('✅ Google Cloud credential parts detected (client email and private key)');
+    if (!splitCredentialConfig.private_key_contains_newlines) {
+      checks.recommendations.push('Ensure your private key uses escaped newlines (\\n) so it loads correctly at runtime');
     }
   }
 
