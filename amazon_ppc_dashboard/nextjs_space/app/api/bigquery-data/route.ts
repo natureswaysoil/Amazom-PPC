@@ -83,6 +83,22 @@ export async function GET(request: NextRequest) {
       }, { status: 500 });
     }
     
+    const runningOnVercel = process.env.VERCEL === '1';
+
+    if (!credentials && runningOnVercel) {
+      return NextResponse.json({
+        error: 'Missing Google Cloud credentials',
+        message: 'BigQuery credentials are not configured for this deployment.',
+        details: 'Set the GCP_SERVICE_ACCOUNT_KEY environment variable to the contents of your service account JSON file (or a base64 encoded version) and redeploy.',
+        documentation: 'See amazon_ppc_dashboard/nextjs_space/README_BIGQUERY.md for detailed setup instructions.',
+        troubleshooting: [
+          'In Vercel, add GCP_SERVICE_ACCOUNT_KEY as an Environment Variable (use the JSON from your service account key).',
+          'Alternatively, set GOOGLE_APPLICATION_CREDENTIALS to the JSON string (not a file path).',
+          'After updating variables, redeploy the dashboard.'
+        ],
+      }, { status: 500 });
+    }
+
     // Initialize BigQuery client with explicit credentials if provided
     const bigquery = new BigQuery({
       projectId: projectId,
@@ -210,7 +226,7 @@ export async function GET(request: NextRequest) {
       params: queryParams,
     });
     
-    return NextResponse.json({ 
+    return NextResponse.json({
       success: true,
       data: rows,
       metadata: {
@@ -226,14 +242,29 @@ export async function GET(request: NextRequest) {
     
     // Check if it's a "not found" error
     if (error.message && error.message.includes('Not found')) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Dataset or table not found',
         message: 'Please run setup-bigquery.sh to create the BigQuery dataset and tables',
         details: error.message
       }, { status: 404 });
     }
-    
-    return NextResponse.json({ 
+
+    if (error.message && error.message.includes('Could not load the default credentials')) {
+      return NextResponse.json({
+        error: 'Missing Google Cloud credentials',
+        message: 'Could not load Google Cloud credentials for BigQuery.',
+        details: 'Provide service account credentials via the GCP_SERVICE_ACCOUNT_KEY environment variable (preferred) or GOOGLE_APPLICATION_CREDENTIALS as a JSON string.',
+        documentation: 'See amazon_ppc_dashboard/nextjs_space/README_BIGQUERY.md for deployment steps.',
+        next_steps: [
+          'Add the service account JSON to GCP_SERVICE_ACCOUNT_KEY in your deployment environment.',
+          'If using GOOGLE_APPLICATION_CREDENTIALS, paste the JSON contents directly instead of a file path.',
+          'Redeploy the dashboard after saving the variables.',
+          'Re-run /api/config-check to verify configuration.'
+        ],
+      }, { status: 500 });
+    }
+
+    return NextResponse.json({
       error: 'Failed to query BigQuery',
       message: error.message || 'Unknown error'
     }, { status: 500 });
