@@ -151,6 +151,19 @@ export default function Home() {
                 </p>
               </div>
             )}
+            {error.includes('Missing Google Cloud credentials') && (
+              <div style={styles.setupInstructions}>
+                <p><strong>Credentials Missing:</strong></p>
+                <ol style={{ textAlign: 'left', lineHeight: '1.8' }}>
+                  <li>In your hosting provider, add <code>GCP_SERVICE_ACCOUNT_KEY</code> with your service account JSON.</li>
+                  <li>Alternatively set <code>GOOGLE_APPLICATION_CREDENTIALS</code> to the JSON string (not a file path).</li>
+                  <li>Redeploy the dashboard and rerun <code>/api/config-check</code> to confirm.</li>
+                </ol>
+                <p style={{ fontSize: '14px', marginTop: '10px' }}>
+                  See README_BIGQUERY.md for detailed instructions.
+                </p>
+              </div>
+            )}
           </div>
           <button onClick={fetchDashboardData} style={styles.retryButton}>
             🔄 Retry
