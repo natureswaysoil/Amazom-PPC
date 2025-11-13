@@ -38,6 +38,62 @@ RUN_EVENTS_SCHEMA = [
 ]
 
 
+def _combine_split_env_value(base_name: str) -> Optional[str]:
+    """Reconstruct environment values stored across multiple numbered variables."""
+
+    prefix_len = len(base_name)
+    parts: List[tuple[int, str]] = []
+
+    for env_name, env_value in os.environ.items():
+        if not env_value or not env_name.startswith(base_name):
+            continue
+
+        suffix = env_name[prefix_len:]
+        if not suffix:
+            continue
+
+        trimmed = suffix.strip("_- ")
+        if not trimmed:
+            continue
+
+        index: Optional[int] = None
+        upper = trimmed.upper()
+
+        if upper.startswith("PART"):
+            remainder = trimmed[4:].strip("_- ")
+            if remainder.isdigit():
+                index = int(remainder)
+        elif trimmed.isdigit():
+            index = int(trimmed)
+
+        if index is None:
+            continue
+
+        parts.append((index, env_value))
+
+    if not parts:
+        return None
+
+    parts.sort(key=lambda item: item[0])
+    return "".join(value for _, value in parts)
+
+
+def _get_env_value_with_parts(*names: str) -> Optional[str]:
+    """Return the first populated environment variable, combining split parts if needed."""
+
+    for name in names:
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value
+
+    for name in names:
+        combined = _combine_split_env_value(name)
+        if combined:
+            return combined
+
+    return None
+
+
 def _normalise_timestamp(value: Optional[datetime]) -> Optional[datetime]:
     """Convert BigQuery timestamps to naive UTC datetimes."""
 
@@ -91,15 +147,31 @@ class BigQueryClient:
         """Attempt to load service account credentials from environment variables."""
 
         # Prefer dedicated JSON credential environment variable used by deployment scripts
-        credential_sources = [
-            ("GCP_SERVICE_ACCOUNT_KEY", os.environ.get("GCP_SERVICE_ACCOUNT_KEY")),
-            ("GOOGLE_APPLICATION_CREDENTIALS", os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")),
-        ]
+        credential_sources = []
+
+        service_account_value = _get_env_value_with_parts("GCP_SERVICE_ACCOUNT_KEY", "GCP_SA_KEY")
+        if service_account_value:
+            if os.environ.get("GCP_SERVICE_ACCOUNT_KEY"):
+                service_source = "GCP_SERVICE_ACCOUNT_KEY"
+            elif os.environ.get("GCP_SA_KEY"):
+                service_source = "GCP_SA_KEY"
+            elif _combine_split_env_value("GCP_SERVICE_ACCOUNT_KEY"):
+                service_source = "GCP_SERVICE_ACCOUNT_KEY (split parts)"
+            elif _combine_split_env_value("GCP_SA_KEY"):
+                service_source = "GCP_SA_KEY (split parts)"
+            else:
+                service_source = "GCP_SERVICE_ACCOUNT_KEY"
+            credential_sources.append((service_source, service_account_value))
+
+        google_credentials_value = _get_env_value_with_parts("GOOGLE_APPLICATION_CREDENTIALS")
+        if google_credentials_value:
+            if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+                google_source = "GOOGLE_APPLICATION_CREDENTIALS"
+            else:
+                google_source = "GOOGLE_APPLICATION_CREDENTIALS (split parts)"
+            credential_sources.append((google_source, google_credentials_value))
 
         for source_name, raw_value in credential_sources:
-            if not raw_value:
-                continue
-
             # If the environment variable points to a file path, let google-auth handle it
             if os.path.isfile(raw_value):
                 try:
