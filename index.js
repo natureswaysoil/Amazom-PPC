@@ -12,6 +12,9 @@ const API_HOSTS = {
 
 const TOKEN_ENDPOINT = 'https://api.amazon.com/auth/o2/token';
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 1000; // refresh one minute before expiry
+const TOKEN_REFRESH_MAX_ATTEMPTS = 3;
+const TOKEN_REFRESH_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const TOKEN_REFRESH_RETRY_BASE_DELAY_MS = 250;
 const SP_API_VERSION = '2024-05-01';
 const REPORTS_API_VERSION = '2024-05-01';
 
@@ -79,48 +82,85 @@ class AmazonAdvertisingClient {
       client_secret: this.clientSecret,
     });
 
-    let response;
-    try {
-      response = await fetch(TOKEN_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body,
-      });
-    } catch (error) {
-      throw new Error(`Failed to refresh access token: ${error.message}`);
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= TOKEN_REFRESH_MAX_ATTEMPTS; attempt += 1) {
+      let response;
+      try {
+        response = await fetch(TOKEN_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+          },
+          body,
+        });
+      } catch (error) {
+        lastError = new Error(`network error: ${error.message}`);
+        if (attempt === TOKEN_REFRESH_MAX_ATTEMPTS) {
+          break;
+        }
+        await delay(calculateRetryDelay(attempt));
+        continue;
+      }
+
+      let rawPayload = '';
+      let payload = null;
+      try {
+        rawPayload = await response.text();
+        if (rawPayload) {
+          payload = JSON.parse(rawPayload);
+        }
+      } catch (error) {
+        if (response.ok) {
+          lastError = new Error(`invalid JSON payload: ${error.message}`);
+          if (attempt === TOKEN_REFRESH_MAX_ATTEMPTS) {
+            break;
+          }
+          await delay(calculateRetryDelay(attempt));
+          continue;
+        }
+        payload = null;
+      }
+
+      if (!response.ok) {
+        const statusDetails = `${response.status} ${response.statusText}`.trim();
+        const message = extractErrorMessage(payload, rawPayload, statusDetails);
+        const error = new Error(message);
+
+        if (TOKEN_REFRESH_RETRYABLE_STATUS.has(response.status) && attempt < TOKEN_REFRESH_MAX_ATTEMPTS) {
+          lastError = error;
+          await delay(calculateRetryDelay(attempt));
+          continue;
+        }
+
+        throw error;
+      }
+
+      if (!payload || typeof payload !== 'object' || !payload.access_token) {
+        lastError = new Error('response missing access_token');
+        if (attempt === TOKEN_REFRESH_MAX_ATTEMPTS) {
+          break;
+        }
+        await delay(calculateRetryDelay(attempt));
+        continue;
+      }
+
+      const expiresIn = Number(payload.expires_in || 3600);
+      this.accessToken = payload.access_token;
+      this.tokenExpiresAt = Date.now() + expiresIn * 1000;
+
+      if (payload.refresh_token && payload.refresh_token !== this.refreshToken) {
+        // Amazon may rotate refresh tokens; warn so operators can persist the new value.
+        console.warn('Received rotated Amazon Ads refresh token. Update Secret Manager to persist the new token.');
+        this.refreshToken = payload.refresh_token;
+      }
+
+      return this.accessToken;
     }
 
-    let rawPayload = '';
-    let payload;
-    try {
-      rawPayload = await response.text();
-      payload = rawPayload ? JSON.parse(rawPayload) : {};
-    } catch (error) {
-      throw new Error(`Failed to refresh access token: unable to parse response JSON (${error.message})`);
-    }
-
-    if (!response.ok) {
-      const details = payload?.error_description || payload?.error || rawPayload || response.statusText;
-      throw new Error(`Failed to refresh access token: ${details}`);
-    }
-
-    if (!payload.access_token) {
-      throw new Error('Failed to refresh access token: response missing access_token');
-    }
-
-    const expiresIn = Number(payload.expires_in || 3600);
-    this.accessToken = payload.access_token;
-    this.tokenExpiresAt = Date.now() + expiresIn * 1000;
-
-    if (payload.refresh_token && payload.refresh_token !== this.refreshToken) {
-      // Amazon may rotate refresh tokens; warn so operators can persist the new value.
-      console.warn('Received rotated Amazon Ads refresh token. Update Secret Manager to persist the new token.');
-      this.refreshToken = payload.refresh_token;
-    }
-
-    return this.accessToken;
+    const errorMessage = lastError ? lastError.message : 'unknown error';
+    throw new Error(`Failed to refresh access token after ${TOKEN_REFRESH_MAX_ATTEMPTS} attempts: ${errorMessage}`);
   }
 
   async makeRequest(path, options = {}) {
@@ -273,6 +313,28 @@ class AmazonAdvertisingClient {
     }
     return url;
   }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function calculateRetryDelay(attempt) {
+  const exponent = attempt - 1;
+  return TOKEN_REFRESH_RETRY_BASE_DELAY_MS * 2 ** exponent;
+}
+
+function extractErrorMessage(payload, rawPayload, statusDetails) {
+  const description = payload?.error_description || payload?.error;
+  if (description) {
+    return `Failed to refresh access token (${statusDetails}): ${description}`;
+  }
+
+  if (rawPayload) {
+    return `Failed to refresh access token (${statusDetails}): ${rawPayload}`;
+  }
+
+  return `Failed to refresh access token (${statusDetails})`;
 }
 
 function loadConfigFromEnv() {
