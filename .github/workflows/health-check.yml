@@ -48,33 +48,156 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Determine auth configuration
+        id: auth_config
+        shell: bash
+        run: |
+          python - <<'PY'
+import os
+
+
+def _is_truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if not text or text in {"0", "false", "no", "off", "null", "none"}:
+        return False
+    return text in {"1", "true", "yes", "on"} or text == "require_auth"
+
+
+def _combine_split_env(base_name: str) -> str | None:
+    prefix_len = len(base_name)
+    parts: list[tuple[int, str]] = []
+
+    for env_name, env_value in os.environ.items():
+        if not env_value or not env_name.startswith(base_name):
+            continue
+
+        suffix = env_name[prefix_len:]
+        if not suffix:
+            continue
+
+        trimmed = suffix.strip("_- ")
+        if not trimmed:
+            continue
+
+        upper = trimmed.upper()
+        index_str: str | None = None
+
+        if upper.startswith("PART"):
+            remainder = trimmed[4:].strip("_- ")
+            if remainder.isdigit():
+                index_str = remainder
+        elif trimmed.isdigit():
+            index_str = trimmed
+
+        if index_str is None:
+            continue
+
+        index = int(index_str)
+        parts.append((index, env_value))
+
+    if not parts:
+        return None
+
+    parts.sort(key=lambda item: item[0])
+    return "".join(value for _, value in parts)
+
+
+def _resolve_env_value(candidates: list[str]) -> str | None:
+    for name in candidates:
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value
+
+    for name in candidates:
+        combined = _combine_split_env(name)
+        if combined:
+            return combined
+
+    return None
+
+
+require_auth = _is_truthy(os.environ.get("REQUIRE_AUTH"))
+if not require_auth and _is_truthy(os.environ.get("HEALTH_REQUIRE_AUTH")):
+    require_auth = True
+
+workload_identity_provider = (os.environ.get("GCP_WORKLOAD_IDENTITY_PROVIDER") or "").strip()
+service_account = (os.environ.get("GCP_SERVICE_ACCOUNT") or "").strip()
+
+service_account_key = _resolve_env_value([
+    "GCP_SA_KEY",
+    "GCP_SERVICE_ACCOUNT_KEY",
+])
+
+if not service_account_key:
+    service_account_key = _resolve_env_value(["GOOGLE_APPLICATION_CREDENTIALS"])
+
+env_updates: list[str] = []
+
+normalized_require_auth = "true" if require_auth else "false"
+env_updates.append(f"REQUIRE_AUTH={normalized_require_auth}")
+
+if service_account_key:
+    env_updates.append(f"GCP_SA_KEY={service_account_key}")
+    env_updates.append(f"GCP_SERVICE_ACCOUNT_KEY={service_account_key}")
+
+github_env = os.environ.get("GITHUB_ENV")
+if github_env and env_updates:
+    with open(github_env, "a", encoding="utf-8") as env_file:
+        for line in env_updates:
+            env_file.write(f"{line}\n")
+
+use_workload_identity = require_auth and bool(workload_identity_provider) and bool(service_account)
+use_json_key = require_auth and not use_workload_identity and bool(service_account_key)
+missing_credentials = require_auth and not use_workload_identity and not bool(service_account_key)
+
+outputs_path = os.environ.get("GITHUB_OUTPUT")
+if outputs_path:
+    with open(outputs_path, "a", encoding="utf-8") as output:
+        output.write(f"require_auth={normalized_require_auth}\n")
+        output.write(f"use_workload_identity={'true' if use_workload_identity else 'false'}\n")
+        output.write(f"use_json_key={'true' if use_json_key else 'false'}\n")
+        output.write(f"missing_credentials={'true' if missing_credentials else 'false'}\n")
+
+if service_account_key:
+    print("Detected Google Cloud JSON credentials from environment variables.")
+elif use_workload_identity:
+    print("Configured to use Workload Identity Federation for Google Cloud auth.")
+elif require_auth:
+    print("Google Cloud auth is required but no credentials detected.")
+else:
+    print("Google Cloud auth not required for this run.")
+PY
+
       - name: Setup gcloud (if auth required)
-        if: ${{ env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true }}
+        if: ${{ steps.auth_config.outputs.require_auth == 'true' }}
         uses: google-github-actions/setup-gcloud@v2
         with:
           version: '>= 471.0.0'
 
       - name: Auth to Google Cloud via Workload Identity
-        if: ${{ (env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true) && env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != '' }}
+        if: ${{ steps.auth_config.outputs.use_workload_identity == 'true' }}
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
 
       - name: Auth to Google Cloud via JSON key
-        if: ${{ (env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true) && (env.GCP_WORKLOAD_IDENTITY_PROVIDER == '' || env.GCP_WORKLOAD_IDENTITY_PROVIDER == null || env.GCP_SERVICE_ACCOUNT == '' || env.GCP_SERVICE_ACCOUNT == null) && env.GCP_SA_KEY != '' }}
+        if: ${{ steps.auth_config.outputs.use_json_key == 'true' }}
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ env.GCP_SA_KEY }}
 
       - name: Fail if Google Cloud auth is required but not configured
-        if: ${{ (env.REQUIRE_AUTH == 'true' || env.REQUIRE_AUTH == true) && (env.GCP_WORKLOAD_IDENTITY_PROVIDER == '' || env.GCP_WORKLOAD_IDENTITY_PROVIDER == null || env.GCP_SERVICE_ACCOUNT == '' || env.GCP_SERVICE_ACCOUNT == null) && (env.GCP_SA_KEY == '' || env.GCP_SA_KEY == null) }}
+        if: ${{ steps.auth_config.outputs.missing_credentials == 'true' }}
         run: |
           echo "::error::Google Cloud auth is required but no valid credentials were provided."
           echo "Set GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT secrets for workload identity,"
           echo "or provide GCP_SA_KEY for JSON key authentication."
           exit 1
-
       - name: Resolve FUNCTION_URL
         id: resolve_url
         shell: bash

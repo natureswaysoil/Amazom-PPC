@@ -40,7 +40,56 @@ function getFirstSetEnv(names: string[]): string | undefined {
       return value.trim();
     }
   }
+  for (const name of names) {
+    const combined = combineSplitEnv(name);
+    if (combined && combined.trim()) {
+      return combined.trim();
+    }
+  }
   return undefined;
+}
+
+function combineSplitEnv(baseName: string): string | undefined {
+  const parts: { index: number; value: string }[] = [];
+
+  for (const [envName, envValue] of Object.entries(process.env)) {
+    if (!envValue || !envName.startsWith(baseName)) {
+      continue;
+    }
+
+    const suffix = envName.slice(baseName.length);
+    if (!suffix) {
+      continue;
+    }
+
+    const trimmed = suffix.replace(/^[\s_-]+/, '');
+    if (!trimmed) {
+      continue;
+    }
+
+    let indexString: string | undefined;
+    const upper = trimmed.toUpperCase();
+
+    if (upper.startsWith('PART')) {
+      const remainder = trimmed.slice(4).replace(/^[\s_-]+/, '');
+      if (remainder && /^\d+$/.test(remainder)) {
+        indexString = remainder;
+      }
+    } else if (/^\d+$/.test(trimmed)) {
+      indexString = trimmed;
+    }
+
+    if (indexString) {
+      parts.push({ index: parseInt(indexString, 10), value: envValue });
+    }
+  }
+
+  if (!parts.length) {
+    return undefined;
+  }
+
+  parts.sort((a, b) => a.index - b.index);
+  return parts.map((part) => part.value).join('');
 }
 
 function normalisePrivateKey(value: string | undefined): string | undefined {
@@ -120,8 +169,22 @@ export async function GET(request: NextRequest) {
     // 3. Default application credentials (if running in GCP)
     let credentials: any = undefined;
     
-    if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
-      credentials = parseServiceAccount(process.env.GCP_SERVICE_ACCOUNT_KEY, 'GCP_SERVICE_ACCOUNT_KEY');
+    const serviceAccountKey = getFirstSetEnv(['GCP_SERVICE_ACCOUNT_KEY', 'GCP_SA_KEY']);
+    const googleCredentialsEnv = getFirstSetEnv(['GOOGLE_APPLICATION_CREDENTIALS']);
+
+    let serviceAccountSource = 'GCP_SERVICE_ACCOUNT_KEY';
+    if (!process.env.GCP_SERVICE_ACCOUNT_KEY && process.env.GCP_SA_KEY) {
+      serviceAccountSource = 'GCP_SA_KEY';
+    } else if (!process.env.GCP_SERVICE_ACCOUNT_KEY && !process.env.GCP_SA_KEY) {
+      if (combineSplitEnv('GCP_SERVICE_ACCOUNT_KEY')) {
+        serviceAccountSource = 'GCP_SERVICE_ACCOUNT_KEY (split parts)';
+      } else if (combineSplitEnv('GCP_SA_KEY')) {
+        serviceAccountSource = 'GCP_SA_KEY (split parts)';
+      }
+    }
+
+    if (serviceAccountKey) {
+      credentials = parseServiceAccount(serviceAccountKey, serviceAccountSource);
       if (!credentials) {
         return NextResponse.json({
           error: 'Configuration error',
@@ -132,17 +195,22 @@ export async function GET(request: NextRequest) {
 
       if (!projectId && typeof credentials === 'object' && credentials.project_id) {
         projectId = credentials.project_id;
-        console.log('Using project ID from GCP_SERVICE_ACCOUNT_KEY:', projectId);
+        console.log(`Using project ID from ${serviceAccountSource}:`, projectId);
       }
-    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-      credentials = parseServiceAccount(process.env.GOOGLE_APPLICATION_CREDENTIALS, 'GOOGLE_APPLICATION_CREDENTIALS');
+    } else if (googleCredentialsEnv) {
+      let googleSource = 'GOOGLE_APPLICATION_CREDENTIALS';
+      if (!process.env.GOOGLE_APPLICATION_CREDENTIALS && combineSplitEnv('GOOGLE_APPLICATION_CREDENTIALS')) {
+        googleSource = 'GOOGLE_APPLICATION_CREDENTIALS (split parts)';
+      }
+
+      credentials = parseServiceAccount(googleCredentialsEnv, googleSource);
 
       if (!credentials) {
         // If not JSON or base64 JSON, assume it's a file path (local development)
         credentials = undefined;
       } else if (!projectId && typeof credentials === 'object' && credentials.project_id) {
         projectId = credentials.project_id;
-        console.log('Using project ID from GOOGLE_APPLICATION_CREDENTIALS:', projectId);
+        console.log(`Using project ID from ${googleSource}:`, projectId);
       }
     } else {
       const credentialsFromParts = buildCredentialsFromEnvironmentParts();
