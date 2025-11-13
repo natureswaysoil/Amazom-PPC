@@ -397,6 +397,33 @@ For issues:
 3. Ensure setup-bigquery.sh was run successfully
 4. Verify service account permissions
 
+## Verifying the Abacus AI Dashboard
+
+The production dashboard hosted at
+`https://amazon-ppc-dashboard-qb63yk.abacusai.app` is powered by the
+same BigQuery dataset queried by the `/api/bigquery-data` route in this
+Next.js project. To confirm the BigQuery → dashboard connection is healthy:
+
+1. **Run the configuration check**
+   ```bash
+   curl https://amazon-ppc-dashboard-qb63yk.abacusai.app/api/config-check | jq
+   ```
+   Ensure `gcp_project`, `bq_dataset_id`, and the service-account checks all
+   report `set: true`.
+
+2. **Test BigQuery access directly**
+   ```bash
+   curl "https://amazon-ppc-dashboard-qb63yk.abacusai.app/api/bigquery-data?table=optimization_results&limit=1" | jq
+   ```
+   A `success: true` response with `metadata.rowCount > 0` confirms the dashboard can
+   reach BigQuery and fetch optimizer runs.
+
+3. **Verify the UI is reading the API**
+   Open the dashboard URL in a browser and check the Network tab for successful
+   calls to `/api/bigquery-data`. The front-end page at `app/page.tsx` fetches
+   the same endpoint every five minutes to populate the KPIs and tables, so a
+   200 response here confirms the live charts are backed by BigQuery data.
+
 ## Summary Checklist
 
 - [ ] BigQuery dataset and tables created (`setup-bigquery.sh`)
