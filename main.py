@@ -736,7 +736,8 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
             optimizer = PPCAutomation(
                 config_path=config_file_path,
                 profile_id=profile_id,
-                dry_run=dry_run
+                dry_run=dry_run,
+                bigquery_client=bigquery_client
             )
             
             # Fetch and store campaign budgets in BigQuery (if enabled)

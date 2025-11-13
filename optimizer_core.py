@@ -1472,13 +1472,147 @@ class BidOptimizer:
 
 
 class DaypartingManager:
-    """Time-based bid adjustments"""
+    """Time-based bid adjustments with ML-driven optimization"""
     
-    def __init__(self, config: Config, api: AmazonAdsAPI, audit_logger: AuditLogger):
+    def __init__(self, config: Config, api: AmazonAdsAPI, audit_logger: AuditLogger, bigquery_client=None):
         self.config = config
         self.api = api
         self.audit = audit_logger
+        self.bigquery_client = bigquery_client
         self.base_bids: Dict[str, float] = {}  # Store original bids
+    
+    def apply_intelligent_dayparting(self, dry_run: bool = False) -> Dict:
+        """Apply ML-driven dayparting based on BigQuery performance data"""
+        logger.info("=== Applying Intelligent Dayparting (Data-Driven) ===")
+        
+        # Check if dayparting is enabled
+        if not self.config.get('dayparting.enabled', False):
+            logger.info("Dayparting is disabled in config")
+            return {}
+        
+        if not self.bigquery_client:
+            logger.warning("BigQuery client not available, falling back to config-based dayparting")
+            return self.apply_dayparting(dry_run)
+        
+        # Get timezone from config
+        timezone_str = self.config.get('dayparting.timezone', 'US/Pacific')
+        
+        if pytz:
+            try:
+                tz = pytz.timezone(timezone_str)
+                current_time = datetime.now(tz)
+            except Exception as e:
+                logger.warning(f"Invalid timezone '{timezone_str}', using UTC: {e}")
+                current_time = datetime.now(pytz.UTC)
+        else:
+            current_time = datetime.now()
+            logger.warning("pytz not available, using server timezone")
+        
+        current_hour = current_time.hour
+        current_day = current_time.strftime('%A').upper()
+        current_day_num = current_time.weekday()  # 0=Monday, 6=Sunday
+        # Convert to SQL day_of_week (0=Sunday, 6=Saturday)
+        sql_day_of_week = (current_day_num + 1) % 7
+        
+        logger.info(f"Current time ({timezone_str}): {current_day} (day {sql_day_of_week}) {current_hour}:00")
+        
+        # Fetch optimal multiplier from BigQuery
+        multiplier = self._fetch_optimal_multiplier(sql_day_of_week, current_hour)
+        
+        if multiplier is None:
+            logger.warning("No BigQuery data available, using config-based multiplier")
+            multiplier = self._get_multiplier(current_hour, current_day)
+        
+        logger.info(f"Using multiplier: {multiplier:.2f} for {current_day} {current_hour}:00")
+        
+        results = {
+            'keywords_updated': 0,
+            'current_hour': current_hour,
+            'current_day': current_day,
+            'multiplier': multiplier,
+            'data_source': 'bigquery' if multiplier else 'config'
+        }
+        
+        # Get all campaigns first
+        campaigns = self.api.get_campaigns()
+        
+        for campaign in campaigns:
+            # Get keywords for this campaign
+            keywords = self.api.get_keywords(campaign_id=campaign.campaign_id)
+            
+            for keyword in keywords:
+                # Store base bid if not stored yet
+                keyword_id = keyword.keyword_id
+                if keyword_id not in self.base_bids:
+                    self.base_bids[keyword_id] = keyword.bid
+                
+                base_bid = self.base_bids[keyword_id]
+                new_bid = base_bid * multiplier
+                
+                # Apply bid caps
+                min_bid = self.config.get('bid_optimization.min_bid', 0.25)
+                max_bid = self.config.get('bid_optimization.max_bid', 5.0)
+                new_bid = max(min_bid, min(max_bid, new_bid))
+                new_bid = round(new_bid, 2)
+                
+                # Only update if there's a meaningful change
+                if abs(new_bid - keyword.bid) > 0.01:
+                    self.audit.log(
+                        'INTELLIGENT_DAYPARTING',
+                        'KEYWORD',
+                        keyword_id,
+                        f"${keyword.bid:.2f}",
+                        f"${new_bid:.2f}",
+                        f"Data-driven dayparting: {current_day} {current_hour}:00 ({multiplier:.2f}x) for campaign {campaign.campaign_name}",
+                        dry_run
+                    )
+                    
+                    if not dry_run:
+                        self.api.update_keyword_bid(keyword_id, new_bid)
+                    
+                    results['keywords_updated'] += 1
+        
+        logger.info(f"Intelligent dayparting applied: {results}")
+        return results
+    
+    def _fetch_optimal_multiplier(self, day_of_week: int, hour: int) -> Optional[float]:
+        """Fetch optimal bid multiplier from BigQuery based on historical performance"""
+        try:
+            query = f"""
+            SELECT 
+                modifier,
+                avg_acos,
+                total_conversions,
+                recommended
+            FROM `{self.bigquery_client.dataset_ref}.hourly_bid_modifiers`
+            WHERE day_of_week = {day_of_week}
+              AND hour = {hour}
+              AND recommended = TRUE
+            ORDER BY total_conversions DESC, avg_acos ASC
+            LIMIT 1
+            """
+            
+            logger.debug(f"Fetching multiplier from BigQuery for day={day_of_week}, hour={hour}")
+            
+            query_job = self.bigquery_client.client.query(query)
+            results = list(query_job.result())
+            
+            if results:
+                row = results[0]
+                modifier = float(row['modifier'])
+                logger.info(
+                    f"Found optimal multiplier from BigQuery: {modifier:.2f} "
+                    f"(ACOS: {row['avg_acos']:.2f}%, Conversions: {row['total_conversions']})"
+                )
+                return modifier
+            else:
+                logger.debug(f"No BigQuery data for day={day_of_week}, hour={hour}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error fetching multiplier from BigQuery: {e}")
+            logger.debug(traceback.format_exc())
+            return None
     
     def apply_dayparting(self, dry_run: bool = False) -> Dict:
         """Apply dayparting bid adjustments with timezone awareness"""
@@ -1931,10 +2065,11 @@ class NegativeKeywordManager:
 class PPCAutomation:
     """Main automation orchestrator with comprehensive error handling"""
     
-    def __init__(self, config_path: str, profile_id: str, dry_run: bool = False):
+    def __init__(self, config_path: str, profile_id: str, dry_run: bool = False, bigquery_client=None):
         self.config = Config(config_path)
         self.profile_id = profile_id
         self.dry_run = dry_run
+        self.bigquery_client = bigquery_client
         
         # Initialize API client with configurable rate limit
         region = self.config.get('api.region', 'NA')
@@ -1947,7 +2082,7 @@ class PPCAutomation:
         
         # Initialize feature modules
         self.bid_optimizer = BidOptimizer(self.config, self.api, self.audit)
-        self.dayparting = DaypartingManager(self.config, self.api, self.audit)
+        self.dayparting = DaypartingManager(self.config, self.api, self.audit, bigquery_client)
         self.campaign_manager = CampaignManager(self.config, self.api, self.audit)
         self.keyword_discovery = KeywordDiscovery(self.config, self.api, self.audit)
         self.negative_keywords = NegativeKeywordManager(self.config, self.api, self.audit)
@@ -1993,9 +2128,14 @@ class PPCAutomation:
             
             if 'dayparting' in features:
                 try:
-                    results['dayparting'] = self.dayparting.apply_dayparting(self.dry_run)
+                    # Use intelligent dayparting if BigQuery is available, otherwise fallback to config-based
+                    if self.bigquery_client:
+                        results['dayparting'] = self.dayparting.apply_intelligent_dayparting(self.dry_run)
+                    else:
+                        results['dayparting'] = self.dayparting.apply_dayparting(self.dry_run)
                 except Exception as e:
                     logger.error(f"Dayparting failed: {e}")
+                    logger.debug(traceback.format_exc())
                     results['dayparting'] = {'error': str(e)}
             
             if 'campaign_management' in features:
