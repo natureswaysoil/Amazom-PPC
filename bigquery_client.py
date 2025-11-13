@@ -18,6 +18,7 @@ import base64
 import logging
 import json
 import os
+import traceback
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from google.cloud import bigquery
@@ -324,6 +325,79 @@ class BigQueryClient:
                 
         except Exception as e:
             logger.error(f"Failed to write campaign details to BigQuery: {str(e)}")
+    
+    def insert_campaign_budgets(self, budget_data: List[Dict[str, Any]], run_id: str) -> bool:
+        """
+        Insert campaign budget data into BigQuery campaign_details table
+        
+        This method populates the campaign_details table with budget information
+        fetched from the Amazon Advertising API. It's designed to run independently
+        of the optimization results to ensure budget data is always current.
+        
+        Args:
+            budget_data: List of campaign budget dictionaries from API.fetch_campaign_budgets()
+            run_id: Unique identifier for this data collection run
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not budget_data:
+                logger.warning("No budget data to insert")
+                return False
+            
+            # Use the same schema as campaign_details table
+            schema = [
+                bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
+                bigquery.SchemaField("run_id", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("campaign_id", "STRING"),
+                bigquery.SchemaField("campaign_name", "STRING"),
+                bigquery.SchemaField("spend", "FLOAT"),
+                bigquery.SchemaField("sales", "FLOAT"),
+                bigquery.SchemaField("acos", "FLOAT"),
+                bigquery.SchemaField("impressions", "INTEGER"),
+                bigquery.SchemaField("clicks", "INTEGER"),
+                bigquery.SchemaField("conversions", "INTEGER"),
+                bigquery.SchemaField("budget", "FLOAT"),
+                bigquery.SchemaField("status", "STRING"),
+            ]
+            
+            self._ensure_table_exists("campaign_details", schema)
+            
+            rows = []
+            timestamp = datetime.utcnow().isoformat()
+            
+            for campaign in budget_data:
+                row = {
+                    "timestamp": timestamp,
+                    "run_id": run_id,
+                    "campaign_id": campaign.get('campaign_id', ''),
+                    "campaign_name": campaign.get('campaign_name', ''),
+                    "spend": 0.0,  # Will be populated by performance data
+                    "sales": 0.0,  # Will be populated by performance data
+                    "acos": 0.0,   # Will be populated by performance data
+                    "impressions": 0,  # Will be populated by performance data
+                    "clicks": 0,       # Will be populated by performance data
+                    "conversions": 0,  # Will be populated by performance data
+                    "budget": float(campaign.get('daily_budget', 0.0)),
+                    "status": campaign.get('state', ''),
+                }
+                rows.append(row)
+            
+            table_ref = f"{self.dataset_ref}.campaign_details"
+            errors = self.client.insert_rows_json(table_ref, rows)
+            
+            if errors:
+                logger.error(f"Error inserting campaign budgets to BigQuery: {errors}")
+                return False
+            
+            logger.info(f"✅ Successfully inserted {len(rows)} campaign budgets into BigQuery")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to insert campaign budgets to BigQuery: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
     
     def write_progress_update(self, progress_data: Dict) -> bool:
         """

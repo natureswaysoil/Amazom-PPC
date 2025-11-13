@@ -706,6 +706,43 @@ class AmazonAdsAPI:
         """Invalidate campaigns cache after updates"""
         self._campaigns_cache = None
     
+    def fetch_campaign_budgets(self) -> List[Dict[str, Any]]:
+        """
+        Fetch campaign budget information for BigQuery storage
+        
+        Returns:
+            List of campaign budget dictionaries with keys:
+            - campaign_id: Campaign identifier
+            - campaign_name: Campaign name
+            - daily_budget: Daily budget amount
+            - budget_type: Budget type (usually 'DAILY')
+            - state: Campaign state (ENABLED, PAUSED, etc.)
+            - targeting_type: Targeting type (AUTO, MANUAL)
+        """
+        try:
+            campaigns = self.get_campaigns()
+            budget_data = []
+            
+            for campaign in campaigns:
+                if not campaign.campaign_id:
+                    continue
+                    
+                budget_data.append({
+                    'campaign_id': campaign.campaign_id,
+                    'campaign_name': campaign.name,
+                    'daily_budget': float(campaign.daily_budget or 0.0),
+                    'budget_type': 'DAILY',  # Amazon Ads API v2 only supports daily budgets
+                    'state': campaign.state,
+                    'targeting_type': campaign.targeting_type,
+                })
+            
+            logger.info(f"Fetched budget data for {len(budget_data)} campaigns")
+            return budget_data
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch campaign budgets: {e}")
+            return []
+    
     def update_campaign(self, campaign_id: str, updates: Dict) -> bool:
         """Update campaign settings"""
         try:

@@ -739,6 +739,20 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
                 dry_run=dry_run
             )
             
+            # Fetch and store campaign budgets in BigQuery (if enabled)
+            if bigquery_client:
+                try:
+                    logger.info("Fetching campaign budget data from Amazon Advertising API...")
+                    budget_data = optimizer.api.fetch_campaign_budgets()
+                    
+                    if budget_data:
+                        logger.info(f"Storing budget data for {len(budget_data)} campaigns in BigQuery...")
+                        bigquery_client.insert_campaign_budgets(budget_data, run_id)
+                    else:
+                        logger.warning("No campaign budget data fetched")
+                except Exception as budget_err:
+                    logger.warning(f"Failed to fetch/store campaign budgets (non-blocking): {budget_err}")
+            
             # Run optimization
             # The optimizer will automatically refresh the access token if needed
             logger.info("Running optimization (token refresh handled automatically)...")
