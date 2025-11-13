@@ -400,7 +400,7 @@ For issues:
 ## Verifying the Abacus AI Dashboard
 
 The production dashboard hosted at
-`https://amazon-ppc-dashboard-qb63yk.abacusai.app/dashboard` is powered by the
+`https://amazon-ppc-dashboard-qb63yk.abacusai.app` is powered by the
 same BigQuery dataset queried by the `/api/bigquery-data` route in this
 Next.js project. To confirm the BigQuery → dashboard connection is healthy:
 
