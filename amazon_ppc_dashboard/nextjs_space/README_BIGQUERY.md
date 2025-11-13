@@ -415,7 +415,7 @@ Next.js project. To confirm the BigQuery → dashboard connection is healthy:
    ```bash
    curl "https://amazon-ppc-dashboard-qb63yk.abacusai.app/api/bigquery-data?table=optimization_results&limit=1" | jq
    ```
-   A `success: true` response with `rowCount > 0` confirms the dashboard can
+   A `success: true` response with `metadata.rowCount > 0` confirms the dashboard can
    reach BigQuery and fetch optimizer runs.
 
 3. **Verify the UI is reading the API**
