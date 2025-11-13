@@ -171,7 +171,6 @@ class BigQueryClient:
             credential_sources.append((google_source, google_credentials_value))
 
         for source_name, raw_value in credential_sources:
-            
             # If the environment variable points to a file path, let google-auth handle it
             if os.path.isfile(raw_value):
                 try:
