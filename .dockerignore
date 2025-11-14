@@ -1,16 +1,27 @@
 # Exclude development and VCS metadata
 .git
 .gitignore
+.github
 
-# Exclude local dependencies and build artifacts
+# Exclude local dependencies
 node_modules
 npm-debug.log*
-dist
 
-# Environment configuration files should be provided via secrets
+# Exclude Python and other unrelated files
+*.py
+*.pyc
+__pycache__
+venv
+.venv
+
+# Environment files
 .env
 .env.*
 
-# Keep TypeScript sources and configuration in the build context
-!tsconfig.json
-!src/**/*
+# Exclude documentation and markdown (not needed at runtime)
+*.md
+
+# Exclude test and build artifacts
+dist
+build
+.pytest_cache
