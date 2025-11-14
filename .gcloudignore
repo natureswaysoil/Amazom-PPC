@@ -32,14 +32,15 @@ LICENSE
 # Frontend/dashboard sources are large and not needed by the Cloud Function
 amazon_ppc_dashboard/
 pages/
-src/
-tsconfig.json
-package.json
-package-lock.json
-Dockerfile
 
-# Node dependencies are only required for the dashboard/CLI builds
+# Node dependencies are only required for the dashboard/CLI builds  
 node_modules/
+
+# Keep these for Cloud Run Node.js service deployment
+!Dockerfile
+!package.json
+!package-lock.json
+!index.js
 
 # Test files
 test_*.py
