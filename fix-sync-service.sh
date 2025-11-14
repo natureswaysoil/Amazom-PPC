@@ -38,6 +38,7 @@ gcloud run deploy $SERVICE_NAME \
   --region=$REGION \
   --source=. \
   --platform=managed \
+  --clear-base-image \
   --set-secrets=AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest,PPC_PROFILE_ID=ppc-profile-id:latest \
   --allow-unauthenticated \
   --timeout=540s \
