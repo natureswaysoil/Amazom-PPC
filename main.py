@@ -6,7 +6,7 @@ import tempfile
 import traceback
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 import functions_framework
 import smtplib
 from email.mime.text import MIMEText
@@ -644,55 +644,92 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
         force_run = request.args.get('force', '').lower() == 'true' or bool(request_json.get('force'))
 
         if not force_run and min_interval_minutes > 0:
-            last_run_candidates = [
-                _get_last_run_memory(),
-                _read_last_run_from_cache(),
-            ]
+            required_delta = timedelta(minutes=min_interval_minutes)
+            source_labels = {
+                'memory': 'in-memory cache',
+                'file_cache': 'local cache file',
+                'bigquery:run_events': 'BigQuery run events table',
+                'bigquery:optimization_results': 'BigQuery optimization results table',
+            }
 
+            TimestampSource = Tuple[datetime, str]
+
+            def pick_latest(sources: List[TimestampSource]) -> Optional[TimestampSource]:
+                return max(sources, key=lambda item: item[0]) if sources else None
+
+            def maybe_skip(candidate: Optional[TimestampSource]) -> Optional[Tuple[Dict[str, Any], int]]:
+                if not candidate:
+                    return None
+
+                last_run_time, source_key = candidate
+                elapsed = now_utc - last_run_time
+                if elapsed >= required_delta:
+                    return None
+
+                remaining = required_delta - elapsed
+                minutes_since = round(elapsed.total_seconds() / 60.0, 2)
+                minutes_remaining = max(round(remaining.total_seconds() / 60.0, 2), 0.0)
+                label = source_labels.get(source_key, source_key)
+
+                logger.warning(
+                    "Skipping optimizer run: last run at %s UTC (%.2f minutes ago) from %s. "
+                    "Minimum interval is %d minutes.",
+                    last_run_time.isoformat(),
+                    minutes_since,
+                    label,
+                    min_interval_minutes,
+                )
+
+                if source_key not in {'memory', 'file_cache'}:
+                    _update_last_run_memory(last_run_time)
+                    _write_last_run_to_cache(last_run_time)
+
+                response = {
+                    'status': 'skipped',
+                    'reason': 'run_interval_enforced',
+                    'timestamp': now_utc.isoformat(),
+                    'last_run_at': last_run_time.isoformat(),
+                    'last_run_source': source_key,
+                    'min_interval_minutes': min_interval_minutes,
+                    'minutes_since_last_run': minutes_since,
+                    'minutes_until_next_run': minutes_remaining,
+                    'force_run_available': True,
+                }
+
+                return response, 200
+
+            local_sources: List[TimestampSource] = []
+            memory_time = _get_last_run_memory()
+            if memory_time:
+                local_sources.append((memory_time, 'memory'))
+            cache_time = _read_last_run_from_cache()
+            if cache_time:
+                local_sources.append((cache_time, 'file_cache'))
+
+            skip_response = maybe_skip(pick_latest(local_sources))
+            if skip_response:
+                return skip_response
+
+            remote_sources: List[TimestampSource] = []
             if bigquery_client:
                 try:
                     last_event = bigquery_client.get_last_run_event_timestamp()
                     if last_event:
-                        last_run_candidates.append(last_event)
+                        remote_sources.append((last_event, 'bigquery:run_events'))
                 except Exception as guard_err:
                     logger.warning(f"Failed to read last run event timestamp: {guard_err}")
 
                 try:
                     last_success = bigquery_client.get_last_result_timestamp(statuses=['success'])
                     if last_success:
-                        last_run_candidates.append(last_success)
+                        remote_sources.append((last_success, 'bigquery:optimization_results'))
                 except Exception as guard_err:
                     logger.warning(f"Failed to read last successful run timestamp: {guard_err}")
 
-            last_run_time = _select_latest_timestamp(*last_run_candidates)
-
-            if last_run_time:
-                elapsed = now_utc - last_run_time
-                required_delta = timedelta(minutes=min_interval_minutes)
-
-                if elapsed < required_delta:
-                    remaining = required_delta - elapsed
-                    minutes_since = round(elapsed.total_seconds() / 60.0, 2)
-                    minutes_remaining = max(round(remaining.total_seconds() / 60.0, 2), 0.0)
-
-                    logger.warning(
-                        "Skipping optimizer run: last run at %s UTC (%.2f minutes ago). "
-                        "Minimum interval is %d minutes.",
-                        last_run_time.isoformat(),
-                        minutes_since,
-                        min_interval_minutes,
-                    )
-
-                    return {
-                        'status': 'skipped',
-                        'reason': 'run_interval_enforced',
-                        'timestamp': now_utc.isoformat(),
-                        'last_run_at': last_run_time.isoformat(),
-                        'min_interval_minutes': min_interval_minutes,
-                        'minutes_since_last_run': minutes_since,
-                        'minutes_until_next_run': minutes_remaining,
-                        'force_run_available': True,
-                    }, 200
+            combined_latest = pick_latest(local_sources + remote_sources)
+            skip_response = maybe_skip(combined_latest)
+            if skip_response:
+                return skip_response
 
         if force_run:
             logger.info("Force run requested - bypassing minimum interval check")
