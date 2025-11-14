@@ -12,6 +12,7 @@ RUN npm install --production
 
 # Copy application code
 COPY index.js ./
+COPY server.js ./
 
-# Run the application
-CMD ["node", "index.js"]
+# Run the HTTP server
+CMD ["node", "server.js"]
