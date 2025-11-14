@@ -838,21 +838,31 @@ class AmazonAdsAPI:
     # ========================================================================
     
     def get_keywords(self, campaign_id: str = None, ad_group_id: str = None) -> List[Keyword]:
-        """Get keywords using extended endpoint"""
+        """Get keywords using v2 endpoint with required filters"""
         try:
             # v2 keywords endpoint requires filtering by campaign or ad group
             # Cannot list all keywords without filters
             if not campaign_id and not ad_group_id:
-                logger.warning("Keywords endpoint requires campaignIdFilter or adGroupIdFilter. Fetching by campaign...")
+                logger.info("Keywords endpoint requires campaignIdFilter or adGroupIdFilter. Fetching by campaign...")
                 # Get all campaigns first
                 campaigns = self.get_campaigns()
                 all_keywords = []
-                for camp in campaigns[:10]:  # Limit to first 10 campaigns to avoid rate limits
+                total_campaigns = len(campaigns)
+                
+                logger.info(f"Fetching keywords from {total_campaigns} campaigns...")
+                
+                # Process campaigns in batches with rate limiting
+                for i, camp in enumerate(campaigns, 1):
                     try:
                         camp_keywords = self.get_keywords(campaign_id=camp.campaign_id)
                         all_keywords.extend(camp_keywords)
+                        
+                        if i % 10 == 0:
+                            logger.info(f"Progress: {i}/{total_campaigns} campaigns processed, {len(all_keywords)} keywords found")
                     except Exception as e:
                         logger.error(f"Failed to get keywords for campaign {camp.campaign_id}: {e}")
+                
+                logger.info(f"Completed: Retrieved {len(all_keywords)} keywords from {total_campaigns} campaigns")
                 return all_keywords
             
             params = {}
