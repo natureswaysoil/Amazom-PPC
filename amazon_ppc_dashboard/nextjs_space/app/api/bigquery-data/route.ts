@@ -8,12 +8,32 @@ type ServiceAccountCredentials = {
   private_key: string;
 };
 
+const SERVICE_ACCOUNT_JSON_ENV_NAMES = [
+  'GCP_SERVICE_ACCOUNT_KEY',
+  'GCP_SA_KEY',
+  'GCP_SERVICE_ACCOUNT_JSON',
+  'GCP_SERVICE_ACCOUNT',
+  'GCP_SERVICE_KEY',
+  'GCP_CREDENTIALS',
+  'GOOGLE_CREDENTIALS',
+  'GOOGLE_APPLICATION_CREDENTIALS_JSON',
+  'GOOGLE_APPLICATION_CREDENTIALS_BASE64',
+  'GOOGLE_APPLICATION_CREDENTIALS_B64',
+  'SERVICE_ACCOUNT_JSON',
+  'BIGQUERY_SERVICE_ACCOUNT_KEY',
+  'BIGQUERY_CREDENTIALS',
+  'BQ_SERVICE_ACCOUNT_KEY',
+];
+
 const SERVICE_ACCOUNT_EMAIL_ENV_NAMES = [
   'GCP_SERVICE_ACCOUNT_EMAIL',
   'GCP_CLIENT_EMAIL',
   'GOOGLE_CLIENT_EMAIL',
   'BIGQUERY_CLIENT_EMAIL',
   'BQ_CLIENT_EMAIL',
+  'SERVICE_ACCOUNT_EMAIL',
+  'GOOGLE_SERVICE_ACCOUNT_EMAIL',
+  'GCP_SERVICE_ACCOUNT_USER',
 ];
 
 const SERVICE_ACCOUNT_KEY_ENV_NAMES = [
@@ -22,6 +42,9 @@ const SERVICE_ACCOUNT_KEY_ENV_NAMES = [
   'GOOGLE_PRIVATE_KEY',
   'BIGQUERY_PRIVATE_KEY',
   'BQ_PRIVATE_KEY',
+  'SERVICE_ACCOUNT_PRIVATE_KEY',
+  'GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY',
+  'GCP_SERVICE_ACCOUNT_PRIVATE_KEY',
 ];
 
 const PROJECT_ID_ENV_NAMES = [
@@ -31,22 +54,35 @@ const PROJECT_ID_ENV_NAMES = [
   'GCP_PROJECT_ID',
   'BIGQUERY_PROJECT_ID',
   'BQ_PROJECT_ID',
+  'GOOGLE_PROJECT',
+  'GCLOUD_PROJECT',
 ];
 
-function getFirstSetEnv(names: string[]): string | undefined {
+type EnvLookupResult = {
+  name: string;
+  value: string;
+};
+
+function getFirstSetEnvWithName(names: string[]): EnvLookupResult | undefined {
   for (const name of names) {
     const value = process.env[name];
     if (value && value.trim()) {
-      return value.trim();
+      return { name, value: value.trim() };
     }
   }
+
   for (const name of names) {
     const combined = combineSplitEnv(name);
     if (combined && combined.trim()) {
-      return combined.trim();
+      return { name: `${name} (split parts)`, value: combined.trim() };
     }
   }
+
   return undefined;
+}
+
+function getFirstSetEnv(names: string[]): string | undefined {
+  return getFirstSetEnvWithName(names)?.value;
 }
 
 function combineSplitEnv(baseName: string): string | undefined {
@@ -169,27 +205,19 @@ export async function GET(request: NextRequest) {
     // 3. Default application credentials (if running in GCP)
     let credentials: any = undefined;
     
-    const serviceAccountKey = getFirstSetEnv(['GCP_SERVICE_ACCOUNT_KEY', 'GCP_SA_KEY']);
-    const googleCredentialsEnv = getFirstSetEnv(['GOOGLE_APPLICATION_CREDENTIALS']);
-
-    let serviceAccountSource = 'GCP_SERVICE_ACCOUNT_KEY';
-    if (!process.env.GCP_SERVICE_ACCOUNT_KEY && process.env.GCP_SA_KEY) {
-      serviceAccountSource = 'GCP_SA_KEY';
-    } else if (!process.env.GCP_SERVICE_ACCOUNT_KEY && !process.env.GCP_SA_KEY) {
-      if (combineSplitEnv('GCP_SERVICE_ACCOUNT_KEY')) {
-        serviceAccountSource = 'GCP_SERVICE_ACCOUNT_KEY (split parts)';
-      } else if (combineSplitEnv('GCP_SA_KEY')) {
-        serviceAccountSource = 'GCP_SA_KEY (split parts)';
-      }
-    }
+    const serviceAccountKeyResult = getFirstSetEnvWithName(SERVICE_ACCOUNT_JSON_ENV_NAMES);
+    const serviceAccountKey = serviceAccountKeyResult?.value;
+    const serviceAccountSource = serviceAccountKeyResult?.name || 'GCP_SERVICE_ACCOUNT_KEY';
+    const googleCredentialsResult = getFirstSetEnvWithName(['GOOGLE_APPLICATION_CREDENTIALS']);
+    const googleCredentialsEnv = googleCredentialsResult?.value;
 
     if (serviceAccountKey) {
       credentials = parseServiceAccount(serviceAccountKey, serviceAccountSource);
       if (!credentials) {
         return NextResponse.json({
           error: 'Configuration error',
-          message: 'GCP_SERVICE_ACCOUNT_KEY is not valid JSON or base64 encoded JSON',
-          details: 'Provide the raw JSON service account key or a base64 encoded version of it in the GCP_SERVICE_ACCOUNT_KEY environment variable, then redeploy.',
+          message: `${serviceAccountSource} is not valid JSON or base64 encoded JSON`,
+          details: `Provide the raw JSON service account key or a base64 encoded version of it in the ${serviceAccountSource} environment variable, then redeploy.`,
         }, { status: 500 });
       }
 
@@ -198,10 +226,7 @@ export async function GET(request: NextRequest) {
         console.log(`Using project ID from ${serviceAccountSource}:`, projectId);
       }
     } else if (googleCredentialsEnv) {
-      let googleSource = 'GOOGLE_APPLICATION_CREDENTIALS';
-      if (!process.env.GOOGLE_APPLICATION_CREDENTIALS && combineSplitEnv('GOOGLE_APPLICATION_CREDENTIALS')) {
-        googleSource = 'GOOGLE_APPLICATION_CREDENTIALS (split parts)';
-      }
+      const googleSource = googleCredentialsResult?.name || 'GOOGLE_APPLICATION_CREDENTIALS';
 
       credentials = parseServiceAccount(googleCredentialsEnv, googleSource);
 
@@ -252,12 +277,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         error: 'Missing Google Cloud credentials',
         message: 'BigQuery credentials are not configured for this deployment.',
-        details: 'Set the GCP_SERVICE_ACCOUNT_KEY environment variable to the contents of your service account JSON file (or a base64 encoded version) and redeploy.',
+        details: 'Set a supported environment variable such as GCP_SERVICE_ACCOUNT_KEY, GCP_CREDENTIALS, GOOGLE_CREDENTIALS, or BIGQUERY_SERVICE_ACCOUNT_KEY to the contents of your service account JSON (raw or base64 encoded) and redeploy.',
         documentation: 'See amazon_ppc_dashboard/nextjs_space/README_BIGQUERY.md for detailed setup instructions.',
         troubleshooting: [
-          'In Vercel, add GCP_SERVICE_ACCOUNT_KEY as an Environment Variable (use the JSON from your service account key).',
+          'In Vercel, add GCP_SERVICE_ACCOUNT_KEY (or GOOGLE_CREDENTIALS/BIGQUERY_SERVICE_ACCOUNT_KEY) as an Environment Variable and paste the JSON from your service account key.',
           'Alternatively, provide credential parts: GCP_CLIENT_EMAIL / GOOGLE_CLIENT_EMAIL and GCP_PRIVATE_KEY / GOOGLE_PRIVATE_KEY (with newlines escaped as \\n).',
-          'You can also set GOOGLE_APPLICATION_CREDENTIALS to the JSON string (not a file path).',
+          'You can also set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS_JSON to the JSON string (not a file path).',
           'After updating variables, redeploy the dashboard.'
         ],
       }, { status: 500 });
