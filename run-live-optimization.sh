@@ -18,9 +18,12 @@ echo "  - Add new keywords from search terms"
 echo "  - Add negative keywords"
 echo "  - Pause/activate campaigns"
 echo ""
-read -p "Are you sure you want to proceed? (type 'YES' to continue): " confirm
+read -p "Are you sure you want to proceed? (type 'yes' or 'YES' to continue): " confirm
 
-if [ "$confirm" != "YES" ]; then
+# Convert to uppercase for comparison
+confirm_upper=$(echo "$confirm" | tr '[:lower:]' '[:upper:]')
+
+if [ "$confirm_upper" != "YES" ]; then
   echo "Cancelled."
   exit 0
 fi
