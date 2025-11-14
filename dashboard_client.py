@@ -394,6 +394,7 @@ class DashboardClient:
         """Extract summary metrics from results"""
         summary = {
             'campaigns_analyzed': 0,
+            'campaigns_with_metrics': 0,
             'keywords_optimized': 0,
             'bids_increased': 0,
             'bids_decreased': 0,
@@ -438,6 +439,11 @@ class DashboardClient:
                     + camp_data.get('no_change', 0)
                 )
             summary['campaigns_analyzed'] += campaigns_analyzed
+            campaigns_with_metrics = camp_data.get('campaigns_with_metrics')
+            if campaigns_with_metrics is not None:
+                summary['campaigns_with_metrics'] += campaigns_with_metrics
+            else:
+                summary['campaigns_with_metrics'] += campaigns_analyzed
             summary['budget_changes'] += camp_data.get(
                 'budget_changes',
                 camp_data.get('campaigns_paused', 0) + camp_data.get('campaigns_activated', 0)

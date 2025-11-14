@@ -1754,17 +1754,30 @@ class CampaignManager:
         
         # Get current campaigns
         campaigns = self.api.get_campaigns()
-        campaign_map = {c.campaign_id: c for c in campaigns}
+        campaign_map = {
+            c.campaign_id: c
+            for c in campaigns
+            if c.campaign_id and (c.state or '').lower() != 'archived'
+        }
+        total_active_campaigns = len(campaign_map)
+
+        analyzed_campaign_ids: Set[str] = set()
         
         acos_threshold = self.config.get('campaign_management.acos_threshold', 0.45)
         min_spend = self.config.get('campaign_management.min_spend', 20.0)
         
         for row in report_data:
-            campaign_id = row.get('campaignId')
-            if not campaign_id or campaign_id not in campaign_map:
+            campaign_id_raw = row.get('campaignId')
+            if not campaign_id_raw:
                 continue
-            
+
+            campaign_id = str(campaign_id_raw)
+            if campaign_id not in campaign_map:
+                continue
+
             campaign = campaign_map[campaign_id]
+
+            analyzed_campaign_ids.add(campaign_id)
             
             # Calculate metrics
             cost = float(row.get('cost', 0) or 0)
@@ -1778,7 +1791,6 @@ class CampaignManager:
             acos = (cost / sales) if sales > 0 else float('inf')
 
             # Track aggregated metrics for dashboard reporting
-            results['campaigns_analyzed'] += 1
             results['total_spend'] += cost
             results['total_sales'] += sales
 
@@ -1819,6 +1831,9 @@ class CampaignManager:
             else:
                 results['no_change'] += 1
 
+        results['campaigns_analyzed'] = total_active_campaigns
+        results['campaigns_with_metrics'] = len(analyzed_campaign_ids)
+
         # Budget changes reflect any pacing adjustments
         results['budget_changes'] = (
             results['campaigns_activated'] + results['campaigns_paused']
@@ -1826,6 +1841,8 @@ class CampaignManager:
 
         if results['total_sales'] > 0:
             results['average_acos'] = results['total_spend'] / results['total_sales']
+        else:
+            results['average_acos'] = 0.0
 
         elapsed = time.time() - start_time
         logger.info(f"Campaign management complete in {elapsed:.2f}s: {results}")
