@@ -29,20 +29,27 @@ class AmazonAdvertisingClient {
       apiBaseUrl,
     } = options;
 
+    const normalizedClientId = sanitizeSecret(clientId);
+    const normalizedClientSecret = sanitizeSecret(clientSecret);
+    const normalizedRefreshToken = sanitizeSecret(refreshToken);
+    const normalizedProfileId = sanitizeSecret(profileId) || null;
+    const normalizedRegion = sanitizeSecret(region) || 'NA';
+    const normalizedApiBaseUrl = sanitizeSecret(apiBaseUrl);
+
     const missing = [];
-    if (!clientId) missing.push('clientId');
-    if (!clientSecret) missing.push('clientSecret');
-    if (!refreshToken) missing.push('refreshToken');
+    if (!normalizedClientId) missing.push('clientId');
+    if (!normalizedClientSecret) missing.push('clientSecret');
+    if (!normalizedRefreshToken) missing.push('refreshToken');
     if (missing.length) {
       throw new Error(`Missing required Amazon Advertising credentials: ${missing.join(', ')}`);
     }
 
-    this.clientId = clientId;
-    this.clientSecret = clientSecret;
-    this.refreshToken = refreshToken;
-    this.profileId = profileId || null;
-    this.region = region.toUpperCase();
-    this.apiBaseUrl = apiBaseUrl || API_HOSTS[this.region] || API_HOSTS.NA;
+    this.clientId = normalizedClientId;
+    this.clientSecret = normalizedClientSecret;
+    this.refreshToken = normalizedRefreshToken;
+    this.profileId = normalizedProfileId;
+    this.region = normalizedRegion.toUpperCase();
+    this.apiBaseUrl = normalizedApiBaseUrl || API_HOSTS[this.region] || API_HOSTS.NA;
 
     this.accessToken = null;
     this.tokenExpiresAt = 0;
@@ -75,16 +82,16 @@ class AmazonAdvertisingClient {
   }
 
   async _performTokenRefresh() {
-    const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: this.refreshToken,
-      client_id: this.clientId,
-      client_secret: this.clientSecret,
-    });
-
     let lastError = null;
 
     for (let attempt = 1; attempt <= TOKEN_REFRESH_MAX_ATTEMPTS; attempt += 1) {
+      const body = new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: this.refreshToken,
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+      });
+
       let response;
       try {
         response = await fetch(TOKEN_ENDPOINT, {
@@ -150,10 +157,11 @@ class AmazonAdvertisingClient {
       this.accessToken = payload.access_token;
       this.tokenExpiresAt = Date.now() + expiresIn * 1000;
 
-      if (payload.refresh_token && payload.refresh_token !== this.refreshToken) {
+      const rotatedRefreshToken = sanitizeSecret(payload.refresh_token);
+      if (rotatedRefreshToken && rotatedRefreshToken !== this.refreshToken) {
         // Amazon may rotate refresh tokens; warn so operators can persist the new value.
         console.warn('Received rotated Amazon Ads refresh token. Update Secret Manager to persist the new token.');
-        this.refreshToken = payload.refresh_token;
+        this.refreshToken = rotatedRefreshToken;
       }
 
       return this.accessToken;
@@ -337,6 +345,15 @@ function extractErrorMessage(payload, rawPayload, statusDetails) {
   return `Failed to refresh access token (${statusDetails})`;
 }
 
+function sanitizeSecret(value) {
+  if (typeof value !== 'string') {
+    return value ?? null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
 function loadConfigFromEnv() {
   const {
     AMAZON_CLIENT_ID,
@@ -348,25 +365,32 @@ function loadConfigFromEnv() {
     AMAZON_API_BASE_URL,
   } = process.env;
 
-  const profileId = AMAZON_PROFILE_ID || PPC_PROFILE_ID;
+  const profileId = sanitizeSecret(AMAZON_PROFILE_ID) || sanitizeSecret(PPC_PROFILE_ID);
   const missing = [];
 
-  if (!AMAZON_CLIENT_ID) missing.push('AMAZON_CLIENT_ID');
-  if (!AMAZON_CLIENT_SECRET) missing.push('AMAZON_CLIENT_SECRET');
-  if (!AMAZON_REFRESH_TOKEN) missing.push('AMAZON_REFRESH_TOKEN');
+  const clientId = sanitizeSecret(AMAZON_CLIENT_ID);
+  const clientSecret = sanitizeSecret(AMAZON_CLIENT_SECRET);
+  const refreshToken = sanitizeSecret(AMAZON_REFRESH_TOKEN);
+
+  if (!clientId) missing.push('AMAZON_CLIENT_ID');
+  if (!clientSecret) missing.push('AMAZON_CLIENT_SECRET');
+  if (!refreshToken) missing.push('AMAZON_REFRESH_TOKEN');
   if (!profileId) missing.push('AMAZON_PROFILE_ID or PPC_PROFILE_ID');
 
   if (missing.length) {
     throw new Error(`Missing required environment configuration: ${missing.join(', ')}`);
   }
 
+  const region = sanitizeSecret(AMAZON_REGION) || 'NA';
+  const apiBaseUrl = sanitizeSecret(AMAZON_API_BASE_URL);
+
   return {
-    clientId: AMAZON_CLIENT_ID,
-    clientSecret: AMAZON_CLIENT_SECRET,
-    refreshToken: AMAZON_REFRESH_TOKEN,
+    clientId,
+    clientSecret,
+    refreshToken,
     profileId,
-    region: AMAZON_REGION || 'NA',
-    apiBaseUrl: AMAZON_API_BASE_URL,
+    region,
+    apiBaseUrl,
   };
 }
 
