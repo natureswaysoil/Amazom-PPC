@@ -1,6 +1,6 @@
 import { readFile } from 'fs/promises';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { InstagramPublisher } from './instagram';
 import { PinterestPublisher } from './pinterest';
 import { TwitterPublisher } from './twitter';
@@ -177,17 +177,9 @@ function resolveFilePath(filePath: string): string {
     return filePath;
   }
 
-  const cwdUrl = pathToFileUrl(process.cwd()).href;
+  const cwdUrl = pathToFileURL(process.cwd()).href;
   const resolved = new URL(filePath, cwdUrl);
   return fileURLToPath(resolved);
-}
-
-function pathToFileUrl(p: string): URL {
-  let resolved = path.resolve(p);
-  if (!resolved.startsWith('/')) {
-    resolved = `/${resolved}`;
-  }
-  return new URL(`file://${resolved}`);
 }
 
 function isVideoJob(value: unknown): value is VideoJob {
