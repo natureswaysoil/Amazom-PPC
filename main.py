@@ -511,29 +511,45 @@ def run_verify_connection(request) -> Tuple[Dict[str, Any], int]:
                 profile_id = config.get('amazon_api', {}).get('profile_id', '')
             if not profile_id:
                 raise ValueError("profile_id is required (set AMAZON_PROFILE_ID env var or amazon_api.profile_id in config)")
-            
+
             # Create optimizer instance (this will authenticate)
             optimizer = PPCAutomation(
                 config_path=config_file_path,
                 profile_id=profile_id,
                 dry_run=True  # Always use dry_run for verification
             )
-            
-            # Try to fetch a small sample of campaigns
-            logger.info(f"Fetching {sample_size} campaigns to verify connection...")
-            
-            # This would call the Amazon Ads API to verify connection
-            # For now, we'll indicate success if we can initialize
+
+            # Perform real API verification (fetch campaigns via client helper)
+            logger.info(f"Verifying connectivity by requesting up to {sample_size} campaigns...")
+            verification = optimizer.api.verify_connection(sample_size)
+
+            if not verification.get('success'):
+                logger.error("Amazon Ads API verification failed (campaign fetch error)")
+                return {
+                    'status': 'error',
+                    'message': 'Amazon Ads API verification failed',
+                    'error': verification.get('error', 'unknown_error'),
+                    'profile_id': profile_id,
+                    'timestamp': datetime.now().isoformat(),
+                    'troubleshooting': [
+                        'Validate AMAZON_CLIENT_ID / AMAZON_CLIENT_SECRET',
+                        'Confirm AMAZON_REFRESH_TOKEN is active',
+                        'Ensure profile_id matches an accessible Amazon Ads profile',
+                        'Check Amazon Ads API status',
+                        'Confirm required scope/permissions for Sponsored Products'
+                    ]
+                }, 500
+
             response = {
                 'status': 'success',
                 'message': 'Amazon Ads API connection verified',
                 'profile_id': profile_id,
                 'timestamp': datetime.now().isoformat(),
-                'sample_size': sample_size,
-                'note': 'Connection successful - credentials are valid and API is reachable'
+                'campaign_count': verification.get('campaign_count', 0),
+                'sample': verification.get('sample', []),
+                'note': 'Credentials valid and campaigns endpoint reachable'
             }
-            
-            logger.info("Connection verification successful")
+            logger.info(f"Connection verification successful - campaign_count={response['campaign_count']}")
             return response, 200
             
     except Exception as e:

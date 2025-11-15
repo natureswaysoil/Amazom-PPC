@@ -433,6 +433,8 @@ class AmazonAdsAPI:
         # Cache for campaigns and ad groups (lifetime of API instance)
         self._campaigns_cache = None
         self._ad_groups_cache = None
+        # Track last fetch error for campaigns to distinguish true empty set from failure
+        self._last_campaigns_error: Optional[Exception] = None
     
     def _authenticate(self) -> Auth:
         """Authenticate and get access token"""
@@ -686,6 +688,8 @@ class AmazonAdsAPI:
             return self._campaigns_cache
         
         try:
+            # Clear previous error before new attempt
+            self._last_campaigns_error = None
             params = {}
             if state_filter:
                 params['stateFilter'] = state_filter
@@ -721,6 +725,7 @@ class AmazonAdsAPI:
             return campaigns
         except Exception as e:
             logger.error(f"Failed to get campaigns: {e}")
+            self._last_campaigns_error = e
             return []
     
     def invalidate_campaigns_cache(self):
@@ -1880,6 +1885,12 @@ class CampaignManager:
         elapsed = time.time() - start_time
         logger.info(f"Campaign management complete in {elapsed:.2f}s: {results}")
         results['execution_time_seconds'] = round(elapsed, 2)
+
+        # Propagate fetch error for visibility if no campaigns were analyzed
+        if total_active_campaigns == 0 and getattr(self.api, '_last_campaigns_error', None) is not None:
+            results['error'] = 'campaign_fetch_failed'
+            results['campaign_fetch_error'] = str(self.api._last_campaigns_error)
+            logger.warning("Campaign fetch failed; exposing error in results payload")
         return results
 
 
