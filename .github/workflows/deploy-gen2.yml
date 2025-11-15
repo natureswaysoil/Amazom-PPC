@@ -1,0 +1,174 @@
+name: Deploy Cloud Functions Gen2 (WIF)
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '*.md'
+      - 'amazon_ppc_dashboard/**'
+      - '.github/**'
+  workflow_dispatch:
+    inputs:
+      region:
+        description: GCP region
+        required: false
+        default: us-central1
+      log_level:
+        description: LOG_LEVEL env var
+        required: false
+        default: DEBUG
+      force_deploy:
+        description: Force a new revision (sets BUILD_TS)
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-amazon-ppc-optimizer
+  cancel-in-progress: true
+
+env:
+  FUNCTION_NAME: amazon-ppc-optimizer
+  ENTRY_POINT: run_optimizer
+  RUNTIME: python311
+  TIMEOUT: 540s
+  MEMORY: 512MB
+  CPU: '1'
+  MIN_INSTANCES: '0'
+  MAX_INSTANCES: '5'
+  PPC_FEATURES: bid_optimization,dayparting
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          export_default_credentials: true
+
+      - name: Set variables
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          REGION_INPUT='${{ github.event.inputs.region }}'
+          LOG_LEVEL_INPUT='${{ github.event.inputs.log_level }}'
+          FORCE_DEPLOY='${{ github.event.inputs.force_deploy }}'
+          REGION="${REGION_INPUT:-us-central1}"
+          LOG_LEVEL="${LOG_LEVEL_INPUT:-DEBUG}"
+          echo "region=${REGION}" >> "$GITHUB_OUTPUT"
+          echo "log_level=${LOG_LEVEL}" >> "$GITHUB_OUTPUT"
+          if [[ "${FORCE_DEPLOY:-true}" == "true" ]]; then
+            BUILD_TS=$(date +%s)
+          else
+            BUILD_TS=""
+          fi
+          echo "build_ts=${BUILD_TS}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Cloud Function (Gen2)
+        shell: bash
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: ${{ steps.vars.outputs.region }}
+          LOG_LEVEL: ${{ steps.vars.outputs.log_level }}
+          BUILD_TS: ${{ steps.vars.outputs.build_ts }}
+          FUNCTION_NAME: ${{ env.FUNCTION_NAME }}
+          ENTRY_POINT: ${{ env.ENTRY_POINT }}
+          RUNTIME: ${{ env.RUNTIME }}
+          TIMEOUT: ${{ env.TIMEOUT }}
+          MEMORY: ${{ env.MEMORY }}
+          CPU: ${{ env.CPU }}
+          MIN_INSTANCES: ${{ env.MIN_INSTANCES }}
+          MAX_INSTANCES: ${{ env.MAX_INSTANCES }}
+          PPC_FEATURES: ${{ env.PPC_FEATURES }}
+          # Secret Manager secret names (must exist in the project)
+          AMAZON_CLIENT_ID_SECRET: amazon-client-id
+          AMAZON_CLIENT_SECRET_SECRET: amazon-client-secret
+          AMAZON_REFRESH_TOKEN_SECRET: amazon-refresh-token
+          AMAZON_PROFILE_ID_SECRET: amazon-profile-id
+          # Runtime service account (same as WIF SA by default)
+          SERVICE_ACCOUNT_EMAIL: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          echo "Deploying to project ${PROJECT_ID}, region ${REGION}"
+          EXTRA_ENV="LOG_LEVEL=${LOG_LEVEL}"
+          if [[ -n "${BUILD_TS}" ]]; then
+            EXTRA_ENV="${EXTRA_ENV},BUILD_TS=${BUILD_TS}"
+          fi
+          if [[ -n "${PPC_FEATURES}" ]]; then
+            EXTRA_ENV="${EXTRA_ENV},PPC_FEATURES=${PPC_FEATURES}"
+          fi
+
+          gcloud functions deploy "${FUNCTION_NAME}" \
+            --gen2 \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}" \
+            --runtime="${RUNTIME}" \
+            --source=. \
+            --entry-point="${ENTRY_POINT}" \
+            --trigger-http \
+            --no-allow-unauthenticated \
+            --timeout="${TIMEOUT}" \
+            --memory="${MEMORY}" \
+            --cpu="${CPU}" \
+            --min-instances="${MIN_INSTANCES}" \
+            --max-instances="${MAX_INSTANCES}" \
+            --service-account="${SERVICE_ACCOUNT_EMAIL}" \
+            --set-secrets=AMAZON_CLIENT_ID=${AMAZON_CLIENT_ID_SECRET}:latest,AMAZON_CLIENT_SECRET=${AMAZON_CLIENT_SECRET_SECRET}:latest,AMAZON_REFRESH_TOKEN=${AMAZON_REFRESH_TOKEN_SECRET}:latest,AMAZON_PROFILE_ID=${AMAZON_PROFILE_ID_SECRET}:latest \
+            --set-env-vars="${EXTRA_ENV}"
+
+      - name: Get Function URL
+        id: describe
+        shell: bash
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: ${{ steps.vars.outputs.region }}
+          FUNCTION_NAME: ${{ env.FUNCTION_NAME }}
+        run: |
+          set -euo pipefail
+          URL=$(gcloud functions describe "${FUNCTION_NAME}" --project "${PROJECT_ID}" --region "${REGION}" --gen2 --format='value(serviceConfig.uri)')
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "Function URL: ${URL}"
+
+      - name: Health check (authenticated)
+        if: steps.describe.outputs.url != ''
+        shell: bash
+        env:
+          FUNCTION_URL: ${{ steps.describe.outputs.url }}
+        run: |
+          set -euo pipefail
+          ID_TOKEN=$(gcloud auth print-identity-token --audiences="${FUNCTION_URL}")
+          echo "Calling health endpoint..."
+          curl -sS -H "Authorization: Bearer ${ID_TOKEN}" "${FUNCTION_URL}?health=true" || true
+
+      - name: Verify connection (authenticated, small sample)
+        if: steps.describe.outputs.url != ''
+        shell: bash
+        env:
+          FUNCTION_URL: ${{ steps.describe.outputs.url }}
+        run: |
+          set -euo pipefail
+          ID_TOKEN=$(gcloud auth print-identity-token --audiences="${FUNCTION_URL}")
+          echo "Calling verify_connection..."
+          curl -sS -H "Authorization: Bearer ${ID_TOKEN}" "${FUNCTION_URL}?verify_connection=true&verify_sample_size=5" || true
+
+      - name: Post-deploy tips
+        run: |
+          echo "If verification fails with 401/403, check Cloud Logging for diagnostics."
+          echo "Ensure the runtime service account has roles: secretmanager.secretAccessor, logging.logWriter, run.invoker."
+          echo "Confirm Secret Manager secrets exist: amazon-client-id, amazon-client-secret, amazon-refresh-token, amazon-profile-id."
