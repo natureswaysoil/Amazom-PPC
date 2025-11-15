@@ -605,30 +605,42 @@ class AmazonAdsAPI:
                     body_preview = response.text[:1000] if response.text else 'Empty response'
                     logger.error(f"Amazon API error {response.status_code}: {body_preview}")
 
-                    # Extra diagnostics for auth-related 401/403
+                    # Extra diagnostics for auth-related 401/403 - BEFORE any exception raising
                     if response.status_code in (401, 403):
                         auth_header = headers.get("Authorization", "")
                         token_part = auth_header.split(" ", 1)[1] if " " in auth_header else auth_header
                         token_len = len(token_part)
                         # Detect suspicious whitespace characters
                         has_newline = any(ch in token_part for ch in ['\n', '\r', '\t'])
-                        start_fragment = token_part[:14]
-                        end_fragment = token_part[-14:] if token_len >= 14 else token_part
-                        logger.warning(
-                            "Auth diagnostics: token_len=%d has_newline=%s start='%s...' end='...%s' scope=%s client_id_prefix=%s", 
-                            token_len,
-                            has_newline,
-                            start_fragment,
-                            end_fragment,
-                            self.profile_id,
-                            (self.client_id[:8] + '...' if self.client_id else 'MISSING')
+                        has_space = ' ' in token_part
+                        start_fragment = token_part[:20] if len(token_part) >= 20 else token_part
+                        end_fragment = token_part[-20:] if token_len >= 20 else ""
+                        
+                        # Log full diagnostics
+                        logger.error(
+                            "AUTH DIAGNOSTIC - token_len=%d has_newline=%s has_space=%s", 
+                            token_len, has_newline, has_space
                         )
+                        logger.error("AUTH DIAGNOSTIC - token_start='%s'", start_fragment)
+                        logger.error("AUTH DIAGNOSTIC - token_end='%s'", end_fragment)
+                        logger.error("AUTH DIAGNOSTIC - profile_id=%s", self.profile_id)
+                        logger.error("AUTH DIAGNOSTIC - client_id=%s", 
+                                   (self.client_id[:12] + '...' if self.client_id and len(self.client_id) > 12 else self.client_id or 'MISSING'))
+                        
+                        # Check for Authorization header format issues
+                        if not auth_header.startswith("Bearer "):
+                            logger.error("AUTH DIAGNOSTIC - Authorization header does NOT start with 'Bearer '!")
+                        
                         # Confirm presence of required headers
                         missing_headers = [h for h in ["Amazon-Advertising-API-ClientId", "Amazon-Advertising-API-Scope"] if h not in headers]
                         if missing_headers:
-                            logger.warning(f"Missing required Amazon Ads headers: {missing_headers}")
+                            logger.error(f"AUTH DIAGNOSTIC - Missing required headers: {missing_headers}")
                         else:
-                            logger.debug("All required Amazon Ads auth headers present")
+                            logger.info("AUTH DIAGNOSTIC - All required Amazon Ads headers present")
+                        
+                        # Log the actual Authorization header value (first 50 chars only for security)
+                        logger.error("AUTH DIAGNOSTIC - Full Authorization header (first 50 chars): '%s'", 
+                                   auth_header[:50] if len(auth_header) > 50 else auth_header)
 
                     if response.status_code in (401, 403) and not reauth_attempted:
                         logger.info(
