@@ -464,6 +464,136 @@ def run_health_check(request) -> Tuple[Dict[str, Any], int]:
         }, 500
 
 
+def run_list_profiles(request) -> Tuple[Dict[str, Any], int]:
+    """
+    List accessible Amazon Advertising profiles
+    
+    This endpoint:
+    - Gets a fresh access token
+    - Calls the /v2/profiles endpoint
+    - Shows which profiles your API credentials can access
+    - Tests campaigns endpoint for the configured profile
+    
+    Args:
+        request: HTTP request object
+        
+    Returns:
+        List of accessible profiles with details
+    """
+    logger.info("=== List Profiles Requested ===")
+    
+    try:
+        # Load configuration
+        config = load_config()
+        set_environment_variables(config)
+        validate_credentials(config)
+        
+        # Get configured profile_id
+        configured_profile_id = os.environ.get('AMAZON_PROFILE_ID', '').strip()
+        if not configured_profile_id:
+            configured_profile_id = config.get('amazon_api', {}).get('profile_id', '')
+        
+        # Import optimizer to get authenticated API client
+        from optimizer_core import PPCAutomation
+        
+        with create_config_file(config) as config_file_path:
+            # Create optimizer instance (this will authenticate)
+            optimizer = PPCAutomation(
+                config_path=config_file_path,
+                profile_id=configured_profile_id or 'dummy',  # Use dummy if not configured
+                dry_run=True
+            )
+            
+            # Get profiles directly from API
+            profiles_url = "https://advertising-api.amazon.com/v2/profiles"
+            headers = {
+                "Authorization": f"Bearer {optimizer.api.auth.access_token}",
+                "Amazon-Advertising-API-ClientId": optimizer.api.client_id,
+                "Content-Type": "application/json"
+            }
+            
+            import requests
+            response = requests.get(profiles_url, headers=headers, timeout=30)
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch profiles: {response.status_code}")
+                return {
+                    'status': 'error',
+                    'message': 'Failed to fetch profiles from Amazon Advertising API',
+                    'error_code': response.status_code,
+                    'error_body': response.text[:500],
+                    'timestamp': datetime.now().isoformat()
+                }, 500
+            
+            profiles = response.json()
+            
+            # Format profiles for response
+            profile_list = []
+            for profile in profiles:
+                profile_id = str(profile.get('profileId', ''))
+                profile_info = {
+                    'profileId': profile_id,
+                    'countryCode': profile.get('countryCode', 'N/A'),
+                    'currencyCode': profile.get('currencyCode', 'N/A'),
+                    'timezone': profile.get('timezone', 'N/A'),
+                    'accountType': profile.get('accountInfo', {}).get('type', 'N/A'),
+                    'marketplaceId': profile.get('accountInfo', {}).get('marketplaceStringId', 'N/A'),
+                    'is_configured': profile_id == configured_profile_id
+                }
+                profile_list.append(profile_info)
+            
+            # Test campaigns endpoint for configured profile if it exists
+            campaigns_test = None
+            if configured_profile_id:
+                profile_ids = [p['profileId'] for p in profile_list]
+                if configured_profile_id in profile_ids:
+                    try:
+                        campaigns_url = "https://advertising-api.amazon.com/sp/campaigns?startIndex=0&count=5"
+                        headers["Amazon-Advertising-API-Scope"] = configured_profile_id
+                        campaigns_response = requests.get(campaigns_url, headers=headers, timeout=30)
+                        
+                        campaigns_test = {
+                            'status_code': campaigns_response.status_code,
+                            'success': campaigns_response.status_code == 200,
+                            'campaign_count': len(campaigns_response.json()) if campaigns_response.status_code == 200 else 0,
+                            'error': campaigns_response.text[:500] if campaigns_response.status_code != 200 else None
+                        }
+                    except Exception as e:
+                        campaigns_test = {
+                            'status_code': 0,
+                            'success': False,
+                            'error': str(e)
+                        }
+                else:
+                    campaigns_test = {
+                        'status_code': 0,
+                        'success': False,
+                        'error': f'Configured profile {configured_profile_id} not in accessible profiles list'
+                    }
+            
+            response_data = {
+                'status': 'success',
+                'timestamp': datetime.now().isoformat(),
+                'configured_profile_id': configured_profile_id or None,
+                'profile_count': len(profile_list),
+                'profiles': profile_list,
+                'campaigns_test': campaigns_test
+            }
+            
+            logger.info(f"Found {len(profile_list)} accessible profiles")
+            return response_data, 200
+            
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Failed to list profiles: {error_msg}")
+        return {
+            'status': 'error',
+            'message': 'Failed to list profiles',
+            'error': error_msg,
+            'timestamp': datetime.now().isoformat()
+        }, 500
+
+
 def run_verify_connection(request) -> Tuple[Dict[str, Any], int]:
     """
     Verify Amazon Ads API connection without running full optimization
@@ -598,6 +728,10 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     # Check for health endpoint
     if request.args.get('health', '').lower() == 'true':
         return run_health_check(request)
+    
+    # Check for profiles list endpoint
+    if request.args.get('list_profiles', '').lower() == 'true':
+        return run_list_profiles(request)
     
     # Check for verify connection endpoint
     if request.args.get('verify_connection', '').lower() == 'true':
