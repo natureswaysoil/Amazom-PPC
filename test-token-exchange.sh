@@ -118,6 +118,7 @@ CAMPAIGNS_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
     -H "Authorization: Bearer ${ACCESS_TOKEN}" \
     -H "Amazon-Advertising-API-ClientId: ${AMAZON_CLIENT_ID}" \
     -H "Amazon-Advertising-API-Scope: ${AMAZON_PROFILE_ID}" \
+    -H "Amazon-Advertising-API-Version: v2" \
     -H "Content-Type: application/json" \
     "https://advertising-api.amazon.com/sp/campaigns?startIndex=0&count=5")
 
