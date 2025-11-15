@@ -24,18 +24,20 @@ CAMPAIGN_COUNT=$(bq query --use_legacy_sql=false --format=csv --project_id="${PR
 echo "   Rows in campaign_details: ${CAMPAIGN_COUNT}"
 
 echo ""
-echo "3. Recent optimization runs..."
+echo "3. Listing all tables in dataset..."
+bq ls --format=pretty --project_id="${PROJECT_ID}" "${DATASET}"
+
+echo ""
+echo "4. Schema of optimization_results table..."
+bq show --format=prettyjson --project_id="${PROJECT_ID}" "${DATASET}.optimization_results" | jq '.schema.fields[] | {name: .name, type: .type}' | head -30
+
+echo ""
+echo "5. Recent optimization runs (sample data)..."
 bq query --use_legacy_sql=false --format=pretty --project_id="${PROJECT_ID}" \
-  "SELECT 
-    timestamp,
-    feature_name,
-    action_type,
-    entity_id,
-    old_value,
-    new_value
+  "SELECT *
    FROM \`${PROJECT_ID}.${DATASET}.optimization_results\`
    ORDER BY timestamp DESC
-   LIMIT 10"
+   LIMIT 5"
 
 echo ""
 echo "================================================"
