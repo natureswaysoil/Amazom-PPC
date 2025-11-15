@@ -77,9 +77,11 @@ ENDPOINTS = {
 TOKEN_URL = "https://api.amazon.com/auth/o2/token"
 USER_AGENT = "NWS-PPC-Automation/2.0"
 
-# Amazon Ads API versions (v2 deprecated as of November 2025)
-SP_API_VERSION = "2024-05-01"
-REPORTS_API_VERSION = "2024-05-01"
+# Amazon Ads API versions for Amazon-Advertising-API-Version header
+# For Sponsored Products endpoints (campaigns, ad groups, keywords): use v2
+# For Reporting API: use v3
+SP_API_VERSION = "v2"
+REPORTS_API_VERSION = "v3"
 
 # Rate limiting - Amazon Advertising API supports 10 requests/second
 MAX_REQUESTS_PER_SECOND = 10
@@ -1078,7 +1080,8 @@ class AmazonAdsAPI:
             payload['configuration']['groupBy'] = definition['groupBy']
 
         try:
-            response = self._request('POST', f'/reports/{REPORTS_API_VERSION}', json=payload)
+            # Use v2 format for reports (will be upgraded to v3 by _upgrade_endpoint)
+            response = self._request('POST', '/v2/reports', json=payload)
             data = response.json() if response.content else {}
             report_id = data.get('reportId') or data.get('report_id')
 
@@ -1095,7 +1098,8 @@ class AmazonAdsAPI:
     def get_report_status(self, report_id: str) -> Dict:
         """Get report status"""
         try:
-            endpoint = f"/reports/{REPORTS_API_VERSION}/{report_id}"
+            # Use v2 format (will be upgraded to v3 by _upgrade_endpoint)
+            endpoint = f"/v2/reports/{report_id}"
             response = self._request('GET', endpoint)
             data = response.json() if response.content else {}
 
