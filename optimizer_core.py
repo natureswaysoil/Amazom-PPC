@@ -500,15 +500,15 @@ class AmazonAdsAPI:
             logger.info("Access token expired, refreshing...")
             self.auth = self._authenticate()
 
-    def _headers(self) -> Dict[str, str]:
-        """Get API request headers"""
+    def _headers(self, api_version: str = None) -> Dict[str, str]:
+        """Get API request headers with optional API version"""
         self._refresh_auth_if_needed()
 
         client_id = self.client_id or os.getenv("AMAZON_CLIENT_ID", "")
         if not client_id:
             logger.warning("Amazon client ID missing when preparing headers")
 
-        return {
+        headers = {
             "Authorization": f"Bearer {self.auth.access_token}",
             "Content-Type": "application/json",
             "Amazon-Advertising-API-ClientId": client_id,
@@ -516,37 +516,51 @@ class AmazonAdsAPI:
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
         }
+        
+        # Add API version header if specified (for new versioned endpoints)
+        if api_version:
+            headers["Amazon-Advertising-API-Version"] = api_version
+            
+        return headers
 
-    def _upgrade_endpoint(self, endpoint: str) -> str:
-        """Translate deprecated v2 endpoints to the v3-style versioned paths."""
+    def _upgrade_endpoint(self, endpoint: str) -> tuple[str, str]:
+        """
+        Translate deprecated v2 endpoints to new format.
+        Returns: (endpoint_path, api_version)
+        API version should be sent as header, not in URL path.
+        """
 
         if not endpoint.startswith("/v2/"):
-            return endpoint
+            # Already a new-style endpoint or doesn't need upgrading
+            return endpoint, None
 
+        # Map of v2 endpoints to their new paths (without version in path)
         replacements = {
-            "/v2/sp/campaigns": f"/sp/campaigns/{SP_API_VERSION}",
-            "/v2/sp/adGroups": f"/sp/adGroups/{SP_API_VERSION}",
-            "/v2/sp/keywords/extended": f"/sp/keywords/extended/{SP_API_VERSION}",
-            "/v2/sp/keywords": f"/sp/keywords/{SP_API_VERSION}",
-            "/v2/sp/negativeKeywords": f"/sp/negativeKeywords/{SP_API_VERSION}",
+            "/v2/sp/campaigns": ("/sp/campaigns", SP_API_VERSION),
+            "/v2/sp/adGroups": ("/sp/adGroups", SP_API_VERSION),
+            "/v2/sp/keywords/extended": ("/sp/keywords/extended", SP_API_VERSION),
+            "/v2/sp/keywords": ("/sp/keywords", SP_API_VERSION),
+            "/v2/sp/negativeKeywords": ("/sp/negativeKeywords", SP_API_VERSION),
             "/v2/sp/targets/keywords/recommendations": (
-                f"/sp/targets/keywords/recommendations/{SP_API_VERSION}"
+                "/sp/targets/keywords/recommendations", SP_API_VERSION
             ),
-            "/v2/reports": f"/reports/{REPORTS_API_VERSION}",
+            "/v2/reports": ("/reports", REPORTS_API_VERSION),
         }
 
-        for old_prefix, new_prefix in replacements.items():
+        for old_prefix, (new_prefix, api_version) in replacements.items():
             if endpoint.startswith(old_prefix):
                 suffix = endpoint[len(old_prefix):]
-                return f"{new_prefix}{suffix}"
+                return f"{new_prefix}{suffix}", api_version
 
-        return endpoint
+        # Unknown v2 endpoint, return as-is with warning
+        logger.warning(f"Unknown v2 endpoint format: {endpoint}")
+        return endpoint, None
 
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         """Make API request with retry logic and rate limiting using connection pooling"""
         self.rate_limiter.wait_if_needed()
 
-        upgraded_endpoint = self._upgrade_endpoint(endpoint)
+        upgraded_endpoint, api_version = self._upgrade_endpoint(endpoint)
         url = f"{self.base_url}{upgraded_endpoint}"
         max_retries = 3
         retry_delay = 1
@@ -556,7 +570,7 @@ class AmazonAdsAPI:
         for attempt in range(max_retries):
             try:
                 # Log request details (mask sensitive headers)
-                headers = self._headers()
+                headers = self._headers(api_version=api_version)
                 safe_headers = {k: ('REDACTED' if 'auth' in k.lower() else v) for k, v in headers.items()}
                 logger.debug(f"Amazon API {method} {url} (attempt {attempt + 1}/{max_retries})")
                 logger.debug(f"Request headers: {safe_headers}")
