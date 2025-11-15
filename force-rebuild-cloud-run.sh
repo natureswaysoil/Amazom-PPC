@@ -26,16 +26,37 @@ echo "1. Building fresh container image..."
 # Use Cloud Build to create a fresh image (bypasses cache)
 IMAGE_NAME="gcr.io/${PROJECT_ID}/amazon-ppc-optimizer:${TIMESTAMP}"
 
-# Temporarily use Python Dockerfile
+# Temporarily swap Dockerfiles and dockerignore
 mv Dockerfile Dockerfile.node.bak
+mv .dockerignore .dockerignore.node.bak
 cp Dockerfile.python Dockerfile
+
+# Create Python-friendly dockerignore
+cat > .dockerignore << 'EOF'
+.git
+.gitignore
+.github
+node_modules
+npm-debug.log*
+venv
+.venv
+.env
+.env.*
+*.md
+dist
+build
+.pytest_cache
+__pycache__
+*.pyc
+EOF
 
 gcloud builds submit --tag="${IMAGE_NAME}" \
   --project="${PROJECT_ID}" \
   --timeout=10m
 
-# Restore Node Dockerfile
+# Restore originals
 mv Dockerfile.node.bak Dockerfile
+mv .dockerignore.node.bak .dockerignore
 
 echo ""
 echo "2. Deploying amazon-ppc-optimizer with new image..."
