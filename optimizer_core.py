@@ -605,6 +605,31 @@ class AmazonAdsAPI:
                     body_preview = response.text[:1000] if response.text else 'Empty response'
                     logger.error(f"Amazon API error {response.status_code}: {body_preview}")
 
+                    # Extra diagnostics for auth-related 401/403
+                    if response.status_code in (401, 403):
+                        auth_header = headers.get("Authorization", "")
+                        token_part = auth_header.split(" ", 1)[1] if " " in auth_header else auth_header
+                        token_len = len(token_part)
+                        # Detect suspicious whitespace characters
+                        has_newline = any(ch in token_part for ch in ['\n', '\r', '\t'])
+                        start_fragment = token_part[:14]
+                        end_fragment = token_part[-14:] if token_len >= 14 else token_part
+                        logger.warning(
+                            "Auth diagnostics: token_len=%d has_newline=%s start='%s...' end='...%s' scope=%s client_id_prefix=%s", 
+                            token_len,
+                            has_newline,
+                            start_fragment,
+                            end_fragment,
+                            self.profile_id,
+                            (self.client_id[:8] + '...' if self.client_id else 'MISSING')
+                        )
+                        # Confirm presence of required headers
+                        missing_headers = [h for h in ["Amazon-Advertising-API-ClientId", "Amazon-Advertising-API-Scope"] if h not in headers]
+                        if missing_headers:
+                            logger.warning(f"Missing required Amazon Ads headers: {missing_headers}")
+                        else:
+                            logger.debug("All required Amazon Ads auth headers present")
+
                     if response.status_code in (401, 403) and not reauth_attempted:
                         logger.info(
                             "Received %s from Amazon Ads API; refreshing credentials and retrying",
