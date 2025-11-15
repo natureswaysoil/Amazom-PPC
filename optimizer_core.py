@@ -572,8 +572,9 @@ class AmazonAdsAPI:
                 # Log request details (mask sensitive headers)
                 headers = self._headers(api_version=api_version)
                 safe_headers = {k: ('REDACTED' if 'auth' in k.lower() else v) for k, v in headers.items()}
-                logger.debug(f"Amazon API {method} {url} (attempt {attempt + 1}/{max_retries})")
-                logger.debug(f"Request headers: {safe_headers}")
+                logger.info(f"Amazon API {method} {url} (attempt {attempt + 1}/{max_retries})")
+                logger.info(f"Request headers: {safe_headers}")
+                logger.info(f"API version for this request: {api_version}")
                 if 'json' in kwargs:
                     logger.debug(f"Request body preview: {str(kwargs['json'])[:500]}")
                 
