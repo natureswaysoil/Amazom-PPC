@@ -476,12 +476,16 @@ class AmazonAdsAPI:
             response.raise_for_status()
             data = response.json()
             
+            # Strip any whitespace from the access token (common issue with Secret Manager)
+            access_token = data["access_token"].strip() if isinstance(data["access_token"], str) else data["access_token"]
+            
             auth = Auth(
-                access_token=data["access_token"],
+                access_token=access_token,
                 token_type=data.get("token_type", "Bearer"),
                 expires_at=time.time() + int(data.get("expires_in", 3600))
             )
             logger.info("Successfully authenticated with Amazon Ads API")
+            logger.debug(f"Access token length: {len(access_token)}")
             return auth
         except requests.exceptions.RequestException as e:
             logger.error(f"Authentication request failed: {e}")
