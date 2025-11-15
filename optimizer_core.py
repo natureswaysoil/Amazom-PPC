@@ -434,9 +434,9 @@ class AmazonAdsAPI:
     
     def _authenticate(self) -> Auth:
         """Authenticate and get access token"""
-        client_id = os.getenv("AMAZON_CLIENT_ID")
-        client_secret = os.getenv("AMAZON_CLIENT_SECRET")
-        refresh_token = os.getenv("AMAZON_REFRESH_TOKEN")
+        client_id = os.getenv("AMAZON_CLIENT_ID", "").strip()
+        client_secret = os.getenv("AMAZON_CLIENT_SECRET", "").strip()
+        refresh_token = os.getenv("AMAZON_REFRESH_TOKEN", "").strip()
         
         if not all([client_id, client_secret, refresh_token]):
             logger.error("Missing required environment variables")
@@ -450,7 +450,7 @@ class AmazonAdsAPI:
                     f"client_secret: {'SET' if client_secret else 'MISSING'}, "
                     f"refresh_token: {refresh_token[:12] if refresh_token else 'MISSING'}...")
 
-        # Cache client ID for use in request headers
+        # Cache client ID for use in request headers (stripped of whitespace)
         self.client_id = client_id
         
         payload = {
