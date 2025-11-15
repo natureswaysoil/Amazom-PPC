@@ -25,10 +25,8 @@ echo "Updating service configuration..."
 gcloud run services update "${SERVICE_NAME}" \
   --region="${REGION}" \
   --service-account="${SERVICE_ACCOUNT}" \
-  --clear-env-vars \
-  --clear-secrets \
-  --update-env-vars="LOG_LEVEL=INFO,PPC_DRY_RUN=false" \
-  --update-secrets="AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest,PPC_PROFILE_ID=ppc-profile-id:latest,DASHBOARD_API_KEY=dashboard-api-key:latest,DASHBOARD_URL=dashboard-url:latest" \
+  --set-env-vars="LOG_LEVEL=INFO,PPC_DRY_RUN=false" \
+  --set-secrets="AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest,PPC_PROFILE_ID=ppc-profile-id:latest,DASHBOARD_API_KEY=dashboard-api-key:latest,DASHBOARD_URL=dashboard-url:latest" \
   --project="${PROJECT_ID}" \
   --quiet
 
