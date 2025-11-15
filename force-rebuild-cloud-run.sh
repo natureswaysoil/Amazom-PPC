@@ -22,9 +22,18 @@ echo ""
 # Create a temporary build marker file to invalidate cache
 echo "$TIMESTAMP" > .build-timestamp
 
-echo "1. Deploying amazon-ppc-optimizer (us-central1)..."
+echo "1. Building fresh container image..."
+# Use Cloud Build to create a fresh image (bypasses cache)
+IMAGE_NAME="gcr.io/${PROJECT_ID}/amazon-ppc-optimizer:${TIMESTAMP}"
+
+gcloud builds submit --tag="${IMAGE_NAME}" \
+  --project="${PROJECT_ID}" \
+  --timeout=10m
+
+echo ""
+echo "2. Deploying amazon-ppc-optimizer with new image..."
 gcloud run deploy amazon-ppc-optimizer \
-  --source=. \
+  --image="${IMAGE_NAME}" \
   --region="${REGION}" \
   --platform=managed \
   --service-account="${SERVICE_ACCOUNT}" \
@@ -34,7 +43,6 @@ gcloud run deploy amazon-ppc-optimizer \
   --cpu=1 \
   --min-instances=0 \
   --max-instances=10 \
-  --no-cache \
   --set-env-vars="LOG_LEVEL=INFO,PPC_DRY_RUN=false,BUILD_TS=${TIMESTAMP}" \
   --set-secrets="AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest,PPC_PROFILE_ID=ppc-profile-id:latest,DASHBOARD_API_KEY=dashboard-api-key:latest,DASHBOARD_URL=dashboard-url:latest" \
   --project="${PROJECT_ID}" \
