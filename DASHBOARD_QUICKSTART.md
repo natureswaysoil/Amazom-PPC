@@ -117,8 +117,11 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 ## 📚 Complete Documentation
 
 For detailed instructions, see:
-- **[DASHBOARD_BIGQUERY_SETUP.md](DASHBOARD_BIGQUERY_SETUP.md)** - Complete setup guide
+- **[DASHBOARD_BIGQUERY_SETUP.md](amazon_ppc_dashboard/nextjs_space/DASHBOARD_BIGQUERY_SETUP.md)** - Complete setup guide (400+ lines)
+- **[BIGQUERY_VERIFICATION_CHECKLIST.md](BIGQUERY_VERIFICATION_CHECKLIST.md)** - Step-by-step verification (350+ lines)
+- **[test_bigquery_integration.py](test_bigquery_integration.py)** - Automated testing script (450+ lines)
 - **[README_DASHBOARD_SETUP.md](amazon_ppc_dashboard/nextjs_space/README_DASHBOARD_SETUP.md)** - Dashboard docs
+- **[DATA_FLOW_SUMMARY.md](DATA_FLOW_SUMMARY.md)** - Complete data flow architecture
 - **[README.md](README.md)** - Main documentation
 
 ## 🆘 Still Having Issues?
