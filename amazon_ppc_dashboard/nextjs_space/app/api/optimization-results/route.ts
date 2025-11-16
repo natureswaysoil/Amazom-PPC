@@ -1,40 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Buffer } from 'buffer';
 import { BigQuery } from '@google-cloud/bigquery';
+import { resolveGCPCredentials, getFirstSetEnv, PROJECT_ID_ENV_NAMES } from '../lib/credentials';
 
-// This shares credential resolution logic with bigquery-data route
+// Get BigQuery client with proper credential handling
 function getBigQueryClient() {
-  let projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
   const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
   
-  let credentials: any = undefined;
-  const serviceAccountKey = process.env.GCP_SERVICE_ACCOUNT_KEY;
-  const googleCredentialsEnv = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  // Resolve credentials
+  const credentialResult = resolveGCPCredentials();
   
-  if (serviceAccountKey) {
-    try {
-      credentials = JSON.parse(serviceAccountKey);
-    } catch {
-      try {
-        const decoded = Buffer.from(serviceAccountKey, 'base64').toString('utf8');
-        credentials = JSON.parse(decoded);
-      } catch (e) {
-        console.warn('Could not parse GCP_SERVICE_ACCOUNT_KEY as JSON or base64 JSON');
-      }
+  let credentials: any = undefined;
+  let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
+  
+  if (credentialResult.success) {
+    credentials = credentialResult.credentials;
+    if (!projectId && credentialResult.projectId) {
+      projectId = credentialResult.projectId;
     }
-    
-    if (credentials && !projectId && credentials.project_id) {
-      projectId = credentials.project_id;
-    }
-  } else if (googleCredentialsEnv) {
-    try {
-      credentials = JSON.parse(googleCredentialsEnv);
-      if (credentials && !projectId && credentials.project_id) {
-        projectId = credentials.project_id;
-      }
-    } catch {
-      // Not JSON, assume file path (won't work in serverless but try anyway)
-    }
+  } else {
+    // Log warning but continue with Application Default Credentials
+    console.warn(`Failed to resolve credentials: ${credentialResult.error!.message}`);
   }
   
   if (!projectId) {

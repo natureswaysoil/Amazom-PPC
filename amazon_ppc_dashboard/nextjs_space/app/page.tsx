@@ -204,16 +204,24 @@ export default function Home() {
                 </p>
               </div>
             )}
-            {error.includes('Missing Google Cloud credentials') && (
+            {(error.includes('Missing Google Cloud credentials') || 
+              error.includes('Configuration error') || 
+              error.includes('not valid JSON') ||
+              error.includes('base64')) && (
               <div style={styles.setupInstructions}>
-                <p><strong>Credentials Missing:</strong></p>
+                <p><strong>Credentials Issue:</strong></p>
                 <ol style={{ textAlign: 'left', lineHeight: '1.8' }}>
-                  <li>In your hosting provider, add <code>GCP_SERVICE_ACCOUNT_KEY</code> with your service account JSON.</li>
-                  <li>Alternatively set <code>GOOGLE_APPLICATION_CREDENTIALS</code> to the JSON string (not a file path).</li>
-                  <li>Redeploy the dashboard and rerun <code>/api/config-check</code> to confirm.</li>
+                  <li><strong>Raw JSON method:</strong> Set <code>GCP_SERVICE_ACCOUNT_KEY</code> to the entire contents of your service account key file (copy/paste the JSON).</li>
+                  <li><strong>Base64 method:</strong> Run <code>cat service-account.json | base64</code> and set <code>GCP_SERVICE_ACCOUNT_KEY</code> to the output.</li>
+                  <li>Make sure there are no extra spaces or line breaks when setting the environment variable.</li>
+                  <li>After updating the variable, redeploy the dashboard.</li>
+                  <li>Verify the configuration at <code>/api/config-check</code>.</li>
                 </ol>
                 <p style={{ fontSize: '14px', marginTop: '10px' }}>
-                  See README_BIGQUERY.md for detailed instructions.
+                  <strong>Note:</strong> The service account key JSON should contain fields like "type", "project_id", "private_key", "client_email", etc.
+                </p>
+                <p style={{ fontSize: '14px', marginTop: '5px' }}>
+                  See README.md for detailed setup instructions for CI, production, and local development.
                 </p>
               </div>
             )}
