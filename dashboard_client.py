@@ -334,6 +334,22 @@ class DashboardClient:
         This is a public method that can be used by external modules like
         BigQueryClient to ensure consistent data formatting.
         
+        NOTE: The current optimizer implementation (optimizer_core.py) does not 
+        collect detailed campaign or keyword performance data. The campaigns and 
+        top_performers arrays will be empty unless the optimizer modules are 
+        updated to:
+        
+        1. In BidOptimizer.optimize(): Collect and return keyword performance 
+           details (keyword_text, clicks, sales, acos, bid_change) for top 
+           performing keywords.
+        
+        2. In CampaignManager.manage_campaigns(): Collect and return campaign-level 
+           metrics (campaign_id, name, spend, sales, acos, keywords_count) for 
+           all analyzed campaigns.
+        
+        Until those changes are made, the dashboard will display summary metrics 
+        but not the detailed breakdowns shown in DATA_FLOW_SUMMARY.md.
+        
         Args:
             results: Raw results from optimization
             config: Configuration dictionary
@@ -464,8 +480,30 @@ class DashboardClient:
         """Extract campaign-level data from results"""
         campaigns = []
         
-        # This would need to be populated with actual campaign data
-        # from the results if available
+        # Extract campaign data from campaign_management results if available
+        if 'campaign_management' in results:
+            camp_data = results['campaign_management']
+            
+            # If the campaign manager provided campaign details
+            if 'campaigns' in camp_data and isinstance(camp_data['campaigns'], list):
+                campaigns.extend(camp_data['campaigns'])
+            
+            # If we have campaign summaries with metrics
+            if 'campaign_summaries' in camp_data and isinstance(camp_data['campaign_summaries'], list):
+                for summary in camp_data['campaign_summaries']:
+                    campaigns.append({
+                        'campaign_id': summary.get('campaign_id', ''),
+                        'campaign_name': summary.get('name', ''),
+                        'spend': summary.get('spend', 0.0),
+                        'sales': summary.get('sales', 0.0),
+                        'acos': summary.get('acos', 0.0),
+                        'keywords_count': summary.get('keywords_count', 0),
+                        'changes_made': summary.get('changes_made', 0),
+                    })
+        
+        # Note: In the current implementation, campaign-level performance data
+        # is not collected by default. This extraction will return an empty list
+        # unless the optimizer is updated to collect and include campaign metrics.
         
         return campaigns
     
@@ -473,8 +511,35 @@ class DashboardClient:
         """Extract top performing keywords from results"""
         top_performers = []
         
-        # This would need to be populated with actual keyword performance data
-        # from the results if available
+        # Extract top performer data from bid_optimization results if available
+        if 'bid_optimization' in results:
+            bid_data = results['bid_optimization']
+            
+            # If the bid optimizer provided top performing keywords
+            if 'top_performers' in bid_data and isinstance(bid_data['top_performers'], list):
+                top_performers.extend(bid_data['top_performers'])
+            
+            # If we have keyword performance details
+            if 'keyword_details' in bid_data and isinstance(bid_data['keyword_details'], list):
+                # Sort by sales and take top performers
+                sorted_keywords = sorted(
+                    bid_data['keyword_details'],
+                    key=lambda k: k.get('sales', 0),
+                    reverse=True
+                )[:10]  # Top 10
+                
+                for kw in sorted_keywords:
+                    top_performers.append({
+                        'keyword_text': kw.get('keyword_text', ''),
+                        'clicks': kw.get('clicks', 0),
+                        'sales': kw.get('sales', 0.0),
+                        'acos': kw.get('acos', 0.0),
+                        'bid_change': kw.get('bid_change', 0.0),
+                    })
+        
+        # Note: In the current implementation, detailed keyword performance data
+        # is not collected by the bid optimizer. This extraction will return an empty list
+        # unless the optimizer is updated to collect and include keyword details.
         
         return top_performers
     
