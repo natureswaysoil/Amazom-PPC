@@ -14,40 +14,42 @@ export async function GET(request: NextRequest) {
     
     let credentials: any = undefined;
     let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
+    let credentialSource = 'Application Default Credentials';
 
     // Handle credential resolution errors
     if (!credentialResult.success) {
-      const runningOnVercel = process.env.VERCEL === '1';
+      console.warn('⚠️ Failed to resolve explicit credentials from environment');
+      console.warn(`Credential error: ${credentialResult.error!.message}`);
+      console.warn('Will attempt to use Application Default Credentials (ADC)...');
       
-      // Only require credentials in production/Vercel environment
-      if (runningOnVercel) {
-        return NextResponse.json({
-          error: credentialResult.error!.type === 'missing' ? 'Missing Google Cloud credentials' : 'Configuration error',
-          message: credentialResult.error!.message,
-          details: credentialResult.error!.details,
-          troubleshooting: credentialResult.error!.troubleshooting,
-          documentation: 'See README.md for detailed setup instructions.',
-        }, { status: 500 });
+      // Try to provide helpful context
+      const errorType = credentialResult.error!.type;
+      if (errorType !== 'missing') {
+        // Credentials were provided but malformed - log the issue but don't fail
+        console.error(`Credential parsing issue: ${credentialResult.error!.details}`);
+        console.error('This may cause BigQuery queries to fail if ADC is not available');
       }
       
-      // In development, allow using default credentials if available
-      console.warn('Failed to resolve credentials from environment, will attempt to use Application Default Credentials');
-      console.warn(`Credential error: ${credentialResult.error!.message}`);
+      // We'll continue and let BigQuery SDK try Application Default Credentials
+      // This works in many GCP environments (Cloud Run, Cloud Functions, Compute Engine, etc.)
+      credentialSource = 'Application Default Credentials (fallback)';
     } else {
       // Successfully resolved credentials
       credentials = credentialResult.credentials;
+      credentialSource = credentialResult.source || 'explicit credentials';
+      console.log(`✓ Using credentials from: ${credentialSource}`);
       
       // Use project ID from credentials if not explicitly set
       if (!projectId && credentialResult.projectId) {
         projectId = credentialResult.projectId;
-        console.log(`Using project ID from credentials (${credentialResult.source}):`, projectId);
+        console.log(`Using project ID from credentials: ${projectId}`);
       }
     }
 
     // Use default project ID if none found
     if (!projectId) {
       projectId = DEFAULT_PROJECT_ID;
-      console.log('Using default project ID:', projectId);
+      console.log(`Using default project ID: ${projectId}`);
     }
     
     // Validate that we have a project ID
@@ -64,11 +66,37 @@ export async function GET(request: NextRequest) {
       }, { status: 500 });
     }
 
-    // Initialize BigQuery client with explicit credentials if provided
-    const bigquery = new BigQuery({
-      projectId: projectId,
-      ...(credentials && { credentials }),
-    });
+    // Initialize BigQuery client
+    // If credentials were resolved, use them explicitly
+    // Otherwise, BigQuery SDK will try Application Default Credentials
+    let bigquery: BigQuery;
+    try {
+      if (credentials) {
+        console.log(`Initializing BigQuery with explicit credentials for project: ${projectId}`);
+        bigquery = new BigQuery({
+          projectId: projectId,
+          credentials: credentials,
+        });
+      } else {
+        console.log(`Initializing BigQuery with Application Default Credentials for project: ${projectId}`);
+        bigquery = new BigQuery({
+          projectId: projectId,
+        });
+      }
+    } catch (initError: any) {
+      console.error(`Failed to initialize BigQuery client: ${initError.message}`);
+      return NextResponse.json({
+        error: 'BigQuery initialization failed',
+        message: 'Could not initialize BigQuery client',
+        details: initError.message,
+        troubleshooting: [
+          'Ensure GCP_SERVICE_ACCOUNT_KEY contains valid service account credentials',
+          'Or ensure Application Default Credentials are available in this environment',
+          'Check that the project ID is correct',
+          'Verify network connectivity to Google Cloud APIs',
+        ],
+      }, { status: 500 });
+    }
     
     // Get query parameters with validation
     const searchParams = request.nextUrl.searchParams;
@@ -250,7 +278,8 @@ export async function GET(request: NextRequest) {
         projectId,
         datasetId,
         table,
-        rowCount: processedRows.length
+        rowCount: processedRows.length,
+        credentialSource: credentialSource
       }
     }, { status: 200 });
     
