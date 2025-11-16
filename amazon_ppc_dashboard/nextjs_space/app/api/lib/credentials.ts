@@ -179,8 +179,50 @@ function buildCredentialsFromEnvironmentParts(): any | undefined {
 }
 
 /**
- * Parse service account credentials from a string value.
- * Handles both raw JSON and base64-encoded JSON.
+ * Smart detection to identify if a string might be base64 encoded.
+ * Returns a confidence score from 0 to 1.
+ */
+function detectBase64Likelihood(value: string): number {
+  // Remove whitespace for analysis
+  const cleaned = value.trim().replace(/\s+/g, '');
+  
+  // Check if it starts with { or [ (likely raw JSON)
+  if (cleaned.startsWith('{') || cleaned.startsWith('[')) {
+    return 0.0;
+  }
+  
+  // Check character composition
+  const base64Pattern = /^[A-Za-z0-9+/]+=*$/;
+  if (!base64Pattern.test(cleaned)) {
+    return 0.0;
+  }
+  
+  // Base64 strings are typically much longer and have specific length characteristics
+  if (cleaned.length < 100) {
+    return 0.3; // Might be base64 but suspicious
+  }
+  
+  // Check for typical base64 padding
+  const paddingMatch = cleaned.match(/=*$/);
+  const padding = paddingMatch ? paddingMatch[0].length : 0;
+  if (padding > 2) {
+    return 0.2; // Invalid base64 padding
+  }
+  
+  // Strong indicator: Length is a multiple of 4 (or close to it)
+  const remainder = cleaned.length % 4;
+  if (remainder === 0) {
+    return 0.9;
+  } else if (remainder <= 2) {
+    return 0.7;
+  }
+  
+  return 0.5;
+}
+
+/**
+ * Parse service account credentials from a string value with smart format detection.
+ * Handles raw JSON, base64-encoded JSON, URL-encoded JSON, and malformed variants.
  */
 function parseServiceAccountValue(value: string | undefined, source: string): CredentialParseResult {
   if (!value || !value.trim()) {
@@ -199,11 +241,31 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
     };
   }
 
+  // Clean up common issues: extra whitespace, newlines within the value
+  let cleanedValue = value.trim();
+  
+  // Remove line breaks that might have been added during copy/paste
+  if (cleanedValue.includes('\n') && !cleanedValue.startsWith('{')) {
+    cleanedValue = cleanedValue.replace(/\n/g, '');
+    console.log(`[Credentials] Removed embedded newlines from ${source}`);
+  }
+  
+  // Try URL decoding if it looks URL encoded
+  if (cleanedValue.includes('%22') || cleanedValue.includes('%7B') || cleanedValue.includes('%7D')) {
+    try {
+      const urlDecoded = decodeURIComponent(cleanedValue);
+      console.log(`[Credentials] ${source} appears to be URL-encoded, attempting to decode...`);
+      cleanedValue = urlDecoded;
+    } catch (urlErr) {
+      console.log(`[Credentials] URL decode failed, continuing with original value`);
+    }
+  }
+
   // Try parsing as raw JSON first
   try {
     console.log(`[Credentials] Attempting to parse ${source} as raw JSON...`);
-    const parsed = JSON.parse(value);
-    console.log(`[Credentials] Successfully parsed ${source} as raw JSON`);
+    const parsed = JSON.parse(cleanedValue);
+    console.log(`[Credentials] ✓ Successfully parsed ${source} as raw JSON`);
     return {
       success: true,
       credentials: parsed,
@@ -212,29 +274,24 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
     };
   } catch (jsonError: any) {
     console.log(`[Credentials] ${source} is not valid raw JSON: ${jsonError.message}`);
-    console.log(`[Credentials] Attempting to decode ${source} as base64...`);
+  }
 
+  // Smart detection: Should we try base64 decoding?
+  const base64Confidence = detectBase64Likelihood(cleanedValue);
+  console.log(`[Credentials] Base64 likelihood for ${source}: ${(base64Confidence * 100).toFixed(0)}%`);
+
+  if (base64Confidence > 0.3) {
     // Try decoding as base64
+    console.log(`[Credentials] Attempting to decode ${source} as base64...`);
     try {
-      // First, try to detect if this is actually base64
-      // Base64 strings should only contain A-Z, a-z, 0-9, +, /, and = (padding)
-      const base64Pattern = /^[A-Za-z0-9+/]*={0,2}$/;
-      const trimmedValue = value.trim();
-      
-      // If it doesn't look like base64, it's probably not
-      if (!base64Pattern.test(trimmedValue)) {
-        console.log(`[Credentials] ${source} doesn't match base64 pattern, likely not base64 encoded`);
-        throw new Error('Not a valid base64 string');
-      }
-      
-      const decoded = Buffer.from(trimmedValue, 'base64').toString('utf8');
-      console.log(`[Credentials] Successfully decoded ${source} from base64, attempting to parse as JSON...`);
+      const decoded = Buffer.from(cleanedValue, 'base64').toString('utf8');
+      console.log(`[Credentials] Successfully decoded ${source} from base64`);
       console.log(`[Credentials] Decoded length: ${decoded.length} characters`);
       console.log(`[Credentials] Decoded preview (first 100 chars): ${decoded.substring(0, 100)}`);
       
       try {
         const parsed = JSON.parse(decoded);
-        console.log(`[Credentials] Successfully parsed decoded ${source} as JSON`);
+        console.log(`[Credentials] ✓ Successfully parsed decoded ${source} as JSON`);
         return {
           success: true,
           credentials: parsed,
@@ -273,24 +330,45 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
         };
       }
     } catch (base64Error: any) {
-      console.error(`[Credentials] ${source} is not valid base64: ${base64Error.message}`);
-      return {
-        success: false,
-        error: {
-          type: 'invalid_base64',
-          message: `${source} is not valid JSON or base64 encoded JSON`,
-          details: `JSON parse error: ${jsonError.message}. Base64 decode error: ${base64Error.message}`,
-          troubleshooting: [
-            `Option 1 (Raw JSON - Recommended): Set ${source} to the entire contents of your service account key file`,
-            `Option 2 (Base64): Run 'cat service-account.json | base64 | tr -d "\\n"' and set ${source} to the output`,
-            `Ensure there are no extra spaces, line breaks, or special characters in the environment variable`,
-            `Verify the JSON is valid before encoding: 'cat service-account.json | jq .'`,
-            `After correcting the value, redeploy the application`,
-          ],
-        },
-      };
+      console.error(`[Credentials] ${source} base64 decode failed: ${base64Error.message}`);
+      // Don't return error yet, we'll try other formats
     }
   }
+
+  // If we get here, neither raw JSON nor base64 worked
+  // Provide helpful error message based on what we detected
+  let errorType: 'invalid_base64' | 'invalid_json' = 'invalid_base64';
+  let details = `Could not parse ${source} as JSON or base64-encoded JSON.`;
+  let troubleshooting = [
+    `Option 1 (Raw JSON - Recommended): Set ${source} to the entire contents of your service account key file`,
+    `Option 2 (Base64): Run 'cat service-account.json | base64 | tr -d "\\n"' and set ${source} to the output`,
+    `Ensure there are no extra spaces, line breaks, or special characters in the environment variable`,
+    `Verify the JSON is valid before encoding: 'cat service-account.json | jq .'`,
+    `After correcting the value, redeploy the application`,
+  ];
+
+  if (cleanedValue.startsWith('{') || cleanedValue.startsWith('[')) {
+    errorType = 'invalid_json';
+    details = `${source} appears to be JSON but contains syntax errors.`;
+    troubleshooting = [
+      'The value looks like JSON but has syntax errors',
+      'Ensure the entire JSON is copied, including opening { and closing }',
+      'Check for missing commas, quotes, or brackets',
+      `Validate your JSON: 'cat service-account.json | jq .'`,
+      'Ensure no characters were corrupted during copy/paste',
+      'After correcting the value, redeploy the application',
+    ];
+  }
+
+  return {
+    success: false,
+    error: {
+      type: errorType,
+      message: `${source} is not valid JSON or base64 encoded JSON`,
+      details,
+      troubleshooting,
+    },
+  };
 }
 
 /**

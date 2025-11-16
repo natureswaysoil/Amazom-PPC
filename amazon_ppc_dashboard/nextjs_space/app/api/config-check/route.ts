@@ -104,8 +104,9 @@ export async function GET(request: NextRequest) {
         checks.recommendations.push('Ensure your service account key JSON includes project_id, private_key, and client_email');
       }
     } else {
-      checks.diagnosis.push('❌ GCP_SERVICE_ACCOUNT_KEY is set but not valid JSON');
-      checks.recommendations.push('Check that GCP_SERVICE_ACCOUNT_KEY contains a valid JSON string from your service account key file');
+      checks.diagnosis.push('⚠️  GCP_SERVICE_ACCOUNT_KEY is set but not valid raw JSON - will try base64 decoding');
+      checks.recommendations.push('The credential may be base64-encoded. The dashboard will automatically try to decode it.');
+      checks.recommendations.push('If issues persist, verify: cat service-account.json | base64 | tr -d "\\n"');
     }
   } else if (checks.configuration.credentials.google_application_credentials.set) {
     if (checks.configuration.credentials.google_application_credentials.appears_to_be_json) {
@@ -119,6 +120,15 @@ export async function GET(request: NextRequest) {
     if (!splitCredentialConfig.private_key_contains_newlines) {
       checks.recommendations.push('Ensure your private key uses escaped newlines (\\n) so it loads correctly at runtime');
     }
+  }
+  
+  // Check if we're running in a GCP environment where ADC might be available
+  const runningInGCP = process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.GAE_SERVICE;
+  if (runningInGCP && !checks.configuration.credentials.gcp_service_account_key.set && 
+      !checks.configuration.credentials.google_application_credentials.set && 
+      !splitCredentialConfig.ready) {
+    checks.diagnosis.push('ℹ️  Running in GCP environment - Application Default Credentials may be available');
+    checks.recommendations.push('Application Default Credentials (ADC) will be used automatically in GCP environments');
   }
 
   if (!checks.configuration.dashboard_api_key.set) {

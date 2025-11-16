@@ -190,7 +190,18 @@ export default function Home() {
           <h1 style={styles.title}>🚀 Amazon PPC Optimizer Dashboard</h1>
           <div style={styles.errorBox}>
             <p><strong>⚠️ Error Loading Data:</strong></p>
-            <p>{error}</p>
+            <p style={{ marginBottom: '15px' }}>{error}</p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginBottom: '15px' }}>
+              <a href="/api/setup-guide" target="_blank" style={styles.helpLink}>
+                📖 Setup Guide
+              </a>
+              <a href="/api/config-check" target="_blank" style={styles.helpLink}>
+                🔍 Config Check
+              </a>
+              <a href="/api/bigquery-data?limit=1" target="_blank" style={styles.helpLink}>
+                🧪 Test Connection
+              </a>
+            </div>
             {error.includes('Not found') && (
               <div style={styles.setupInstructions}>
                 <p><strong>Setup Required:</strong></p>
@@ -207,21 +218,26 @@ export default function Home() {
             {(error.includes('Missing Google Cloud credentials') || 
               error.includes('Configuration error') || 
               error.includes('not valid JSON') ||
-              error.includes('base64')) && (
+              error.includes('base64') ||
+              error.includes('BigQuery initialization failed')) && (
               <div style={styles.setupInstructions}>
-                <p><strong>Credentials Issue:</strong></p>
-                <ol style={{ textAlign: 'left', lineHeight: '1.8' }}>
-                  <li><strong>Raw JSON method:</strong> Set <code>GCP_SERVICE_ACCOUNT_KEY</code> to the entire contents of your service account key file (copy/paste the JSON).</li>
-                  <li><strong>Base64 method:</strong> Run <code>cat service-account.json | base64</code> and set <code>GCP_SERVICE_ACCOUNT_KEY</code> to the output.</li>
-                  <li>Make sure there are no extra spaces or line breaks when setting the environment variable.</li>
-                  <li>After updating the variable, redeploy the dashboard.</li>
-                  <li>Verify the configuration at <code>/api/config-check</code>.</li>
-                </ol>
-                <p style={{ fontSize: '14px', marginTop: '10px' }}>
-                  <strong>Note:</strong> The service account key JSON should contain fields like "type", "project_id", "private_key", "client_email", etc.
+                <p><strong>📋 Quick Fix:</strong></p>
+                <p style={{ textAlign: 'left', marginBottom: '15px' }}>
+                  The dashboard needs valid Google Cloud credentials to display live data from BigQuery.
+                  This is a one-time setup that takes about 2 minutes.
                 </p>
-                <p style={{ fontSize: '14px', marginTop: '5px' }}>
-                  See README.md for detailed setup instructions for CI, production, and local development.
+                <ol style={{ textAlign: 'left', lineHeight: '1.8' }}>
+                  <li><strong>Get your service account key:</strong> Download the JSON file from Google Cloud Console → IAM & Admin → Service Accounts</li>
+                  <li><strong>Set the credential:</strong> In your deployment platform (Vercel, etc.), set <code>GCP_SERVICE_ACCOUNT_KEY</code> to the contents of the JSON file</li>
+                  <li><strong>Alternative (simpler):</strong> Or encode it as base64: <code>cat service-account.json | base64 | tr -d '\n'</code></li>
+                  <li>Redeploy the dashboard</li>
+                </ol>
+                <p style={{ fontSize: '14px', marginTop: '15px', padding: '10px', background: '#e8f4f8', borderRadius: '5px' }}>
+                  <strong>💡 Tip:</strong> If you're running in Google Cloud (Cloud Run, Cloud Functions), 
+                  the dashboard can use Application Default Credentials automatically - no manual setup needed!
+                </p>
+                <p style={{ fontSize: '12px', marginTop: '10px', color: '#666' }}>
+                  Need help? Check <code>/api/config-check</code> for detailed diagnostics or see README.md
                 </p>
               </div>
             )}
@@ -245,11 +261,21 @@ export default function Home() {
   return (
     <div style={styles.dashboardContainer}>
       <header style={styles.header}>
-        <h1 style={styles.headerTitle}>🚀 Amazon PPC Optimizer Dashboard</h1>
-        <p style={styles.headerSubtitle}>Real-time data from BigQuery</p>
-        <button onClick={fetchDashboardData} style={styles.refreshButton}>
-          🔄 Refresh
-        </button>
+        <div>
+          <h1 style={styles.headerTitle}>🚀 Amazon PPC Optimizer Dashboard</h1>
+          <p style={styles.headerSubtitle}>Real-time data from BigQuery</p>
+        </div>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <a href="/api/setup-guide" target="_blank" style={styles.headerLink} title="View setup guide">
+            📖 Setup
+          </a>
+          <a href="/api/config-check" target="_blank" style={styles.headerLink} title="Check configuration">
+            🔍 Config
+          </a>
+          <button onClick={fetchDashboardData} style={styles.refreshButton}>
+            🔄 Refresh
+          </button>
+        </div>
       </header>
 
       <div style={styles.statsGrid}>
@@ -497,5 +523,25 @@ const styles: { [key: string]: React.CSSProperties } = {
   title: {
     color: '#667eea',
     marginBottom: '20px',
+  },
+  helpLink: {
+    display: 'inline-block',
+    padding: '8px 16px',
+    background: '#667eea',
+    color: 'white',
+    textDecoration: 'none',
+    borderRadius: '5px',
+    fontSize: '14px',
+    fontWeight: 'bold',
+  },
+  headerLink: {
+    padding: '8px 16px',
+    background: 'rgba(255, 255, 255, 0.2)',
+    color: 'white',
+    textDecoration: 'none',
+    borderRadius: '20px',
+    fontSize: '14px',
+    fontWeight: 'bold',
+    border: '1px solid rgba(255, 255, 255, 0.3)',
   },
 };

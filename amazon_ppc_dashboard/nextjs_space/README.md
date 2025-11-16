@@ -1,6 +1,19 @@
 # Amazon PPC Dashboard - Next.js Application
 
-This is the Next.js dashboard application that receives optimization data from the Amazon PPC Optimizer Cloud Function.
+This is the Next.js dashboard application that displays live optimization data from BigQuery.
+
+## 🚀 Quick Start
+
+**Want to get your dashboard working in 2 minutes?**  
+See **[DASHBOARD_SETUP_QUICKSTART.md](DASHBOARD_SETUP_QUICKSTART.md)** for a simple, step-by-step guide.
+
+## 📊 Dashboard Features
+
+- **Live Data**: Real-time optimization results from BigQuery
+- **Smart Credential Handling**: Auto-detects JSON, base64, and URL-encoded formats
+- **Interactive Setup Guide**: Visit `/api/setup-guide` for step-by-step instructions
+- **Diagnostics**: Built-in tools at `/api/config-check` and `/api/bigquery-data`
+- **Graceful Fallbacks**: Works with Application Default Credentials in GCP environments
 
 ## Directory Structure
 
