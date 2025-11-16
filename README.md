@@ -599,6 +599,24 @@ For complete verification procedures, see:
 - **[VERIFICATION_GUIDE.md](VERIFICATION_GUIDE.md)**: Comprehensive verification guide
 - **[DATA_FLOW_SUMMARY.md](DATA_FLOW_SUMMARY.md)**: Complete data flow documentation
 - **[DASHBOARD_INTEGRATION.md](DASHBOARD_INTEGRATION.md)**: Dashboard integration details
+- **[DASHBOARD_BIGQUERY_SETUP.md](DASHBOARD_BIGQUERY_SETUP.md)**: Dashboard BigQuery connection setup
+
+### Dashboard Configuration
+
+To connect the dashboard to BigQuery for live data display:
+
+1. **Create Service Account** with BigQuery permissions (Data Viewer + Job User)
+2. **Download Service Account Key** as JSON file
+3. **Configure Dashboard** with credentials (see [DASHBOARD_BIGQUERY_SETUP.md](DASHBOARD_BIGQUERY_SETUP.md))
+4. **Deploy Dashboard** with proper environment variables
+5. **Verify Connection** using diagnostic endpoints
+
+**Quick diagnostic endpoints:**
+- `/api/credentials-debug` - Diagnose credential configuration
+- `/api/config-check` - Verify complete configuration
+- `/api/bigquery-data` - Test BigQuery connection
+
+See [amazon_ppc_dashboard/nextjs_space/README_DASHBOARD_SETUP.md](amazon_ppc_dashboard/nextjs_space/README_DASHBOARD_SETUP.md) for complete dashboard setup instructions
 
 ## 🏥 Automated Health Check Workflow
 
