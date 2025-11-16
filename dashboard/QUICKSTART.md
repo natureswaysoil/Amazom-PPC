@@ -39,10 +39,16 @@ export BIGQUERY_DATASET="amazon_ppc"
 ### 3. Run the Dashboard
 
 ```bash
+# For local development with debug mode (never use in production)
+FLASK_DEBUG=True python app.py
+
+# For production-like testing (recommended)
 python app.py
 ```
 
 Open your browser to `http://localhost:8080`
+
+**Security Note**: Debug mode is disabled by default for security. Only enable it for local development.
 
 ## 🐳 Docker Quick Start
 

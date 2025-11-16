@@ -152,6 +152,7 @@ Environment variables:
 - `GCP_PROJECT_ID` - Google Cloud Project ID (default: `nature-way-soils`)
 - `BIGQUERY_DATASET` - BigQuery dataset name (default: `amazon_ppc`)
 - `PORT` - Server port (default: `8080`)
+- `FLASK_DEBUG` - Enable debug mode (default: `False`, set to `True` only for local development)
 - `GOOGLE_APPLICATION_CREDENTIALS` - Path to service account JSON file
 - `GCP_CREDENTIALS_JSON` - Service account credentials as JSON string
 - `GCP_CREDENTIALS_BASE64` - Service account credentials as base64 string

@@ -286,4 +286,5 @@ def health():
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
