@@ -201,12 +201,28 @@ export GCP_PROJECT="your-project-id"
 After setting credentials, verify the configuration:
 
 ```bash
-# For local development
-python -c "from bigquery_client import BigQueryClient; client = BigQueryClient('your-project-id'); print('✅ Credentials loaded successfully')"
+# Test credential loading and validation locally
+python -c "from gcp_credentials import validate_credentials_early; success, error = validate_credentials_early(); print('✅ Credentials valid' if success else f'❌ Error: {error}')"
 
-# For deployed dashboard
+# Test via health check endpoint (includes GCP credentials validation)
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  "https://YOUR-FUNCTION-URL?health=true"
+
+# Response includes gcp_credentials_ok status:
+# {
+#   "status": "healthy",
+#   "gcp_credentials_ok": true,
+#   "gcp_credentials_error": null,
+#   "dashboard_ok": true,
+#   "email_ok": false,
+#   ...
+# }
+
+# For deployed dashboard (if integrated)
 curl https://your-dashboard.vercel.app/api/config-check
 ```
+
+**Early Validation**: The application validates GCP credentials on startup before instantiating any Google Cloud services. If credentials are invalid, you'll get a detailed error message with troubleshooting guidance instead of a cryptic SDK error.
 
 ### Troubleshooting Credential Issues
 
