@@ -342,18 +342,48 @@ export async function GET(request: NextRequest) {
       }, { status: 403 });
     }
 
-    if (error.message && error.message.includes('Could not load the default credentials')) {
+    // Check for credential-related errors
+    if (error.message && (
+      error.message.includes('Could not load the default credentials') ||
+      error.message.includes('Unable to detect a Project Id') ||
+      error.message.includes('GOOGLE_APPLICATION_CREDENTIALS') ||
+      error.message.toLowerCase().includes('credentials')
+    )) {
       return NextResponse.json({
         error: 'Missing Google Cloud credentials',
         message: 'Could not load Google Cloud credentials for BigQuery.',
         details: 'Provide service account credentials via the GCP_SERVICE_ACCOUNT_KEY environment variable (preferred) or GOOGLE_APPLICATION_CREDENTIALS as a JSON string.',
-        documentation: 'See amazon_ppc_dashboard/nextjs_space/README_BIGQUERY.md for deployment steps.',
-        next_steps: [
-          'Add the service account JSON to GCP_SERVICE_ACCOUNT_KEY in your deployment environment.',
-          'If using GOOGLE_APPLICATION_CREDENTIALS, paste the JSON contents directly instead of a file path.',
-          'Redeploy the dashboard after saving the variables.',
-          'Re-run /api/config-check to verify configuration.'
+        documentation: 'See amazon_ppc_dashboard/nextjs_space/README_DASHBOARD_SETUP.md for deployment steps.',
+        troubleshooting: [
+          '🔑 Step 1: Get Service Account Credentials',
+          '   - Go to Google Cloud Console → IAM & Admin → Service Accounts',
+          '   - Select your service account or create a new one',
+          '   - Click "Keys" → "Add Key" → "Create New Key" (JSON format)',
+          '   - Download the JSON key file',
+          '',
+          '📝 Step 2: Set Environment Variable',
+          '   Option A - Raw JSON (Recommended):',
+          '     • Copy the entire contents of the JSON file',
+          '     • Set GCP_SERVICE_ACCOUNT_KEY to the JSON string (all on one line)',
+          '   Option B - Base64 Encoded:',
+          '     • Run: cat service-account.json | base64 | tr -d "\\n"',
+          '     • Set GCP_SERVICE_ACCOUNT_KEY to the base64 output',
+          '',
+          '🚀 Step 3: Redeploy Dashboard',
+          '   - Save the environment variable in your deployment platform',
+          '   - Redeploy the dashboard application',
+          '   - Wait for deployment to complete',
+          '',
+          '✅ Step 4: Verify Configuration',
+          '   - Visit /api/config-check to verify credentials are loaded',
+          '   - Visit /api/credentials-debug for detailed diagnostics',
+          '   - Refresh this page to load BigQuery data',
         ],
+        quickLinks: {
+          configCheck: '/api/config-check',
+          credentialsDebug: '/api/credentials-debug',
+          setupGuide: 'https://github.com/natureswaysoil/Amazom-PPC/blob/main/amazon_ppc_dashboard/nextjs_space/README_DASHBOARD_SETUP.md'
+        }
       }, { status: 500 });
     }
 
