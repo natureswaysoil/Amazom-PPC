@@ -190,7 +190,18 @@ export default function Home() {
           <h1 style={styles.title}>🚀 Amazon PPC Optimizer Dashboard</h1>
           <div style={styles.errorBox}>
             <p><strong>⚠️ Error Loading Data:</strong></p>
-            <p>{error}</p>
+            <p style={{ marginBottom: '15px' }}>{error}</p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginBottom: '15px' }}>
+              <a href="/api/setup-guide" target="_blank" style={styles.helpLink}>
+                📖 Setup Guide
+              </a>
+              <a href="/api/config-check" target="_blank" style={styles.helpLink}>
+                🔍 Config Check
+              </a>
+              <a href="/api/bigquery-data?limit=1" target="_blank" style={styles.helpLink}>
+                🧪 Test Connection
+              </a>
+            </div>
             {error.includes('Not found') && (
               <div style={styles.setupInstructions}>
                 <p><strong>Setup Required:</strong></p>
@@ -250,11 +261,21 @@ export default function Home() {
   return (
     <div style={styles.dashboardContainer}>
       <header style={styles.header}>
-        <h1 style={styles.headerTitle}>🚀 Amazon PPC Optimizer Dashboard</h1>
-        <p style={styles.headerSubtitle}>Real-time data from BigQuery</p>
-        <button onClick={fetchDashboardData} style={styles.refreshButton}>
-          🔄 Refresh
-        </button>
+        <div>
+          <h1 style={styles.headerTitle}>🚀 Amazon PPC Optimizer Dashboard</h1>
+          <p style={styles.headerSubtitle}>Real-time data from BigQuery</p>
+        </div>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <a href="/api/setup-guide" target="_blank" style={styles.headerLink} title="View setup guide">
+            📖 Setup
+          </a>
+          <a href="/api/config-check" target="_blank" style={styles.headerLink} title="Check configuration">
+            🔍 Config
+          </a>
+          <button onClick={fetchDashboardData} style={styles.refreshButton}>
+            🔄 Refresh
+          </button>
+        </div>
       </header>
 
       <div style={styles.statsGrid}>
@@ -502,5 +523,25 @@ const styles: { [key: string]: React.CSSProperties } = {
   title: {
     color: '#667eea',
     marginBottom: '20px',
+  },
+  helpLink: {
+    display: 'inline-block',
+    padding: '8px 16px',
+    background: '#667eea',
+    color: 'white',
+    textDecoration: 'none',
+    borderRadius: '5px',
+    fontSize: '14px',
+    fontWeight: 'bold',
+  },
+  headerLink: {
+    padding: '8px 16px',
+    background: 'rgba(255, 255, 255, 0.2)',
+    color: 'white',
+    textDecoration: 'none',
+    borderRadius: '20px',
+    fontSize: '14px',
+    fontWeight: 'bold',
+    border: '1px solid rgba(255, 255, 255, 0.3)',
   },
 };
