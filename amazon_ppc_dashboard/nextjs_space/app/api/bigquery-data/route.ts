@@ -266,6 +266,53 @@ export async function GET(request: NextRequest) {
       }, { status: 404 });
     }
 
+    // Check for BigQuery permission errors
+    if (error.message && (
+      error.message.includes('bigquery.jobs.create') ||
+      error.message.includes('bigquery.tables.get') ||
+      error.message.includes('Access Denied') ||
+      error.message.includes('does not have bigquery') ||
+      (error.code === 403 || error.code === 7) // 403 Forbidden or gRPC PERMISSION_DENIED
+    )) {
+      const projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES) || 'amazon-ppc-474902';
+      
+      return NextResponse.json({
+        error: 'Access Denied',
+        message: 'The service account does not have sufficient BigQuery permissions',
+        details: error.message,
+        troubleshooting: [
+          'The service account needs these BigQuery IAM roles:',
+          '  • roles/bigquery.dataViewer (or roles/bigquery.dataEditor) - to read/write data',
+          '  • roles/bigquery.jobUser - to create and run query jobs',
+          '',
+          'To grant the required permissions, run these commands in Google Cloud Shell:',
+          '',
+          `# Get the service account email from your credentials`,
+          `SERVICE_ACCOUNT_EMAIL=$(echo "$GCP_SERVICE_ACCOUNT_KEY" | jq -r .client_email)`,
+          '',
+          `# Grant BigQuery Data Viewer role`,
+          `gcloud projects add-iam-policy-binding ${projectId} \\`,
+          `  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \\`,
+          `  --role="roles/bigquery.dataViewer"`,
+          '',
+          `# Grant BigQuery Job User role (required to run queries)`,
+          `gcloud projects add-iam-policy-binding ${projectId} \\`,
+          `  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \\`,
+          `  --role="roles/bigquery.jobUser"`,
+          '',
+          'Alternatively, you can grant these roles in the Google Cloud Console:',
+          `  1. Go to https://console.cloud.google.com/iam-admin/iam?project=${projectId}`,
+          '  2. Find your service account in the list',
+          '  3. Click "Edit principal" (pencil icon)',
+          '  4. Add the roles: BigQuery Data Viewer + BigQuery Job User',
+          '  5. Click "Save"',
+          '',
+          'After granting permissions, refresh this page to try again.',
+        ],
+        documentation: 'See BIGQUERY_DATASET_FIX.md and ACCESS_GUIDE.md for more details.',
+      }, { status: 403 });
+    }
+
     if (error.message && error.message.includes('Could not load the default credentials')) {
       return NextResponse.json({
         error: 'Missing Google Cloud credentials',
@@ -283,7 +330,8 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       error: 'Failed to query BigQuery',
-      message: error.message || 'Unknown error'
+      message: error.message || 'Unknown error',
+      details: error.stack || 'No additional details available'
     }, { status: 500 });
   }
 }
