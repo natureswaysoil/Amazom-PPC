@@ -318,6 +318,7 @@ footer {
     padding: 15px;
     border-radius: 5px;
     margin-bottom: 20px;
+    font-weight: 500;
 }
 
 .message.error {
@@ -330,4 +331,24 @@ footer {
     background: #e6f7ed;
     color: var(--success-color);
     border-left: 4px solid var(--success-color);
+}
+
+.message.info {
+    background: #e6f3ff;
+    color: var(--accent-color);
+    border-left: 4px solid var(--accent-color);
+}
+
+/* Empty/No Data States */
+.no-data {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+    font-size: 1.1em;
+}
+
+.empty-badge {
+    font-size: 0.8em;
+    color: #999;
+    font-weight: normal;
 }

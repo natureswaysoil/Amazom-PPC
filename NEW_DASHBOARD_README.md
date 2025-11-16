@@ -81,6 +81,18 @@ docker run -p 8080:8080 -e GCP_PROJECT_ID=your-project ppc-dashboard
 - **CSV Export** - Download any table data
 - **Auto-refresh** - Updates every 5 minutes
 
+## 💡 Where is the Data?
+
+**The dashboard displays data from BigQuery tables populated by the optimizer.**
+
+If you see "No data available" or error messages:
+
+1. **Set up BigQuery credentials** - Dashboard needs GCP credentials to connect
+2. **Run the optimizer** - Tables are populated when you run `python optimizer_core.py`
+3. **Wait for results** - Data appears after the optimizer completes a run
+
+See [`dashboard/README.md#where-is-the-data`](dashboard/README.md#where-is-the-data) for detailed troubleshooting.
+
 ## Documentation
 
 | Document | Description |

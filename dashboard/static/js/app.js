@@ -31,10 +31,18 @@ async function loadSummary() {
         
         if (data.error) {
             console.error('Error loading summary:', data.error);
+            showMessage('error', `Failed to load summary: ${data.error}`);
             return;
         }
         
         const summary = data.summary || {};
+        
+        // Check if we have any data
+        const hasData = summary.total_runs && summary.total_runs > 0;
+        
+        if (!hasData) {
+            showMessage('info', 'No data available yet. The BigQuery tables may be empty. Run the optimizer to generate data.');
+        }
         
         document.getElementById('total-runs').textContent = 
             formatNumber(summary.total_runs || 0);
@@ -49,6 +57,7 @@ async function loadSummary() {
         
     } catch (error) {
         console.error('Error loading summary:', error);
+        showMessage('error', `Failed to connect to dashboard API: ${error.message}`);
     }
 }
 
@@ -60,21 +69,30 @@ async function loadTables() {
         
         if (data.error) {
             console.error('Error loading tables:', data.error);
+            showMessage('error', `Failed to load tables: ${data.error}`);
             return;
         }
         
         const tablesList = document.getElementById('tables-list');
         tablesList.innerHTML = '';
         
+        if (!data.tables || data.tables.length === 0) {
+            tablesList.innerHTML = '<p class="no-data">No BigQuery tables found. Check your dataset configuration.</p>';
+            return;
+        }
+        
         data.tables.forEach(table => {
             const tableItem = document.createElement('div');
             tableItem.className = 'table-item';
             tableItem.onclick = () => viewTable(table.table_id);
             
+            const rowCount = table.num_rows || 0;
+            const rowStatus = rowCount === 0 ? ' <span class="empty-badge">(empty)</span>' : '';
+            
             tableItem.innerHTML = `
-                <h3>${table.table_id}</h3>
+                <h3>${table.table_id}${rowStatus}</h3>
                 <div class="table-info">
-                    <p>Rows: ${formatNumber(table.num_rows)}</p>
+                    <p>Rows: ${formatNumber(rowCount)}</p>
                     <p>Size: ${formatBytes(table.size_bytes)}</p>
                     <p>Last Modified: ${formatDate(table.modified)}</p>
                 </div>
@@ -85,6 +103,7 @@ async function loadTables() {
         
     } catch (error) {
         console.error('Error loading tables:', error);
+        showMessage('error', `Failed to connect to API: ${error.message}`);
     }
 }
 
@@ -95,7 +114,11 @@ async function loadCharts() {
         const dailyResponse = await fetch('/api/chart-data/daily_performance?days=30');
         const dailyData = await dailyResponse.json();
         
-        if (!dailyData.error) {
+        if (dailyData.error) {
+            console.error('Error loading daily chart:', dailyData.error);
+        } else if (!dailyData.data || dailyData.data.length === 0) {
+            showNoDataInChart('daily-chart', 'No daily performance data available');
+        } else {
             renderDailyChart(dailyData.data);
         }
         
@@ -103,12 +126,17 @@ async function loadCharts() {
         const campaignResponse = await fetch('/api/chart-data/campaign_performance?days=30');
         const campaignData = await campaignResponse.json();
         
-        if (!campaignData.error) {
+        if (campaignData.error) {
+            console.error('Error loading campaign chart:', campaignData.error);
+        } else if (!campaignData.data || campaignData.data.length === 0) {
+            showNoDataInChart('campaign-chart', 'No campaign data available');
+        } else {
             renderCampaignChart(campaignData.data);
         }
         
     } catch (error) {
         console.error('Error loading charts:', error);
+        showMessage('error', `Failed to load charts: ${error.message}`);
     }
 }
 
@@ -390,4 +418,38 @@ function formatValue(value) {
 
 function updateLastUpdateTime() {
     document.getElementById('last-update').textContent = new Date().toLocaleString();
+}
+
+// Show user-visible messages
+function showMessage(type, message) {
+    // Remove any existing messages
+    const existingMessages = document.querySelectorAll('.dashboard-message');
+    existingMessages.forEach(msg => msg.remove());
+    
+    // Create new message
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message dashboard-message ${type}`;
+    messageDiv.textContent = message;
+    
+    // Insert after header
+    const header = document.querySelector('header');
+    header.insertAdjacentElement('afterend', messageDiv);
+    
+    // Auto-dismiss info messages after 10 seconds
+    if (type === 'info') {
+        setTimeout(() => {
+            messageDiv.remove();
+        }, 10000);
+    }
+}
+
+// Show "no data" message in chart canvas
+function showNoDataInChart(canvasId, message) {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = '16px Arial';
+    ctx.fillStyle = '#666';
+    ctx.textAlign = 'center';
+    ctx.fillText(message, canvas.width / 2, canvas.height / 2);
 }

@@ -167,22 +167,75 @@ Environment variables:
 6. **Export Data**: Click "Export CSV" to download current view
 7. **Refresh**: Click "Refresh" to reload table data
 
+## Where is the Data?
+
+The dashboard displays data from BigQuery tables that are populated by the Amazon PPC optimizer. If you see "No data available" messages:
+
+### Step 1: Verify BigQuery Connection
+The dashboard needs valid GCP credentials to access BigQuery. Error messages like "Failed to initialize BigQuery client" mean credentials aren't configured. Set one of:
+
+```bash
+# Option 1: Service account file
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+
+# Option 2: JSON string (for Cloud Run/Secret Manager)
+export GCP_CREDENTIALS_JSON='{"type": "service_account", ...}'
+
+# Option 3: Base64 encoded
+export GCP_CREDENTIALS_BASE64='base64-encoded-credentials'
+```
+
+### Step 2: Run the Optimizer to Generate Data
+The BigQuery tables are populated by the main optimizer application. To generate data:
+
+```bash
+# From the repository root
+python optimizer_core.py --config config.json
+```
+
+This will create optimization results that the dashboard displays.
+
+### Step 3: Verify Tables Exist
+Check that BigQuery tables are created:
+
+```bash
+bq ls --project_id=YOUR_PROJECT amazon_ppc
+```
+
+You should see these tables:
+- `optimization_results`
+- `campaign_details`
+- `optimization_progress`
+- `optimization_errors`
+- `optimizer_run_events`
+
 ## Troubleshooting
 
 ### "Failed to initialize BigQuery client"
-- Check that your GCP credentials are properly set
-- Verify the service account has BigQuery access
-- Ensure the project ID is correct
+- **Cause**: Missing or invalid GCP credentials
+- **Fix**: Set credentials environment variable (see "Where is the Data?" above)
+- **Verify**: Check that credentials JSON contains valid service account
 
-### "Error fetching table data"
-- Verify the BigQuery dataset exists
-- Check that tables have data
-- Ensure the service account has read permissions
+### "No data available yet"
+- **Cause**: BigQuery tables are empty (haven't run optimizer yet)
+- **Fix**: Run the optimizer to generate data: `python optimizer_core.py`
+- **Verify**: Check table row counts in BigQuery console
 
-### Charts not displaying
-- Check browser console for JavaScript errors
-- Verify Chart.js is loading (CDN connection required)
-- Ensure API endpoints are returning data
+### "Failed to load tables"
+- **Cause**: BigQuery dataset doesn't exist or no permissions
+- **Fix**: 
+  - Verify dataset exists: `bq ls --project_id=YOUR_PROJECT amazon_ppc`
+  - Check service account has `BigQuery Data Viewer` role
+  - Ensure correct project ID in `GCP_PROJECT_ID` environment variable
+
+### Charts showing "No data available"
+- **Cause**: Tables exist but contain no rows
+- **Fix**: Run the optimizer to populate tables with optimization results
+- **Note**: Charts require at least one successful optimization run
+
+### Empty tables showing "(empty)" badge
+- **Normal**: Tables are created automatically but empty until optimizer runs
+- **Action**: Run `python optimizer_core.py` to generate initial data
 
 ## Development
 
