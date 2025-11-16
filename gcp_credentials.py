@@ -119,9 +119,49 @@ def _get_env_value_with_parts(*names: str) -> Optional[str]:
     return None
 
 
+def _detect_base64_likelihood(value: str) -> float:
+    """
+    Smart detection to identify if a string might be base64 encoded.
+    Returns a confidence score from 0.0 to 1.0.
+    """
+    import re
+    
+    # Remove whitespace for analysis
+    cleaned = value.strip()
+    cleaned = re.sub(r'\s+', '', cleaned)
+    
+    # Check if it starts with { or [ (likely raw JSON)
+    if cleaned.startswith('{') or cleaned.startswith('['):
+        return 0.0
+    
+    # Check character composition
+    base64_pattern = re.compile(r'^[A-Za-z0-9+/]+=*$')
+    if not base64_pattern.match(cleaned):
+        return 0.0
+    
+    # Base64 strings are typically much longer and have specific length characteristics
+    if len(cleaned) < 100:
+        return 0.3  # Might be base64 but suspicious
+    
+    # Check for typical base64 padding
+    padding = len(cleaned) - len(cleaned.rstrip('='))
+    if padding > 2:
+        return 0.2  # Invalid base64 padding
+    
+    # Strong indicator: Length is a multiple of 4 (or close to it)
+    remainder = len(cleaned) % 4
+    if remainder == 0:
+        return 0.9
+    elif remainder <= 2:
+        return 0.7
+    
+    return 0.5
+
+
 def _parse_json_credentials(raw_value: str, source_name: str) -> Dict[str, Any]:
     """
-    Parse credentials from raw JSON or base64-encoded JSON.
+    Parse credentials from raw JSON or base64-encoded JSON with smart format detection.
+    Handles raw JSON, base64-encoded JSON, URL-encoded JSON, and malformed variants.
     
     Args:
         raw_value: Raw credential string (JSON or base64)
@@ -133,19 +173,108 @@ def _parse_json_credentials(raw_value: str, source_name: str) -> Dict[str, Any]:
     Raises:
         GCPCredentialError: If parsing fails with helpful guidance
     """
+    import urllib.parse
+    
+    # Clean up common issues: extra whitespace, newlines within the value
+    cleaned_value = raw_value.strip()
+    
+    # Remove line breaks that might have been added during copy/paste
+    if '\n' in cleaned_value and not cleaned_value.startswith('{'):
+        cleaned_value = cleaned_value.replace('\n', '')
+        logger.debug(f"Removed embedded newlines from {source_name}")
+    
+    # Try URL decoding if it looks URL encoded
+    if '%22' in cleaned_value or '%7B' in cleaned_value or '%7D' in cleaned_value:
+        try:
+            url_decoded = urllib.parse.unquote(cleaned_value)
+            logger.debug(f"{source_name} appears to be URL-encoded, attempting to decode...")
+            cleaned_value = url_decoded
+        except Exception as url_err:
+            logger.debug(f"URL decode failed, continuing with original value")
+    
     # Try parsing as raw JSON first
     try:
-        credentials_info = json.loads(raw_value)
-        logger.info(f"Successfully parsed {source_name} as raw JSON")
+        credentials_info = json.loads(cleaned_value)
+        logger.info(f"✓ Successfully parsed {source_name} as raw JSON")
         return credentials_info
     except json.JSONDecodeError as json_err:
-        logger.debug(f"{source_name} is not raw JSON, attempting base64 decode...")
+        logger.debug(f"{source_name} is not valid raw JSON: {json_err}")
     
-    # Try base64-encoded JSON
-    try:
-        decoded_value = base64.b64decode(raw_value).decode("utf-8")
-        logger.info(f"Successfully decoded {source_name} from base64")
-    except (base64.binascii.Error, UnicodeDecodeError) as b64_err:
+    # Smart detection: Should we try base64 decoding?
+    base64_confidence = _detect_base64_likelihood(cleaned_value)
+    logger.debug(f"Base64 likelihood for {source_name}: {base64_confidence * 100:.0f}%")
+    
+    if base64_confidence > 0.3:
+        # Try base64-encoded JSON
+        logger.debug(f"Attempting to decode {source_name} as base64...")
+        try:
+            decoded_value = base64.b64decode(cleaned_value).decode("utf-8")
+            logger.info(f"Successfully decoded {source_name} from base64")
+            logger.debug(f"Decoded length: {len(decoded_value)} characters")
+            logger.debug(f"Decoded preview (first 100 chars): {decoded_value[:100]}")
+        except (base64.binascii.Error, UnicodeDecodeError) as b64_err:
+            logger.debug(f"{source_name} base64 decode failed: {b64_err}")
+            # Don't raise error yet, we'll try other formats
+            pass
+        else:
+            # Parse the decoded JSON
+            try:
+                credentials_info = json.loads(decoded_value)
+                logger.info(f"✓ Successfully parsed decoded {source_name} as JSON")
+                return credentials_info
+            except json.JSONDecodeError as json_err2:
+                logger.error(f"Decoded {source_name} is not valid JSON: {json_err2}")
+                logger.error(f"Decoded content (first 500 chars): {decoded_value[:500]}")
+                
+                # Check if the decoded content looks like it might be double-encoded or has other issues
+                additional_guidance = []
+                if decoded_value.startswith('data:') or 'base64,' in decoded_value:
+                    additional_guidance.append('The decoded content appears to contain a data URL. Use only the service account JSON, not a data URL.')
+                elif '\\n' in decoded_value and '\n' not in decoded_value:
+                    additional_guidance.append('The decoded content contains escaped newlines (\\n). These should be actual newlines in the JSON.')
+                elif not decoded_value.strip():
+                    additional_guidance.append('The decoded content is empty. The base64 string may be invalid or incomplete.')
+                
+                guidance_text = """
+The base64 decoding succeeded, but the result is not valid JSON.
+
+To fix this issue:
+1. Verify you're encoding valid JSON:
+   - Check: cat service-account.json | jq .
+   - This should display formatted JSON without errors
+
+2. Re-encode the file:
+   - Run: cat service-account.json | base64 | tr -d '\\n' > encoded.txt
+   - Set: export GCP_SERVICE_ACCOUNT_KEY="$(cat encoded.txt)"
+
+3. Ensure no extra spaces or characters were added when setting the variable
+"""
+                if additional_guidance:
+                    guidance_text += "\n" + "\n".join(additional_guidance)
+                
+                raise GCPCredentialError(
+                    f"{source_name} was successfully base64 decoded but does not contain valid JSON.",
+                    guidance=guidance_text
+                )
+    
+    # If we get here, neither raw JSON nor base64 worked
+    # Provide helpful error message based on what we detected
+    if cleaned_value.startswith('{') or cleaned_value.startswith('['):
+        # Looks like JSON but has syntax errors
+        raise GCPCredentialError(
+            f"{source_name} appears to be JSON but contains syntax errors.",
+            guidance="""
+The value looks like JSON but has syntax errors.
+
+To fix this issue:
+1. Ensure the entire JSON is copied, including opening { and closing }
+2. Check for missing commas, quotes, or brackets
+3. Validate your JSON: cat service-account.json | jq .
+4. Ensure no characters were corrupted during copy/paste
+"""
+        )
+    else:
+        # Generic error
         raise GCPCredentialError(
             f"{source_name} is not valid JSON or base64 encoded JSON.",
             guidance="""
@@ -164,30 +293,6 @@ To fix this issue, provide credentials in one of these formats:
    - Example: export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
 
 For more details, see the README.md section on GCP credentials.
-"""
-        )
-    
-    # Parse the decoded JSON
-    try:
-        credentials_info = json.loads(decoded_value)
-        logger.info(f"Successfully parsed decoded {source_name} as JSON")
-        return credentials_info
-    except json.JSONDecodeError as json_err2:
-        raise GCPCredentialError(
-            f"{source_name} was successfully base64 decoded but does not contain valid JSON.",
-            guidance="""
-The base64 decoding succeeded, but the result is not valid JSON.
-
-To fix this issue:
-1. Verify you're encoding valid JSON:
-   - Check: cat service-account.json | jq .
-   - This should display formatted JSON without errors
-
-2. Re-encode the file:
-   - Run: cat service-account.json | base64 | tr -d '\\n' > encoded.txt
-   - Set: export GCP_SERVICE_ACCOUNT_KEY="$(cat encoded.txt)"
-
-3. Ensure no extra spaces or characters were added when setting the variable
 """
         )
 
@@ -336,6 +441,7 @@ def load_credentials() -> Optional[service_account.Credentials]:
         return None
     
     # Try each credential source
+    last_error = None
     for source_name, raw_value in credential_sources:
         logger.info(f"Attempting to load credentials from {source_name}...")
         
@@ -347,8 +453,10 @@ def load_credentials() -> Optional[service_account.Credentials]:
                 logger.info(f"✓ Successfully loaded credentials from file: {raw_value}")
                 return credentials
             except Exception as exc:
-                raise GCPCredentialError(
-                    f"Failed to load service account credentials from file: {raw_value}",
+                error_msg = f"Failed to load service account credentials from file: {raw_value}"
+                logger.warning(f"{error_msg}: {exc}")
+                last_error = GCPCredentialError(
+                    error_msg,
                     guidance=f"""
 The environment variable {source_name} points to a file path, but the file could not be loaded.
 
@@ -363,6 +471,7 @@ To fix this:
 Alternatively, set {source_name} to the JSON contents directly instead of a file path.
 """
                 )
+                continue  # Try next source instead of failing immediately
         
         # Parse as JSON or base64
         try:
@@ -376,12 +485,15 @@ Alternatively, set {source_name} to the JSON contents directly instead of a file
             logger.info(f"  Project ID: {credentials_info.get('project_id', 'unknown')}")
             return credentials
             
-        except GCPCredentialError:
-            # Re-raise our custom errors with guidance
-            raise
+        except GCPCredentialError as cred_err:
+            # Log the error but try next source
+            logger.warning(f"Failed to load credentials from {source_name}: {cred_err.message}")
+            last_error = cred_err
+            continue
         except Exception as exc:
             # Catch any unexpected errors
-            raise GCPCredentialError(
+            logger.warning(f"Unexpected error while processing {source_name}: {str(exc)}")
+            last_error = GCPCredentialError(
                 f"Unexpected error while processing {source_name}: {str(exc)}",
                 guidance="""
 An unexpected error occurred while loading credentials.
@@ -398,9 +510,15 @@ For CI/CD environments (GitHub Actions, Vercel, etc.):
 - Do not modify or escape the JSON when setting the secret
 """
             )
+            continue
+    
+    # All sources failed - raise the last error or a generic one
+    if last_error:
+        logger.error(f"Failed to load credentials from all sources. Last error: {last_error.message}")
+        raise last_error
     
     # This should never be reached, but just in case
-    logger.warning("No valid credentials found from any source.")
+    logger.warning("No valid credentials found from any source. Will use Application Default Credentials if available.")
     return None
 
 
