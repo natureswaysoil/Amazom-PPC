@@ -255,7 +255,7 @@ class BigQueryClient:
             True if successful, False otherwise
         """
         try:
-            # Define schema for optimization_results table
+            # Define schema for optimization_results table with enhanced fields
             schema = [
                 bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
                 bigquery.SchemaField("run_id", "STRING", mode="REQUIRED"),
@@ -277,6 +277,11 @@ class BigQueryClient:
                 bigquery.SchemaField("enabled_features", "STRING", mode="REPEATED"),
                 bigquery.SchemaField("errors", "STRING", mode="REPEATED"),
                 bigquery.SchemaField("warnings", "STRING", mode="REPEATED"),
+                # Enhanced fields for complete data from DATA_FLOW_SUMMARY.md
+                bigquery.SchemaField("campaigns", "JSON"),
+                bigquery.SchemaField("top_performers", "JSON"),
+                bigquery.SchemaField("features", "JSON"),
+                bigquery.SchemaField("config_snapshot", "JSON"),
             ]
             
             self._ensure_table_exists("optimization_results", schema)
@@ -321,6 +326,11 @@ class BigQueryClient:
                 "enabled_features": enabled_features,
                 "errors": errors,
                 "warnings": warnings,
+                # Enhanced fields - store as JSON strings for BigQuery JSON type
+                "campaigns": json.dumps(results_data.get('campaigns', [])),
+                "top_performers": json.dumps(results_data.get('top_performers', [])),
+                "features": json.dumps(results_data.get('features', {})),
+                "config_snapshot": json.dumps(results_data.get('config_snapshot', {})),
             }
             
             # Insert row

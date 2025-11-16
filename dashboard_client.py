@@ -334,6 +334,18 @@ class DashboardClient:
         This is a public method that can be used by external modules like
         BigQueryClient to ensure consistent data formatting.
         
+        NOTE: The optimizer has been enhanced to collect campaign and keyword data:
+        
+        1. BidOptimizer.optimize() now collects and returns top 20 performing 
+           keywords with details (keyword_text, clicks, sales, acos, bid_change).
+        
+        2. CampaignManager.manage_campaigns() now collects and returns campaign-level 
+           metrics (campaign_id, name, spend, sales, acos, impressions, clicks, 
+           conversions, budget, changes_made) for all analyzed campaigns.
+        
+        The dashboard will now display complete data including detailed breakdowns
+        as shown in DATA_FLOW_SUMMARY.md.
+        
         Args:
             results: Raw results from optimization
             config: Configuration dictionary
@@ -464,8 +476,26 @@ class DashboardClient:
         """Extract campaign-level data from results"""
         campaigns = []
         
-        # This would need to be populated with actual campaign data
-        # from the results if available
+        # Extract campaign data from campaign_management results if available
+        if 'campaign_management' in results:
+            camp_data = results['campaign_management']
+            
+            # If the campaign manager provided campaign details (enhanced in optimizer_core.py)
+            if 'campaigns' in camp_data and isinstance(camp_data['campaigns'], list):
+                campaigns.extend(camp_data['campaigns'])
+            
+            # If we have campaign summaries with metrics (legacy fallback)
+            elif 'campaign_summaries' in camp_data and isinstance(camp_data['campaign_summaries'], list):
+                for summary in camp_data['campaign_summaries']:
+                    campaigns.append({
+                        'campaign_id': summary.get('campaign_id', ''),
+                        'campaign_name': summary.get('name', ''),
+                        'spend': summary.get('spend', 0.0),
+                        'sales': summary.get('sales', 0.0),
+                        'acos': summary.get('acos', 0.0),
+                        'keywords_count': summary.get('keywords_count', 0),
+                        'changes_made': summary.get('changes_made', 0),
+                    })
         
         return campaigns
     
@@ -473,8 +503,31 @@ class DashboardClient:
         """Extract top performing keywords from results"""
         top_performers = []
         
-        # This would need to be populated with actual keyword performance data
-        # from the results if available
+        # Extract top performer data from bid_optimization results if available
+        if 'bid_optimization' in results:
+            bid_data = results['bid_optimization']
+            
+            # If the bid optimizer provided top performing keywords (enhanced in optimizer_core.py)
+            if 'top_performers' in bid_data and isinstance(bid_data['top_performers'], list):
+                top_performers.extend(bid_data['top_performers'])
+            
+            # If we have keyword performance details (legacy fallback)
+            elif 'keyword_details' in bid_data and isinstance(bid_data['keyword_details'], list):
+                # Sort by sales and take top performers
+                sorted_keywords = sorted(
+                    bid_data['keyword_details'],
+                    key=lambda k: k.get('sales', 0),
+                    reverse=True
+                )[:10]  # Top 10
+                
+                for kw in sorted_keywords:
+                    top_performers.append({
+                        'keyword_text': kw.get('keyword_text', ''),
+                        'clicks': kw.get('clicks', 0),
+                        'sales': kw.get('sales', 0.0),
+                        'acos': kw.get('acos', 0.0),
+                        'bid_change': kw.get('bid_change', 0.0),
+                    })
         
         return top_performers
     
