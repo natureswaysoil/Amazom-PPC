@@ -26,6 +26,9 @@ from google.cloud.exceptions import NotFound
 from google.oauth2 import service_account
 from google.api_core import exceptions as core_exceptions
 
+# Import centralized credential loading
+from gcp_credentials import load_credentials
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,62 +39,6 @@ RUN_EVENTS_SCHEMA = [
     bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("details", "STRING"),
 ]
-
-
-def _combine_split_env_value(base_name: str) -> Optional[str]:
-    """Reconstruct environment values stored across multiple numbered variables."""
-
-    prefix_len = len(base_name)
-    parts: List[tuple[int, str]] = []
-
-    for env_name, env_value in os.environ.items():
-        if not env_value or not env_name.startswith(base_name):
-            continue
-
-        suffix = env_name[prefix_len:]
-        if not suffix:
-            continue
-
-        trimmed = suffix.strip("_- ")
-        if not trimmed:
-            continue
-
-        index: Optional[int] = None
-        upper = trimmed.upper()
-
-        if upper.startswith("PART"):
-            remainder = trimmed[4:].strip("_- ")
-            if remainder.isdigit():
-                index = int(remainder)
-        elif trimmed.isdigit():
-            index = int(trimmed)
-
-        if index is None:
-            continue
-
-        parts.append((index, env_value))
-
-    if not parts:
-        return None
-
-    parts.sort(key=lambda item: item[0])
-    return "".join(value for _, value in parts)
-
-
-def _get_env_value_with_parts(*names: str) -> Optional[str]:
-    """Return the first populated environment variable, combining split parts if needed."""
-
-    for name in names:
-        value = os.environ.get(name)
-        if value and value.strip():
-            return value
-
-    for name in names:
-        combined = _combine_split_env_value(name)
-        if combined:
-            return combined
-
-    return None
 
 
 def _normalise_timestamp(value: Optional[datetime]) -> Optional[datetime]:
@@ -144,120 +91,16 @@ class BigQueryClient:
         self._ensure_dataset_exists()
 
     def _resolve_credentials(self) -> Optional[service_account.Credentials]:
-        """Attempt to load service account credentials from environment variables."""
-
-        # Prefer dedicated JSON credential environment variable used by deployment scripts
-        credential_sources = []
-
-        service_account_value = _get_env_value_with_parts("GCP_SERVICE_ACCOUNT_KEY", "GCP_SA_KEY")
-        if service_account_value:
-            if os.environ.get("GCP_SERVICE_ACCOUNT_KEY"):
-                service_source = "GCP_SERVICE_ACCOUNT_KEY"
-            elif os.environ.get("GCP_SA_KEY"):
-                service_source = "GCP_SA_KEY"
-            elif _combine_split_env_value("GCP_SERVICE_ACCOUNT_KEY"):
-                service_source = "GCP_SERVICE_ACCOUNT_KEY (split parts)"
-            elif _combine_split_env_value("GCP_SA_KEY"):
-                service_source = "GCP_SA_KEY (split parts)"
-            else:
-                service_source = "GCP_SERVICE_ACCOUNT_KEY"
-            credential_sources.append((service_source, service_account_value))
-
-        google_credentials_value = _get_env_value_with_parts("GOOGLE_APPLICATION_CREDENTIALS")
-        if google_credentials_value:
-            if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-                google_source = "GOOGLE_APPLICATION_CREDENTIALS"
-            else:
-                google_source = "GOOGLE_APPLICATION_CREDENTIALS (split parts)"
-            credential_sources.append((google_source, google_credentials_value))
-
-        for source_name, raw_value in credential_sources:
-            # If the environment variable points to a file path, let google-auth handle it
-            if os.path.isfile(raw_value):
-                try:
-                    logger.info(f"Loading BigQuery credentials from file path in {source_name}")
-                    return service_account.Credentials.from_service_account_file(raw_value)
-                except Exception as exc:
-                    logger.error(
-                        f"Failed to load service account credentials from {source_name} file path: {exc}. "
-                        f"Ensure the file exists and contains valid service account JSON."
-                    )
-                    continue
-
-            # Otherwise treat the value as JSON credentials
-            try:
-                logger.info(f"Attempting to parse service account JSON from {source_name}")
-                credentials_info = json.loads(raw_value)
-                logger.info(f"Successfully parsed {source_name} as raw JSON")
-            except json.JSONDecodeError as json_err:
-                # Some deployments (e.g. GitHub/Vercel secrets) provide base64 encoded JSON
-                logger.info(f"Value in {source_name} is not valid raw JSON, attempting base64 decode...")
-                try:
-                    decoded_value = base64.b64decode(raw_value).decode("utf-8")
-                    logger.info(f"Successfully decoded {source_name} from base64")
-                    credentials_info = json.loads(decoded_value)
-                    logger.info(f"Successfully parsed decoded {source_name} as JSON")
-                except base64.binascii.Error as b64_err:
-                    logger.error(
-                        f"{source_name} is not valid JSON or base64 encoded JSON. "
-                        f"JSON parse error: {json_err}. Base64 decode error: {b64_err}. "
-                        f"To fix: Provide either (1) raw JSON from service account key file, or "
-                        f"(2) base64 encoded JSON. Example for raw JSON: set {source_name} to the entire "
-                        f"contents of your service account key file. Example for base64: "
-                        f"run 'cat service-account.json | base64' and set {source_name} to the output."
-                    )
-                    continue
-                except json.JSONDecodeError as json_err2:
-                    logger.error(
-                        f"{source_name} was successfully base64 decoded but does not contain valid JSON. "
-                        f"JSON parse error: {json_err2}. "
-                        f"To fix: Ensure you're encoding valid JSON. Example: "
-                        f"'cat service-account.json | base64' should produce valid base64 of JSON content."
-                    )
-                    continue
-                except Exception as exc:
-                    logger.error(
-                        f"Unexpected error while processing {source_name}: {exc}. "
-                        f"To fix: Provide valid service account credentials as either raw JSON or base64 encoded JSON."
-                    )
-                    continue
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error(
-                    f"Unexpected error parsing {source_name}: {exc}. "
-                    f"To fix: Provide valid service account credentials as either raw JSON or base64 encoded JSON."
-                )
-                continue
-
-            # Validate that we have a proper service account credential structure
-            if isinstance(credentials_info, dict) and credentials_info.get("type") == "service_account":
-                # Check for required fields
-                required_fields = ["type", "project_id", "private_key_id", "private_key", "client_email"]
-                missing_fields = [field for field in required_fields if field not in credentials_info]
-                
-                if missing_fields:
-                    logger.error(
-                        f"{source_name} contains JSON but is missing required service account fields: "
-                        f"{', '.join(missing_fields)}. Ensure you're using the complete service account "
-                        f"key JSON file downloaded from Google Cloud Console."
-                    )
-                    continue
-                
-                logger.info(f"Successfully loaded valid service account credentials from {source_name}")
-                return service_account.Credentials.from_service_account_info(credentials_info)
-
-            logger.error(
-                f"{source_name} contains valid JSON but does not have the correct structure for a "
-                f"service account. Expected 'type': 'service_account' but got 'type': '{credentials_info.get('type') if isinstance(credentials_info, dict) else 'N/A'}'. "
-                f"Ensure you're using a service account key JSON file (not other types of credentials)."
-            )
-
-        if credential_sources:
-            logger.warning(
-                "Failed to load service account credentials from any configured source. "
-                "Application Default Credentials will be used if available."
-            )
+        """
+        Attempt to load service account credentials from environment variables.
         
-        return None
+        Uses the centralized gcp_credentials module for consistent credential handling.
+        """
+        try:
+            return load_credentials()
+        except Exception as exc:
+            logger.error(f"Failed to load GCP credentials for BigQuery: {exc}")
+            return None
     
     def _ensure_dataset_exists(self):
         """Create dataset if it doesn't exist"""

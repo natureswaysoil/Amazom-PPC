@@ -17,6 +17,7 @@ import yaml
 from optimizer_core import PPCAutomation
 from dashboard_client import DashboardClient
 from bigquery_client import BigQueryClient
+from gcp_credentials import validate_credentials_early, GCPCredentialError
 
 # Configure logging for Cloud Functions
 # Detect if running in Cloud Functions environment
@@ -413,6 +414,7 @@ def run_health_check(request) -> Tuple[Dict[str, Any], int]:
     
     Tests:
     - Configuration loading
+    - GCP credentials validation
     - Dashboard connectivity (optional)
     - Email configuration (optional)
     
@@ -425,6 +427,19 @@ def run_health_check(request) -> Tuple[Dict[str, Any], int]:
     logger.info("=== Health Check Requested ===")
     
     try:
+        # Validate GCP credentials early
+        gcp_credentials_ok = False
+        gcp_credentials_error = None
+        try:
+            creds_valid, error_msg = validate_credentials_early()
+            gcp_credentials_ok = creds_valid
+            if not creds_valid:
+                gcp_credentials_error = error_msg
+                logger.warning(f"GCP credentials validation failed: {error_msg}")
+        except Exception as e:
+            logger.warning(f"GCP credentials check failed: {e}")
+            gcp_credentials_error = str(e)
+        
         # Load configuration
         config = load_config()
         
@@ -447,12 +462,14 @@ def run_health_check(request) -> Tuple[Dict[str, Any], int]:
         response = {
             'status': 'healthy',
             'timestamp': datetime.now().isoformat(),
+            'gcp_credentials_ok': gcp_credentials_ok,
+            'gcp_credentials_error': gcp_credentials_error,
             'dashboard_ok': dashboard_ok,
             'email_ok': email_ok,
             'environment': 'cloud_function' if IS_CLOUD_FUNCTION else 'local'
         }
         
-        logger.info(f"Health check completed: dashboard_ok={dashboard_ok}, email_ok={email_ok}")
+        logger.info(f"Health check completed: gcp_credentials_ok={gcp_credentials_ok}, dashboard_ok={dashboard_ok}, email_ok={email_ok}")
         return response, 200
         
     except Exception as e:
@@ -747,6 +764,25 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     run_id: Optional[str] = None
     
     try:
+        # Validate GCP credentials early (before any GCP service instantiation)
+        logger.info("Validating GCP credentials...")
+        gcp_creds_valid, gcp_creds_error = validate_credentials_early()
+        if not gcp_creds_valid:
+            logger.error(f"GCP credential validation failed: {gcp_creds_error}")
+            return {
+                'status': 'error',
+                'message': 'GCP credential validation failed',
+                'error': gcp_creds_error,
+                'timestamp': datetime.now().isoformat(),
+                'troubleshooting': [
+                    'Check GCP_SERVICE_ACCOUNT_KEY environment variable',
+                    'Ensure credentials are in raw JSON or base64 format',
+                    'Verify service account has required permissions',
+                    'See README.md section on GCP credentials for detailed guidance'
+                ]
+            }, 500
+        logger.info("✓ GCP credentials validated successfully")
+        
         # Parse request JSON if available
         request_json = {}
         try:
