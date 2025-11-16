@@ -772,6 +772,39 @@ If you see errors like "Dataset amazon-ppc-474902:amazon_ppc was not found in lo
 
 See [BIGQUERY_INTEGRATION.md](BIGQUERY_INTEGRATION.md) for complete BigQuery setup and troubleshooting.
 
+### BigQuery "Access Denied" / Permission Errors
+
+If you see errors like "User does not have bigquery.jobs.create permission" when loading the dashboard:
+
+**Cause**: The service account lacks necessary BigQuery IAM roles to query data.
+
+**Quick Fix**:
+```bash
+# Run the automated fix script
+./fix-bigquery-permissions.sh
+```
+
+**Manual Fix**:
+```bash
+# Replace with your service account email
+SERVICE_ACCOUNT_EMAIL="your-service-account@project.iam.gserviceaccount.com"
+
+# Grant required roles
+gcloud projects add-iam-policy-binding amazon-ppc-474902 \
+  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+  --role="roles/bigquery.dataViewer"
+
+gcloud projects add-iam-policy-binding amazon-ppc-474902 \
+  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+  --role="roles/bigquery.jobUser"
+```
+
+**Understanding the roles**:
+- `bigquery.dataViewer`: Read data from tables
+- `bigquery.jobUser`: Create and run query jobs (required!)
+
+See [BIGQUERY_PERMISSIONS_FIX.md](BIGQUERY_PERMISSIONS_FIX.md) for detailed troubleshooting steps.
+
 ### Uptime Check Configuration
 
 To avoid triggering the main optimization logic with uptime checks:
