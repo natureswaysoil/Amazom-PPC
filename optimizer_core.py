@@ -1429,6 +1429,9 @@ class BidOptimizer:
         
         logger.info(f"Processing {len(report_data)} performance records in batches of {batch_size}")
         
+        # Track keyword performance for top performers list
+        keyword_performance = []
+        
         # Analyze each keyword
         for idx, row in enumerate(report_data):
             keyword_id = row.get('keywordId')
@@ -1447,11 +1450,16 @@ class BidOptimizer:
                 orders=int(row.get('attributedConversions14d', 0) or 0)
             )
             
+            # Calculate ACOS for this keyword
+            acos = (metrics.cost / metrics.sales) if metrics.sales > 0 else 0.0
+            
             # Determine bid change
             new_bid = self._calculate_new_bid(keyword, metrics)
+            bid_change = 0.0
             
             if new_bid and abs(new_bid - keyword.bid) > 0.01:
                 reason = self._get_bid_change_reason(keyword, metrics, new_bid)
+                bid_change = new_bid - keyword.bid
                 
                 if new_bid > keyword.bid:
                     results['bids_increased'] += 1
@@ -1475,6 +1483,20 @@ class BidOptimizer:
                 })
             else:
                 results['no_change'] += 1
+            
+            # Collect keyword performance data for top performers
+            if metrics.sales > 0:  # Only include keywords with sales
+                keyword_performance.append({
+                    'keyword_text': keyword.keyword_text,
+                    'keyword_id': keyword_id,
+                    'clicks': metrics.clicks,
+                    'sales': metrics.sales,
+                    'cost': metrics.cost,
+                    'acos': acos,
+                    'bid_old': keyword.bid,
+                    'bid_new': new_bid if new_bid else keyword.bid,
+                    'bid_change': bid_change
+                })
 
             # Log progress every batch_size records
             if (idx + 1) % batch_size == 0:
@@ -1490,6 +1512,17 @@ class BidOptimizer:
             logger.info(f"Applying {len(keyword_updates)} bid updates in batches...")
             batch_results = self.api.batch_update_keywords(keyword_updates)
             logger.info(f"Batch update results: {batch_results}")
+        
+        # Sort by sales and get top 20 performers for dashboard
+        keyword_performance.sort(key=lambda x: x['sales'], reverse=True)
+        top_performers = keyword_performance[:20]
+        results['top_performers'] = top_performers
+        
+        # Calculate totals for summary
+        results['total_spend'] = sum(kw['cost'] for kw in keyword_performance)
+        results['total_sales'] = sum(kw['sales'] for kw in keyword_performance)
+        
+        logger.info(f"Collected {len(top_performers)} top performing keywords for dashboard")
         
         elapsed = time.time() - start_time
         logger.info(f"Bid optimization complete in {elapsed:.2f}s: {results}")
@@ -1838,6 +1871,9 @@ class CampaignManager:
 
         analyzed_campaign_ids: Set[str] = set()
         
+        # Track campaign details for dashboard
+        campaign_details = []
+        
         acos_threshold = self.config.get('campaign_management.acos_threshold', 0.45)
         min_spend = self.config.get('campaign_management.min_spend', 20.0)
         
@@ -1868,6 +1904,27 @@ class CampaignManager:
             # Track aggregated metrics for dashboard reporting
             results['total_spend'] += cost
             results['total_sales'] += sales
+            
+            # Calculate ACOS and other metrics for this campaign
+            campaign_acos = (cost / sales) if sales > 0 else 0.0
+            impressions = int(row.get('impressions', 0) or 0)
+            clicks = int(row.get('clicks', 0) or 0)
+            conversions = int(row.get('attributedConversions14d', 0) or 0)
+            
+            # Collect campaign details for dashboard
+            campaign_details.append({
+                'campaign_id': campaign_id,
+                'campaign_name': campaign.name,
+                'status': campaign.state,
+                'spend': cost,
+                'sales': sales,
+                'acos': campaign_acos,
+                'impressions': impressions,
+                'clicks': clicks,
+                'conversions': conversions,
+                'budget': campaign.daily_budget,
+                'changes_made': 0  # Will be updated if campaign state changes
+            })
 
             # Determine action
             if acos < acos_threshold and campaign.state != 'enabled':
@@ -1886,6 +1943,9 @@ class CampaignManager:
                     self.api.update_campaign(campaign_id, {'state': 'enabled'})
                 
                 results['campaigns_activated'] += 1
+                # Mark this campaign as having changes
+                if campaign_details:
+                    campaign_details[-1]['changes_made'] = 1
             
             elif acos > acos_threshold and campaign.state == 'enabled':
                 # Pause campaign
@@ -1903,6 +1963,9 @@ class CampaignManager:
                     self.api.update_campaign(campaign_id, {'state': 'paused'})
                 
                 results['campaigns_paused'] += 1
+                # Mark this campaign as having changes
+                if campaign_details:
+                    campaign_details[-1]['changes_made'] = 1
             else:
                 results['no_change'] += 1
 
@@ -1918,6 +1981,12 @@ class CampaignManager:
             results['average_acos'] = results['total_spend'] / results['total_sales']
         else:
             results['average_acos'] = 0.0
+        
+        # Sort campaigns by spend and add to results for dashboard
+        campaign_details.sort(key=lambda x: x['spend'], reverse=True)
+        results['campaigns'] = campaign_details
+        
+        logger.info(f"Collected {len(campaign_details)} campaign details for dashboard")
 
         elapsed = time.time() - start_time
         logger.info(f"Campaign management complete in {elapsed:.2f}s: {results}")
