@@ -266,15 +266,176 @@ curl https://your-dashboard.vercel.app/api/config-check
 2. Verify the service account has BigQuery roles (Data Editor, Job User)
 3. Redeploy the application after setting credentials
 
+### Common Issues and Solutions
+
+#### Issue: Application fails to start with credential errors
+
+**Symptom:** Application crashes on startup with GCP credential validation errors.
+
+**Solution:**
+```bash
+# Step 1: Test credential loading locally
+python3 -c "from gcp_credentials import validate_credentials_early; success, error = validate_credentials_early(); print('Success' if success else error)"
+
+# Step 2: If validation fails, check the format
+echo "$GCP_SERVICE_ACCOUNT_KEY" | jq . # Should output formatted JSON
+
+# Step 3: If jq fails, try base64 decoding
+echo "$GCP_SERVICE_ACCOUNT_KEY" | base64 -d | jq .
+
+# Step 4: Download fresh credentials from Google Cloud Console
+```
+
+#### Issue: Credentials work locally but fail in CI/CD
+
+**Common causes:**
+1. **Newlines are being escaped**: Some CI systems add extra escaping
+2. **Environment variable truncated**: Some platforms have size limits
+3. **Special characters corrupted**: Quotes or backslashes modified
+
+**Solutions:**
+
+**For GitHub Actions:**
+```yaml
+# Store the entire JSON in a GitHub Secret named GCP_SERVICE_ACCOUNT_KEY
+# Then reference it directly:
+- name: Run application
+  env:
+    GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+  run: python main.py
+```
+
+**For Vercel:**
+1. Go to Project Settings → Environment Variables
+2. Add `GCP_SERVICE_ACCOUNT_KEY`
+3. Paste the entire JSON (Vercel handles it correctly)
+4. Redeploy
+
+**For Cloud Run/Cloud Functions:**
+```bash
+# Use Secret Manager (recommended)
+echo '{"type":"service_account",...}' | gcloud secrets create gcp-sa-key --data-file=-
+
+# Then mount in deployment:
+gcloud functions deploy my-function \
+  --set-secrets=GCP_SERVICE_ACCOUNT_KEY=gcp-sa-key:latest
+```
+
+**For platforms with variable size limits:**
+```bash
+# Use base64 encoding to reduce special character issues
+cat service-account.json | base64 | tr -d '\n' > encoded.txt
+# Set GCP_SERVICE_ACCOUNT_KEY to contents of encoded.txt
+```
+
+#### Issue: "Service account lacks required permissions"
+
+**Symptom:** Credentials load successfully but BigQuery operations fail.
+
+**Solution:**
+```bash
+# Grant required permissions to your service account
+SA_EMAIL="your-sa@your-project.iam.gserviceaccount.com"
+PROJECT_ID="your-project-id"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/bigquery.dataEditor"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/bigquery.jobUser"
+
+# Verify permissions
+gcloud projects get-iam-policy $PROJECT_ID \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:serviceAccount:$SA_EMAIL"
+```
+
+#### Issue: Works in production but not in local development
+
+**Solution:** Set up local credentials properly:
+
+```bash
+# Method 1: File path (easiest for local dev)
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+python main.py
+
+# Method 2: Environment variable
+export GCP_SERVICE_ACCOUNT_KEY="$(cat service-account.json)"
+python main.py
+
+# Method 3: Use gcloud application-default login
+gcloud auth application-default login
+# Then no explicit credentials needed
+```
+
+### Environment-Specific Setup Guide
+
+#### Local Development
+```bash
+# Option 1: Use service account key file (recommended)
+export GOOGLE_APPLICATION_CREDENTIALS="./service-account.json"
+
+# Option 2: Use gcloud auth (uses your user credentials)
+gcloud auth application-default login
+
+# Option 3: Set environment variable
+export GCP_SERVICE_ACCOUNT_KEY="$(cat service-account.json)"
+```
+
+#### CI/CD (GitHub Actions, GitLab CI, etc.)
+```bash
+# Store service account JSON in CI secrets
+# Reference as environment variable in workflow
+# No need to escape or modify - store raw JSON
+
+# Example GitHub Actions:
+env:
+  GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+```
+
+#### Serverless (Cloud Functions, Cloud Run, Lambda, etc.)
+```bash
+# Option 1: Secret Manager (recommended for Cloud Functions)
+gcloud secrets create gcp-sa-key --data-file=service-account.json
+gcloud functions deploy fn --set-secrets=GCP_SERVICE_ACCOUNT_KEY=gcp-sa-key:latest
+
+# Option 2: Environment variable (Cloud Run, Lambda)
+# Use base64 encoding to avoid escaping issues:
+export GCP_SERVICE_ACCOUNT_KEY="$(cat service-account.json | base64 | tr -d '\n')"
+
+# Option 3: Service account attachment (Cloud Functions/Run only)
+# Deploy with a service account - no explicit credentials needed
+gcloud functions deploy fn --service-account=your-sa@project.iam.gserviceaccount.com
+```
+
+#### Vercel / Netlify / Other Platforms
+```bash
+# For platforms with web UI for environment variables:
+# 1. Copy entire service-account.json contents
+# 2. Paste into GCP_SERVICE_ACCOUNT_KEY environment variable
+# 3. Save and redeploy
+
+# If platform has issues with special characters:
+# Use base64 encoding
+cat service-account.json | base64 | tr -d '\n'
+# Copy output and set as GCP_SERVICE_ACCOUNT_KEY
+```
+
 ### Security Best Practices
 
 - ✅ **DO** use Google Secret Manager for production credentials
 - ✅ **DO** rotate service account keys regularly (every 90 days)
 - ✅ **DO** use separate service accounts for dev/staging/prod
 - ✅ **DO** grant minimum required permissions (principle of least privilege)
+- ✅ **DO** validate credentials early in application startup
+- ✅ **DO** monitor service account usage with Cloud Audit Logs
 - ❌ **DON'T** commit credentials to Git (they're in `.gitignore`)
 - ❌ **DON'T** share credentials in plain text via email/chat
 - ❌ **DON'T** use personal account credentials for production
+- ❌ **DON'T** use service account keys if you can use Workload Identity
+- ❌ **DON'T** give broad permissions (Owner, Editor) when narrow roles suffice
 
 ## 🚀 Deployment
 
