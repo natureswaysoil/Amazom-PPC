@@ -48,7 +48,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-        - name: Determine auth configuration
+      - name: Determine auth configuration
         id: auth_config
         shell: bash
         run: |
