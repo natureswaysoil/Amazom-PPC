@@ -346,9 +346,19 @@ export async function GET(request: NextRequest) {
             bids_increased,
             bids_decreased,
             negative_keywords_added,
+            budget_changes,
             average_acos,
             total_spend,
-            total_sales
+            total_sales,
+            target_acos,
+            lookback_days,
+            enabled_features,
+            errors,
+            warnings,
+            campaigns,
+            top_performers,
+            features,
+            config_snapshot
           FROM ${fullTableName}
           WHERE DATE(timestamp) >= CURRENT_DATE() - @days
           ORDER BY timestamp DESC
@@ -415,14 +425,56 @@ export async function GET(request: NextRequest) {
       params: queryParams,
     });
     
+    // Post-process rows to parse JSON fields for optimization_results
+    let processedRows = rows;
+    if (table === 'optimization_results') {
+      processedRows = rows.map((row: any) => {
+        const processed = { ...row };
+        
+        // Parse JSON fields if they exist and are strings
+        const jsonFields = ['campaigns', 'top_performers', 'features', 'config_snapshot'];
+        jsonFields.forEach(field => {
+          if (processed[field]) {
+            try {
+              // If it's a string, parse it as JSON
+              if (typeof processed[field] === 'string') {
+                processed[field] = JSON.parse(processed[field]);
+              }
+              // Otherwise it's already an object from BigQuery JSON type
+            } catch (e) {
+              console.warn(`Failed to parse ${field} for row ${processed.run_id}:`, e);
+              processed[field] = field === 'campaigns' || field === 'top_performers' ? [] : {};
+            }
+          } else {
+            // Set default values for missing fields
+            processed[field] = field === 'campaigns' || field === 'top_performers' ? [] : {};
+          }
+        });
+        
+        return processed;
+      });
+      
+      // Log warnings if data is incomplete
+      const incompleteRows = processedRows.filter((row: any) => 
+        !row.campaigns || 
+        (Array.isArray(row.campaigns) && row.campaigns.length === 0) ||
+        !row.top_performers ||
+        (Array.isArray(row.top_performers) && row.top_performers.length === 0)
+      );
+      
+      if (incompleteRows.length > 0) {
+        console.warn(`⚠️ ${incompleteRows.length} of ${processedRows.length} results have incomplete data (missing campaigns or top_performers)`);
+      }
+    }
+    
     return NextResponse.json({
       success: true,
-      data: rows,
+      data: processedRows,
       metadata: {
         projectId,
         datasetId,
         table,
-        rowCount: rows.length
+        rowCount: processedRows.length
       }
     }, { status: 200 });
     

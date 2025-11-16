@@ -2,6 +2,30 @@
 
 import { useEffect, useState } from 'react';
 
+interface Campaign {
+  campaign_id: string;
+  campaign_name: string;
+  spend: number;
+  sales: number;
+  acos: number;
+  keywords_count?: number;
+  changes_made?: number;
+}
+
+interface TopPerformer {
+  keyword_text: string;
+  clicks: number;
+  sales: number;
+  acos: number;
+  bid_change?: number;
+}
+
+interface ConfigSnapshot {
+  target_acos?: number;
+  lookback_days?: number;
+  enabled_features?: string[];
+}
+
 interface OptimizationResult {
   timestamp: string;
   run_id: string;
@@ -13,6 +37,16 @@ interface OptimizationResult {
   total_spend: number;
   total_sales: number;
   duration_seconds: number;
+  campaigns_analyzed?: number;
+  negative_keywords_added?: number;
+  budget_changes?: number;
+  // Enhanced fields from DATA_FLOW_SUMMARY.md
+  campaigns?: Campaign[];
+  top_performers?: TopPerformer[];
+  features?: any;
+  errors?: string[];
+  warnings?: string[];
+  config_snapshot?: ConfigSnapshot;
 }
 
 interface SummaryData {
@@ -42,8 +76,8 @@ export default function Home() {
       setLoading(true);
       setError(null);
 
-      // Fetch recent optimization results
-      const resultsResponse = await fetch('/api/bigquery-data?table=optimization_results&limit=5&days=7');
+      // Fetch recent optimization results with increased limit and time range
+      const resultsResponse = await fetch('/api/bigquery-data?table=optimization_results&limit=50&days=30');
       
       // Try to parse response body for detailed error message
       let resultsData;
@@ -63,8 +97,8 @@ export default function Home() {
         throw new Error(`Failed to fetch optimization results: ${errorMsg}`);
       }
 
-      // Fetch summary data
-      const summaryResponse = await fetch('/api/bigquery-data?table=summary&days=7');
+      // Fetch summary data with increased time range
+      const summaryResponse = await fetch('/api/bigquery-data?table=summary&days=30');
       
       // Try to parse response body for detailed error message
       let summaryData;
@@ -85,7 +119,26 @@ export default function Home() {
       }
 
       if (resultsData.success) {
-        setRecentResults(resultsData.data);
+        const results = resultsData.data;
+        
+        // Log all keys in the first result object for debugging
+        if (results && results.length > 0) {
+          console.log('📊 Dashboard: Received optimization results');
+          console.log('First result keys:', Object.keys(results[0]));
+          console.log('First result sample:', results[0]);
+          
+          // Check for missing expected fields and warn
+          const expectedFields = ['campaigns', 'top_performers', 'features', 'config_snapshot', 'errors', 'warnings'];
+          const missingFields = expectedFields.filter(field => !(field in results[0]));
+          
+          if (missingFields.length > 0) {
+            console.warn('⚠️ Missing expected fields in results:', missingFields);
+            const warningMsg = `Some optimization data is incomplete. Missing fields: ${missingFields.join(', ')}. This may indicate the optimizer is not sending full payloads or the database schema needs updating.`;
+            setError(warningMsg);
+          }
+        }
+        
+        setRecentResults(results);
       } else {
         setError(resultsData.message || resultsData.error || 'Failed to fetch data');
       }
