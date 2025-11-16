@@ -2,6 +2,28 @@
 
 This guide walks you through setting up the optimizer to populate BigQuery with real Amazon PPC campaign data.
 
+## Quick Start (Credentials in Google Secret Manager)
+
+If your credentials are already stored in Google Secret Manager:
+
+```bash
+# 1. Load credentials from Secret Manager
+eval $(python load_secrets.py)
+
+# 2. Run optimizer
+python optimizer_core.py --config config.json
+
+# 3. Start dashboard
+cd dashboard && python app.py
+```
+
+The `load_secrets.py` script automatically loads:
+- Amazon Advertising API credentials (client_id, client_secret, refresh_token, profile_id)
+- BigQuery service account credentials
+- Optional dashboard credentials
+
+See the sections below for detailed setup if you don't have Secret Manager configured.
+
 ## Prerequisites
 
 Before running the optimizer, you need:
@@ -19,6 +41,44 @@ Before running the optimizer, you need:
 
 ## Step 1: Configure Amazon Advertising API Credentials
 
+### Using Google Secret Manager (Recommended)
+
+If your credentials are stored in Google Secret Manager:
+
+```bash
+# Install Google Secret Manager client
+pip install google-cloud-secret-manager
+
+# Access secrets from Secret Manager
+export AMAZON_CLIENT_ID=$(gcloud secrets versions access latest --secret="amazon-client-id")
+export AMAZON_CLIENT_SECRET=$(gcloud secrets versions access latest --secret="amazon-client-secret")
+export AMAZON_REFRESH_TOKEN=$(gcloud secrets versions access latest --secret="amazon-refresh-token")
+export AMAZON_PROFILE_ID=$(gcloud secrets versions access latest --secret="amazon-profile-id")
+```
+
+Or use the Python script to load from Secret Manager:
+
+```python
+from google.cloud import secretmanager
+import os
+
+def get_secret(secret_id, project_id=None):
+    """Retrieve secret from Google Secret Manager"""
+    if not project_id:
+        project_id = os.getenv('GCP_PROJECT_ID', 'nature-way-soils')
+    
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+    response = client.access_secret_version(request={"name": name})
+    return response.payload.data.decode('UTF-8')
+
+# Load credentials
+os.environ['AMAZON_CLIENT_ID'] = get_secret('amazon-client-id')
+os.environ['AMAZON_CLIENT_SECRET'] = get_secret('amazon-client-secret')
+os.environ['AMAZON_REFRESH_TOKEN'] = get_secret('amazon-refresh-token')
+os.environ['AMAZON_PROFILE_ID'] = get_secret('amazon-profile-id')
+```
+
 ### Get Your Amazon Credentials
 
 If you don't have them yet:
@@ -29,7 +89,7 @@ If you don't have them yet:
 4. Note your Client ID and Client Secret
 5. Generate a refresh token using the authorization flow
 
-### Set Environment Variables
+### Set Environment Variables Directly
 
 ```bash
 export AMAZON_CLIENT_ID="amzn1.application-oa2-client.YOUR_CLIENT_ID"
@@ -63,7 +123,35 @@ Or create a `config.json` file in the repository root:
 
 ## Step 2: Configure Google Cloud BigQuery
 
-### Set BigQuery Credentials
+### Using Google Secret Manager for BigQuery Credentials
+
+If your service account credentials are in Secret Manager:
+
+```bash
+# Option 1: Get credentials JSON from Secret Manager
+export GCP_CREDENTIALS_JSON=$(gcloud secrets versions access latest --secret="bigquery-service-account")
+
+# Option 2: Get base64 encoded credentials
+export GCP_CREDENTIALS_BASE64=$(gcloud secrets versions access latest --secret="bigquery-service-account-base64")
+
+# Set project and dataset
+export GCP_PROJECT_ID="your-project-id"
+export BIGQUERY_DATASET="amazon_ppc"
+```
+
+Or in Python:
+
+```python
+from google.cloud import secretmanager
+
+# Get BigQuery credentials from Secret Manager
+credentials_json = get_secret('bigquery-service-account')
+os.environ['GCP_CREDENTIALS_JSON'] = credentials_json
+os.environ['GCP_PROJECT_ID'] = 'your-project-id'
+os.environ['BIGQUERY_DATASET'] = 'amazon_ppc'
+```
+
+### Set BigQuery Credentials Directly
 
 ```bash
 # Option 1: Path to service account JSON file
@@ -98,6 +186,27 @@ print('Dataset:', client.get_dataset('amazon_ppc'))
 ```
 
 ## Step 3: Run the Optimizer
+
+### Quick Start with Secret Manager
+
+If all your credentials are in Google Secret Manager, use the helper script:
+
+```bash
+# Load secrets and run optimizer
+eval $(python load_secrets.py)
+python optimizer_core.py --config config.json
+```
+
+Or verify secrets first:
+
+```bash
+# Verify all secrets are available
+python load_secrets.py --verify
+
+# If verification passes, load and run
+eval $(python load_secrets.py)
+python optimizer_core.py --config config.json
+```
 
 ### Basic Run
 
