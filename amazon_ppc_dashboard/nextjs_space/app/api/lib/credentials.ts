@@ -216,8 +216,21 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
 
     // Try decoding as base64
     try {
-      const decoded = Buffer.from(value, 'base64').toString('utf8');
+      // First, try to detect if this is actually base64
+      // Base64 strings should only contain A-Z, a-z, 0-9, +, /, and = (padding)
+      const base64Pattern = /^[A-Za-z0-9+/]*={0,2}$/;
+      const trimmedValue = value.trim();
+      
+      // If it doesn't look like base64, it's probably not
+      if (!base64Pattern.test(trimmedValue)) {
+        console.log(`[Credentials] ${source} doesn't match base64 pattern, likely not base64 encoded`);
+        throw new Error('Not a valid base64 string');
+      }
+      
+      const decoded = Buffer.from(trimmedValue, 'base64').toString('utf8');
       console.log(`[Credentials] Successfully decoded ${source} from base64, attempting to parse as JSON...`);
+      console.log(`[Credentials] Decoded length: ${decoded.length} characters`);
+      console.log(`[Credentials] Decoded preview (first 100 chars): ${decoded.substring(0, 100)}`);
       
       try {
         const parsed = JSON.parse(decoded);
@@ -230,16 +243,30 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
         };
       } catch (decodedJsonError: any) {
         console.error(`[Credentials] Decoded ${source} is not valid JSON: ${decodedJsonError.message}`);
+        console.error(`[Credentials] Decoded content (first 500 chars): ${decoded.substring(0, 500)}`);
+        
+        // Check if the decoded content looks like it might be double-encoded or has other issues
+        let additionalGuidance: string[] = [];
+        if (decoded.startsWith('data:') || decoded.includes('base64,')) {
+          additionalGuidance.push('The decoded content appears to contain a data URL. Use only the service account JSON, not a data URL.');
+        } else if (decoded.includes('\\n') && !decoded.includes('\n')) {
+          additionalGuidance.push('The decoded content contains escaped newlines (\\n). These should be actual newlines in the JSON.');
+        } else if (decoded.trim().length === 0) {
+          additionalGuidance.push('The decoded content is empty. The base64 string may be invalid or incomplete.');
+        }
+        
         return {
           success: false,
           error: {
             type: 'invalid_json',
             message: `${source} was successfully base64 decoded but does not contain valid JSON`,
-            details: `The base64-decoded content could not be parsed as JSON. JSON error: ${decodedJsonError.message}`,
+            details: `The base64-decoded content could not be parsed as JSON. JSON error: ${decodedJsonError.message}. Decoded length: ${decoded.length} characters.`,
             troubleshooting: [
               'Ensure you are encoding valid JSON content when creating the base64 value',
-              `Example: 'cat service-account.json | base64' should produce valid base64 encoding of JSON`,
-              `Verify your service-account.json file is valid JSON before encoding`,
+              `Example: 'cat service-account.json | base64 | tr -d "\\n"' should produce valid base64 encoding`,
+              `Verify your service-account.json file is valid JSON before encoding: 'cat service-account.json | jq .'`,
+              `Test the encoding/decoding locally: 'echo "$GCP_SERVICE_ACCOUNT_KEY" | base64 -d | jq .'`,
+              ...additionalGuidance,
               `After correcting the value, redeploy the application`,
             ],
           },
@@ -254,9 +281,10 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
           message: `${source} is not valid JSON or base64 encoded JSON`,
           details: `JSON parse error: ${jsonError.message}. Base64 decode error: ${base64Error.message}`,
           troubleshooting: [
-            `Option 1 (Raw JSON): Set ${source} to the entire contents of your service account key file`,
-            `Option 2 (Base64): Run 'cat service-account.json | base64' and set ${source} to the output`,
+            `Option 1 (Raw JSON - Recommended): Set ${source} to the entire contents of your service account key file`,
+            `Option 2 (Base64): Run 'cat service-account.json | base64 | tr -d "\\n"' and set ${source} to the output`,
             `Ensure there are no extra spaces, line breaks, or special characters in the environment variable`,
+            `Verify the JSON is valid before encoding: 'cat service-account.json | jq .'`,
             `After correcting the value, redeploy the application`,
           ],
         },
