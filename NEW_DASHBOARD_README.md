@@ -85,6 +85,19 @@ docker run -p 8080:8080 -e GCP_PROJECT_ID=your-project ppc-dashboard
 
 **The dashboard displays data from BigQuery tables populated by the optimizer.**
 
+### Quick Demo with Sample Data
+
+**Want to see it working immediately?** Generate sample data:
+
+```bash
+cd dashboard
+python generate_sample_data.py
+```
+
+See [`dashboard/DEMO_DATA_GUIDE.md`](dashboard/DEMO_DATA_GUIDE.md) for the complete demo guide.
+
+### Using Real Data
+
 If you see "No data available" or error messages:
 
 1. **Set up BigQuery credentials** - Dashboard needs GCP credentials to connect

@@ -171,6 +171,17 @@ Environment variables:
 
 The dashboard displays data from BigQuery tables that are populated by the Amazon PPC optimizer. If you see "No data available" messages:
 
+### Quick Demo: Generate Sample Data
+
+**Want to see the dashboard working immediately?** Use the sample data generator:
+
+```bash
+cd dashboard
+python generate_sample_data.py
+```
+
+This generates realistic sample data without needing Amazon API credentials. See [`DEMO_DATA_GUIDE.md`](DEMO_DATA_GUIDE.md) for details.
+
 ### Step 1: Verify BigQuery Connection
 The dashboard needs valid GCP credentials to access BigQuery. Error messages like "Failed to initialize BigQuery client" mean credentials aren't configured. Set one of:
 

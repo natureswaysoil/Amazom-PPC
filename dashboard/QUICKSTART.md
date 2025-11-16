@@ -2,7 +2,32 @@
 
 Get the Amazon PPC BigQuery Dashboard running in under 5 minutes.
 
-## 🚀 Quick Local Setup
+## 🎯 Fastest Start: Demo with Sample Data
+
+**Want to see the dashboard working immediately?**
+
+```bash
+cd dashboard
+pip install -r requirements.txt
+
+# Set BigQuery credentials
+export GCP_PROJECT_ID="your-project-id"
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/credentials.json"
+
+# Generate sample data
+python generate_sample_data.py
+
+# Start dashboard
+python app.py
+```
+
+Open http://localhost:8080 - dashboard is now populated with sample data!
+
+See [`DEMO_DATA_GUIDE.md`](DEMO_DATA_GUIDE.md) for details.
+
+---
+
+## 🚀 Full Setup (Real Data)
 
 ### 1. Install Dependencies
 
