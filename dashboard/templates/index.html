@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amazon PPC BigQuery Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 Amazon PPC BigQuery Dashboard</h1>
+            <p class="subtitle">Real-time analytics from all BigQuery tables</p>
+        </header>
+
+        <!-- Summary Cards -->
+        <section id="summary-section" class="summary-cards">
+            <div class="card">
+                <h3>Total Runs</h3>
+                <div class="metric" id="total-runs">-</div>
+            </div>
+            <div class="card">
+                <h3>Keywords Optimized</h3>
+                <div class="metric" id="total-keywords">-</div>
+            </div>
+            <div class="card">
+                <h3>Avg ACOS</h3>
+                <div class="metric" id="avg-acos">-</div>
+            </div>
+            <div class="card">
+                <h3>Total Spend</h3>
+                <div class="metric" id="total-spend">-</div>
+            </div>
+            <div class="card">
+                <h3>Total Sales</h3>
+                <div class="metric" id="total-sales">-</div>
+            </div>
+        </section>
+
+        <!-- Charts Section -->
+        <section class="charts-section">
+            <div class="chart-container">
+                <h2>Daily Performance Trend</h2>
+                <canvas id="daily-chart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h2>Top Campaigns by Spend</h2>
+                <canvas id="campaign-chart"></canvas>
+            </div>
+        </section>
+
+        <!-- Tables Navigation -->
+        <section class="tables-navigation">
+            <h2>📊 Available BigQuery Tables</h2>
+            <div id="tables-list" class="tables-list"></div>
+        </section>
+
+        <!-- Table Viewer -->
+        <section id="table-viewer" class="table-viewer" style="display: none;">
+            <div class="table-header">
+                <h2 id="current-table-name">Table Data</h2>
+                <div class="table-controls">
+                    <button class="btn" onclick="closeTableViewer()">Close</button>
+                    <button class="btn" onclick="refreshTableData()">Refresh</button>
+                    <button class="btn" onclick="exportToCSV()">Export CSV</button>
+                </div>
+            </div>
+            
+            <div class="filters">
+                <label>
+                    Days:
+                    <select id="filter-days" onchange="refreshTableData()">
+                        <option value="7">Last 7 days</option>
+                        <option value="30" selected>Last 30 days</option>
+                        <option value="90">Last 90 days</option>
+                        <option value="365">Last year</option>
+                    </select>
+                </label>
+                <label>
+                    Limit:
+                    <select id="filter-limit" onchange="refreshTableData()">
+                        <option value="50">50 rows</option>
+                        <option value="100" selected>100 rows</option>
+                        <option value="500">500 rows</option>
+                        <option value="1000">1000 rows</option>
+                    </select>
+                </label>
+                <div class="pagination-info" id="pagination-info"></div>
+            </div>
+
+            <div class="table-container">
+                <table id="data-table">
+                    <thead id="table-header"></thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+
+            <div class="pagination-controls">
+                <button class="btn" id="prev-page" onclick="previousPage()" disabled>Previous</button>
+                <span id="page-info">Page 1</span>
+                <button class="btn" id="next-page" onclick="nextPage()">Next</button>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer>
+            <p>Amazon PPC BigQuery Dashboard | Last updated: <span id="last-update">-</span></p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
