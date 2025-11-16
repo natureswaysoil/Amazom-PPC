@@ -120,6 +120,146 @@ CLI helper, call the endpoint with `?verify_connection=true` and (optionally)
 `verify_sample_size=10`. The handler returns a JSON payload containing the
 verification sample or a descriptive error when credentials are misconfigured.
 
+## 🔑 Google Cloud Service Account Credentials
+
+For BigQuery integration and other Google Cloud services, the application needs service account credentials. The system supports multiple credential formats to work across different deployment environments.
+
+### Supported Credential Formats
+
+#### Method 1: Raw JSON (Recommended for CI/CD)
+
+Set `GCP_SERVICE_ACCOUNT_KEY` to the complete service account key JSON:
+
+```bash
+export GCP_SERVICE_ACCOUNT_KEY='{"type":"service_account","project_id":"your-project-id","private_key_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"...@your-project.iam.gserviceaccount.com",...}'
+```
+
+**For GitHub Actions / CI:**
+```yaml
+- name: Set GCP credentials
+  env:
+    GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+  run: |
+    # Credentials are automatically available to the application
+```
+
+**For Vercel / Deployment Platforms:**
+1. Go to your project settings → Environment Variables
+2. Add variable: `GCP_SERVICE_ACCOUNT_KEY`
+3. Paste the entire JSON contents from your service account key file
+4. Save and redeploy
+
+#### Method 2: Base64-Encoded JSON (For Environments with Special Character Limitations)
+
+Some platforms have issues with newlines or special characters in environment variables. Base64 encoding solves this:
+
+```bash
+# Encode your service account key
+cat service-account.json | base64 > service-account-b64.txt
+
+# Set the environment variable
+export GCP_SERVICE_ACCOUNT_KEY="$(cat service-account-b64.txt)"
+```
+
+The application automatically detects and decodes base64-encoded credentials.
+
+#### Method 3: File Path (Local Development Only)
+
+For local development, you can use a file path:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+```
+
+**Note:** This method only works locally and won't work in serverless environments.
+
+#### Method 4: Individual Components (Alternative)
+
+You can provide credentials as separate environment variables:
+
+```bash
+export GCP_CLIENT_EMAIL="your-service-account@your-project.iam.gserviceaccount.com"
+export GCP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_KEY_HERE\n-----END PRIVATE KEY-----\n"
+export GCP_PROJECT="your-project-id"
+```
+
+**Important:** When setting `GCP_PRIVATE_KEY`, use `\n` for newlines in the private key.
+
+### Creating a Service Account Key
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com)
+2. Navigate to: **IAM & Admin** → **Service Accounts**
+3. Select your service account (or create a new one)
+4. Go to **Keys** tab → **Add Key** → **Create new key**
+5. Choose **JSON** format and download the file
+6. Grant required roles to the service account:
+   - **BigQuery Data Editor** - for writing optimization results
+   - **BigQuery Job User** - for running queries
+
+### Verifying Credentials
+
+After setting credentials, verify the configuration:
+
+```bash
+# For local development
+python -c "from bigquery_client import BigQueryClient; client = BigQueryClient('your-project-id'); print('✅ Credentials loaded successfully')"
+
+# For deployed dashboard
+curl https://your-dashboard.vercel.app/api/config-check
+```
+
+### Troubleshooting Credential Issues
+
+#### Error: "GCP_SERVICE_ACCOUNT_KEY is not valid JSON or base64 encoded JSON"
+
+**Causes:**
+- The environment variable contains invalid JSON
+- Base64 encoding is malformed
+- Extra spaces or characters in the variable
+
+**Solutions:**
+1. **For Raw JSON:**
+   - Ensure you copied the entire JSON file contents
+   - Verify the JSON is valid: `cat service-account.json | jq .`
+   - Check for no extra spaces or line breaks when setting the variable
+
+2. **For Base64:**
+   - Re-encode: `cat service-account.json | base64 | tr -d '\n'`
+   - Ensure no line breaks in the base64 output
+   - Test decoding: `echo $GCP_SERVICE_ACCOUNT_KEY | base64 -d | jq .`
+
+#### Error: "Missing required service account fields"
+
+**Cause:** The JSON doesn't contain all required fields.
+
+**Solution:** Download a fresh service account key from Google Cloud Console. The key must include:
+- `type`: "service_account"
+- `project_id`: Your GCP project ID
+- `private_key_id`: Key identifier
+- `private_key`: The RSA private key
+- `client_email`: Service account email
+
+#### Error: "Could not load the default credentials"
+
+**Causes:**
+- No credentials configured in the environment
+- Service account lacks required permissions
+
+**Solutions:**
+1. Set `GCP_SERVICE_ACCOUNT_KEY` using one of the methods above
+2. Verify the service account has BigQuery roles (Data Editor, Job User)
+3. Redeploy the application after setting credentials
+
+### Security Best Practices
+
+- ✅ **DO** use Google Secret Manager for production credentials
+- ✅ **DO** rotate service account keys regularly (every 90 days)
+- ✅ **DO** use separate service accounts for dev/staging/prod
+- ✅ **DO** grant minimum required permissions (principle of least privilege)
+- ❌ **DON'T** commit credentials to Git (they're in `.gitignore`)
+- ❌ **DON'T** share credentials in plain text via email/chat
+- ❌ **DON'T** use personal account credentials for production
+
 ## 🚀 Deployment
 
 See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed deployment instructions.

@@ -175,44 +175,88 @@ class BigQueryClient:
             # If the environment variable points to a file path, let google-auth handle it
             if os.path.isfile(raw_value):
                 try:
-                    logger.debug(f"Loading BigQuery credentials from file path in {source_name}")
+                    logger.info(f"Loading BigQuery credentials from file path in {source_name}")
                     return service_account.Credentials.from_service_account_file(raw_value)
                 except Exception as exc:
-                    logger.warning(
-                        "Failed to load service account credentials from %s path: %s", source_name, exc
+                    logger.error(
+                        f"Failed to load service account credentials from {source_name} file path: {exc}. "
+                        f"Ensure the file exists and contains valid service account JSON."
                     )
                     continue
 
             # Otherwise treat the value as JSON credentials
             try:
-                logger.debug(f"Attempting to parse service account JSON from {source_name}")
+                logger.info(f"Attempting to parse service account JSON from {source_name}")
                 credentials_info = json.loads(raw_value)
-            except json.JSONDecodeError:
+                logger.info(f"Successfully parsed {source_name} as raw JSON")
+            except json.JSONDecodeError as json_err:
                 # Some deployments (e.g. GitHub/Vercel secrets) provide base64 encoded JSON
+                logger.info(f"Value in {source_name} is not valid raw JSON, attempting base64 decode...")
                 try:
                     decoded_value = base64.b64decode(raw_value).decode("utf-8")
-                    logger.debug(
-                        "Value in %s appeared to be base64 encoded; attempting to decode and parse JSON",
-                        source_name,
-                    )
+                    logger.info(f"Successfully decoded {source_name} from base64")
                     credentials_info = json.loads(decoded_value)
-                except Exception:
-                    logger.debug(
-                        "Value in %s is not JSON or base64 encoded JSON; assuming Application Default Credentials will be used",
-                        source_name,
+                    logger.info(f"Successfully parsed decoded {source_name} as JSON")
+                except base64.binascii.Error as b64_err:
+                    logger.error(
+                        f"{source_name} is not valid JSON or base64 encoded JSON. "
+                        f"JSON parse error: {json_err}. Base64 decode error: {b64_err}. "
+                        f"To fix: Provide either (1) raw JSON from service account key file, or "
+                        f"(2) base64 encoded JSON. Example for raw JSON: set {source_name} to the entire "
+                        f"contents of your service account key file. Example for base64: "
+                        f"run 'cat service-account.json | base64' and set {source_name} to the output."
+                    )
+                    continue
+                except json.JSONDecodeError as json_err2:
+                    logger.error(
+                        f"{source_name} was successfully base64 decoded but does not contain valid JSON. "
+                        f"JSON parse error: {json_err2}. "
+                        f"To fix: Ensure you're encoding valid JSON. Example: "
+                        f"'cat service-account.json | base64' should produce valid base64 of JSON content."
+                    )
+                    continue
+                except Exception as exc:
+                    logger.error(
+                        f"Unexpected error while processing {source_name}: {exc}. "
+                        f"To fix: Provide valid service account credentials as either raw JSON or base64 encoded JSON."
                     )
                     continue
             except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Failed to load service account credentials from %s: %s", source_name, exc)
+                logger.error(
+                    f"Unexpected error parsing {source_name}: {exc}. "
+                    f"To fix: Provide valid service account credentials as either raw JSON or base64 encoded JSON."
+                )
                 continue
 
+            # Validate that we have a proper service account credential structure
             if isinstance(credentials_info, dict) and credentials_info.get("type") == "service_account":
+                # Check for required fields
+                required_fields = ["type", "project_id", "private_key_id", "private_key", "client_email"]
+                missing_fields = [field for field in required_fields if field not in credentials_info]
+                
+                if missing_fields:
+                    logger.error(
+                        f"{source_name} contains JSON but is missing required service account fields: "
+                        f"{', '.join(missing_fields)}. Ensure you're using the complete service account "
+                        f"key JSON file downloaded from Google Cloud Console."
+                    )
+                    continue
+                
+                logger.info(f"Successfully loaded valid service account credentials from {source_name}")
                 return service_account.Credentials.from_service_account_info(credentials_info)
 
-            logger.warning(
-                "Environment variable %s did not contain valid service account credentials", source_name
+            logger.error(
+                f"{source_name} contains valid JSON but does not have the correct structure for a "
+                f"service account. Expected 'type': 'service_account' but got 'type': '{credentials_info.get('type') if isinstance(credentials_info, dict) else 'N/A'}'. "
+                f"Ensure you're using a service account key JSON file (not other types of credentials)."
             )
 
+        if credential_sources:
+            logger.warning(
+                "Failed to load service account credentials from any configured source. "
+                "Application Default Credentials will be used if available."
+            )
+        
         return None
     
     def _ensure_dataset_exists(self):
