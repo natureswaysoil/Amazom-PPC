@@ -10,6 +10,7 @@ Automated Amazon Advertising campaign optimization deployed on Google Cloud Func
 - **[🔧 Local Testing Script](local-test.sh)** - Interactive script for local testing
 - **[⚙️ Automated Deployment](deploy-complete.sh)** - One-command deployment automation
 - **[🔐 Environment Template](.env.template)** - Template for local development environment
+- **[📊 Sales Data Cloud Function](cloud-function/INSTALL_CLOUD_FUNCTION.md)** - Node.js function for Amazon SP-API sales data
 
 ## 🚀 Features
 
@@ -712,15 +713,37 @@ curl "https://YOUR-FUNCTION-URL?dry_run=true"
 
 ```
 .
-├── main.py                 # Cloud Function entry point
+├── main.py                 # Cloud Function entry point (Python - PPC Optimizer)
 ├── optimizer_core.py       # Core optimization logic with auto token refresh
 ├── requirements.txt        # Python dependencies
 ├── config.json            # Configuration (template, use env vars in production)
+├── cloud-function/        # Node.js Cloud Function for Amazon SP-API sales data
+│   ├── index.js           # SP-API sales data retrieval function
+│   ├── package.json       # Node.js dependencies
+│   ├── INSTALL_CLOUD_FUNCTION.md  # Deployment guide for sales data function
+│   └── README.md          # Documentation for sales data function
 ├── .gcloudignore          # Files to exclude from deployment
 ├── .gitignore             # Git ignore patterns
 ├── README.md              # This file
 └── DEPLOYMENT_GUIDE.md    # Detailed deployment instructions
 ```
+
+### Project Components
+
+This repository contains **two separate Cloud Functions**:
+
+1. **PPC Optimizer (Python)** - Main project in root directory
+   - Purpose: Automated Amazon Advertising campaign optimization
+   - Language: Python 3.11
+   - API: Amazon Advertising API (Ads)
+   - Entry point: `main.py:run_optimizer`
+
+2. **Sales Data Function (Node.js)** - In `cloud-function/` directory
+   - Purpose: Retrieve sales data from Amazon Seller Central
+   - Language: Node.js 20
+   - API: Amazon Selling Partner API (SP-API)
+   - Entry point: `index.js:amazonSalesData`
+   - **[→ See installation guide](cloud-function/INSTALL_CLOUD_FUNCTION.md)**
 
 ## 🐛 Troubleshooting
 
