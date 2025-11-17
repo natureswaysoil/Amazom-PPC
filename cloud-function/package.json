@@ -1,0 +1,23 @@
+{
+  "name": "amazon-sales-data-cloud-function",
+  "version": "1.0.0",
+  "description": "Cloud Function to retrieve Amazon sales data via SP-API",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "amazon",
+    "sp-api",
+    "sales",
+    "cloud-function"
+  ],
+  "author": "Nature's Way Soil",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@google-cloud/secret-manager": "^5.0.0"
+  }
+}
