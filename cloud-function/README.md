@@ -16,7 +16,7 @@ This Cloud Function provides a serverless endpoint to fetch sales data from Amaz
 
 ## Quick Start
 
-See [INSTALL_CLOUD_FUNCTION.md](INSTALL_CLOUD_FUNCTION.md) for complete deployment instructions.
+See [INSTALL_CLOUD_FUNCTION.md](INSTALL_CLOUD_FUNCTION.md) for complete deployment instructions, or use the [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md) for a step-by-step guide.
 
 ### Prerequisites
 
@@ -50,6 +50,7 @@ cloud-function/
 ├── package.json                  # Node.js dependencies
 ├── .gcloudignore                 # Files to exclude from deployment
 ├── INSTALL_CLOUD_FUNCTION.md     # Detailed installation guide
+├── DEPLOYMENT_CHECKLIST.md       # Step-by-step deployment checklist
 └── README.md                     # This file
 ```
 

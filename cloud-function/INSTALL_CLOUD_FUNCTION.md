@@ -5,6 +5,8 @@
 **Region:** `us-central1`  
 **Function Name:** `amazonSalesData`
 
+> 📋 **Quick Reference:** See [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md) for a step-by-step deployment checklist.
+
 ---
 
 ## Quick Install (3 Steps)
