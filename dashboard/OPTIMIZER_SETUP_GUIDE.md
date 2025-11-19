@@ -2,6 +2,8 @@
 
 This guide walks you through setting up the optimizer to populate BigQuery with real Amazon PPC campaign data.
 
+> **📌 Important**: See [`AMAZON_API_VERSIONS.md`](../AMAZON_API_VERSIONS.md) for Amazon Advertising API version requirements. Use V4 for Sponsored Brands campaign management and V3 for reporting.
+
 ## Quick Start (Credentials in Google Secret Manager)
 
 If your credentials are already stored in Google Secret Manager:
