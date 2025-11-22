@@ -22,9 +22,13 @@ export async function GET(request: NextRequest) {
       console.warn(`Credential error: ${credentialResult.error!.message}`);
       
       // Check if we're in a GCP environment where ADC might be available
-      const runningInGCP = process.env.K_SERVICE || process.env.FUNCTION_TARGET || 
-                          process.env.GAE_SERVICE || process.env.GCP_PROJECT || 
-                          process.env.GOOGLE_CLOUD_PROJECT;
+      // Note: This is a heuristic check. If ADC is not actually available, the error
+      // will be caught later when BigQuery tries to use it (lines 383-396)
+      const runningInGCP = process.env.K_SERVICE || // Cloud Run
+                          process.env.FUNCTION_TARGET || // Cloud Functions
+                          process.env.GAE_SERVICE || // App Engine
+                          process.env.GCP_PROJECT || // User-set project ID
+                          process.env.GOOGLE_CLOUD_PROJECT; // Standard GCP project env var
       
       // Try to provide helpful context
       const errorType = credentialResult.error!.type;
