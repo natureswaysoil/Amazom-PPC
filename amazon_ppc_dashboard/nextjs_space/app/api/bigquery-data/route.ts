@@ -20,7 +20,11 @@ export async function GET(request: NextRequest) {
     if (!credentialResult.success) {
       console.warn('⚠️ Failed to resolve explicit credentials from environment');
       console.warn(`Credential error: ${credentialResult.error!.message}`);
-      console.warn('Will attempt to use Application Default Credentials (ADC)...');
+      
+      // Check if we're in a GCP environment where ADC might be available
+      const runningInGCP = process.env.K_SERVICE || process.env.FUNCTION_TARGET || 
+                          process.env.GAE_SERVICE || process.env.GCP_PROJECT || 
+                          process.env.GOOGLE_CLOUD_PROJECT;
       
       // Try to provide helpful context
       const errorType = credentialResult.error!.type;
@@ -28,8 +32,49 @@ export async function GET(request: NextRequest) {
         // Credentials were provided but malformed - log the issue but don't fail
         console.error(`Credential parsing issue: ${credentialResult.error!.details}`);
         console.error('This may cause BigQuery queries to fail if ADC is not available');
+      } else if (!runningInGCP) {
+        // No credentials and not in GCP - fail fast with helpful error
+        console.error('No credentials found and not running in a GCP environment');
+        console.error('Application Default Credentials (ADC) will not be available');
+        return NextResponse.json({
+          error: 'Missing Google Cloud credentials',
+          message: 'Could not load Google Cloud credentials for BigQuery.',
+          details: 'Provide service account credentials via the GCP_SERVICE_ACCOUNT_KEY environment variable (preferred) or GOOGLE_APPLICATION_CREDENTIALS as a JSON string.',
+          documentation: 'See amazon_ppc_dashboard/nextjs_space/README_DASHBOARD_SETUP.md for deployment steps.',
+          troubleshooting: [
+            '🔑 Step 1: Get Service Account Credentials',
+            '   - Go to Google Cloud Console → IAM & Admin → Service Accounts',
+            '   - Select your service account or create a new one',
+            '   - Click "Keys" → "Add Key" → "Create New Key" (JSON format)',
+            '   - Download the JSON key file',
+            '',
+            '📝 Step 2: Set Environment Variable',
+            '   Option A - Raw JSON (Recommended):',
+            '     • Copy the entire contents of the JSON file',
+            '     • Set GCP_SERVICE_ACCOUNT_KEY to the JSON string (all on one line)',
+            '   Option B - Base64 Encoded:',
+            '     • Run: cat service-account.json | base64 | tr -d "\\n"',
+            '     • Set GCP_SERVICE_ACCOUNT_KEY to the base64 output',
+            '',
+            '🚀 Step 3: Redeploy Dashboard',
+            '   - Save the environment variable in your deployment platform',
+            '   - Redeploy the dashboard application',
+            '   - Wait for deployment to complete',
+            '',
+            '✅ Step 4: Verify Configuration',
+            '   - Visit /api/config-check to verify credentials are loaded',
+            '   - Visit /api/credentials-debug for detailed diagnostics',
+            '   - Refresh this page to load BigQuery data',
+          ],
+          quickLinks: {
+            configCheck: '/api/config-check',
+            credentialsDebug: '/api/credentials-debug',
+            setupGuide: 'https://github.com/natureswaysoil/Amazom-PPC/blob/main/amazon_ppc_dashboard/nextjs_space/README_DASHBOARD_SETUP.md'
+          }
+        }, { status: 500 });
       }
       
+      console.warn('Will attempt to use Application Default Credentials (ADC)...');
       // We'll continue and let BigQuery SDK try Application Default Credentials
       // This works in many GCP environments (Cloud Run, Cloud Functions, Compute Engine, etc.)
       credentialSource = 'Application Default Credentials (fallback)';
@@ -343,11 +388,19 @@ export async function GET(request: NextRequest) {
     }
 
     // Check for credential-related errors
+    // Note: Be specific to avoid false positives with unrelated errors that mention "credentials"
     if (error.message && (
       error.message.includes('Could not load the default credentials') ||
       error.message.includes('Unable to detect a Project Id') ||
       error.message.includes('GOOGLE_APPLICATION_CREDENTIALS') ||
-      error.message.toLowerCase().includes('credentials')
+      error.message.includes('Could not load credentials') ||
+      error.message.includes('ADC was not found') ||
+      error.message.includes('Could not automatically determine credentials') ||
+      error.message.includes('Unable to authenticate') ||
+      (error.message.toLowerCase().includes('credentials') && 
+       (error.message.toLowerCase().includes('load') || 
+        error.message.toLowerCase().includes('missing') ||
+        error.message.toLowerCase().includes('not found')))
     )) {
       return NextResponse.json({
         error: 'Missing Google Cloud credentials',
