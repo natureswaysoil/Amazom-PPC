@@ -996,7 +996,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
                     logger.warning(f"⚠️ BigQuery write returned False (run_id: {run_id})")
             except Exception as bq_err:
                 logger.warning(f"BigQuery write failed (non-blocking): {bq_err}")
-                logger.debug(traceback.format_exc())
+                logger.error(traceback.format_exc())
         else:
             logger.info("BigQuery client not initialized - skipping BigQuery write")
         

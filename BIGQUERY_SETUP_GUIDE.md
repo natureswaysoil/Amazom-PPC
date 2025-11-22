@@ -32,23 +32,26 @@ You need a Google Cloud service account with the following permissions:
 
 **Create a Service Account:**
 ```bash
+# Set your project ID (replace with your actual project)
+export PROJECT_ID="YOUR_PROJECT_ID"
+
 # Create service account
 gcloud iam service-accounts create amazon-ppc-bigquery \
     --display-name="Amazon PPC BigQuery Service Account" \
-    --project=amazon-ppc-474902
+    --project=${PROJECT_ID}
 
 # Grant BigQuery permissions
-gcloud projects add-iam-policy-binding amazon-ppc-474902 \
-    --member="serviceAccount:amazon-ppc-bigquery@amazon-ppc-474902.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:amazon-ppc-bigquery@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/bigquery.dataEditor"
 
-gcloud projects add-iam-policy-binding amazon-ppc-474902 \
-    --member="serviceAccount:amazon-ppc-bigquery@amazon-ppc-474902.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:amazon-ppc-bigquery@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/bigquery.jobUser"
 
 # Create and download key
 gcloud iam service-accounts keys create service-account-key.json \
-    --iam-account=amazon-ppc-bigquery@amazon-ppc-474902.iam.gserviceaccount.com
+    --iam-account=amazon-ppc-bigquery@${PROJECT_ID}.iam.gserviceaccount.com
 ```
 
 ## Configuration
@@ -59,7 +62,7 @@ Set the `GCP_SERVICE_ACCOUNT_KEY` environment variable with the service account 
 
 #### Option A: Raw JSON (for local development)
 ```bash
-export GCP_SERVICE_ACCOUNT_KEY='{"type":"service_account","project_id":"amazon-ppc-474902",...}'
+export GCP_SERVICE_ACCOUNT_KEY='{"type":"service_account","project_id":"YOUR_PROJECT_ID",...}'
 ```
 
 #### Option B: Base64-encoded (for CI/CD and Cloud Functions)
@@ -78,9 +81,9 @@ gcloud secrets create GCP_SERVICE_ACCOUNT_KEY \
     --replication-policy="automatic" \
     --data-file=service-account-key.json
 
-# Grant access to the secret
+# Grant access to the secret (replace with your service account)
 gcloud secrets add-iam-policy-binding GCP_SERVICE_ACCOUNT_KEY \
-    --member="serviceAccount:YOUR_FUNCTION_SERVICE_ACCOUNT@amazon-ppc-474902.iam.gserviceaccount.com" \
+    --member="serviceAccount:YOUR_FUNCTION_SERVICE_ACCOUNT@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/secretmanager.secretAccessor"
 ```
 
@@ -94,12 +97,14 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
 {
   "bigquery": {
     "enabled": true,
-    "project_id": "amazon-ppc-474902",
+    "project_id": "YOUR_PROJECT_ID",
     "dataset_id": "amazon_ppc",
     "location": "us-east4"
   }
 }
 ```
+
+**Note:** Replace `YOUR_PROJECT_ID` with your actual Google Cloud project ID (e.g., `amazon-ppc-474902`).
 
 ## Testing the Setup
 
@@ -140,7 +145,7 @@ Expected response when healthy:
     "error": null
   },
   "bigquery": {
-    "project_id": "amazon-ppc-474902",
+    "project_id": "YOUR_PROJECT_ID",
     "dataset_id": "amazon_ppc",
     "client_initialized": true,
     "dataset_accessible": true,
@@ -182,7 +187,7 @@ curl https://your-function-url.cloudfunctions.net
 ### 1. Check Optimizer Logs
 Look for these log messages when the optimizer runs:
 ```
-✓ BigQuery client initialized for project amazon-ppc-474902
+✓ BigQuery client initialized for project YOUR_PROJECT_ID
 Writing results to BigQuery...
 ✓ Successfully wrote optimization results to BigQuery (run_id: abc-123-def)
 Successfully wrote 3 campaign details to BigQuery
@@ -190,9 +195,11 @@ Successfully wrote 3 campaign details to BigQuery
 
 ### 2. Query BigQuery Directly
 ```sql
+-- Replace YOUR_PROJECT_ID with your actual project ID
+
 -- Check if data exists
 SELECT COUNT(*) as total_runs
-FROM `amazon-ppc-474902.amazon_ppc.optimization_results`
+FROM `YOUR_PROJECT_ID.amazon_ppc.optimization_results`
 WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY);
 
 -- View recent runs
@@ -205,7 +212,7 @@ SELECT
     total_spend,
     total_sales,
     average_acos
-FROM `amazon-ppc-474902.amazon_ppc.optimization_results`
+FROM `YOUR_PROJECT_ID.amazon_ppc.optimization_results`
 ORDER BY timestamp DESC
 LIMIT 10;
 
@@ -218,7 +225,7 @@ SELECT
     acos,
     clicks,
     conversions
-FROM `amazon-ppc-474902.amazon_ppc.campaign_details`
+FROM `YOUR_PROJECT_ID.amazon_ppc.campaign_details`
 ORDER BY timestamp DESC
 LIMIT 20;
 ```
@@ -265,11 +272,11 @@ Visit the dashboard and verify:
 
 **Solution:**
 ```bash
-# Create dataset manually
+# Create dataset manually (replace YOUR_PROJECT_ID)
 bq mk --dataset \
     --location=us-east4 \
     --description="Amazon PPC Optimization Data" \
-    amazon-ppc-474902:amazon_ppc
+    YOUR_PROJECT_ID:amazon_ppc
 ```
 
 ### Error: "Permission denied"
@@ -278,13 +285,16 @@ bq mk --dataset \
 
 **Solution:**
 ```bash
-# Grant required roles
-gcloud projects add-iam-policy-binding amazon-ppc-474902 \
-    --member="serviceAccount:YOUR_SERVICE_ACCOUNT@amazon-ppc-474902.iam.gserviceaccount.com" \
+# Grant required roles (replace YOUR_PROJECT_ID and YOUR_SERVICE_ACCOUNT)
+export PROJECT_ID="YOUR_PROJECT_ID"
+export SERVICE_ACCOUNT="YOUR_SERVICE_ACCOUNT"
+
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/bigquery.dataEditor"
 
-gcloud projects add-iam-policy-binding amazon-ppc-474902 \
-    --member="serviceAccount:YOUR_SERVICE_ACCOUNT@amazon-ppc-474902.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/bigquery.jobUser"
 ```
 

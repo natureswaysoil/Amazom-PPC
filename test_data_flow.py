@@ -249,8 +249,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('--project-id', 
-                       default=os.getenv('GCP_PROJECT', 'amazon-ppc-474902'),
-                       help='Google Cloud project ID')
+                       default=os.getenv('GCP_PROJECT') or os.getenv('GOOGLE_CLOUD_PROJECT', 'amazon-ppc-474902'),
+                       help='Google Cloud project ID (or set GCP_PROJECT/GOOGLE_CLOUD_PROJECT env var)')
     parser.add_argument('--write-test-data', 
                        action='store_true',
                        help='Write test data to BigQuery (default: skip)')

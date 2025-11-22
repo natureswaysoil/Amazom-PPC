@@ -38,7 +38,9 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuration
-PROJECT_ID = os.getenv('GCP_PROJECT_ID', 'nature-way-soils')
+# Project ID should be set via GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT environment variable
+# or configured in config.json
+PROJECT_ID = os.getenv('GCP_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT', 'amazon-ppc-474902')
 DATASET_ID = os.getenv('BIGQUERY_DATASET', 'amazon_ppc')
 
 def get_bigquery_client():
