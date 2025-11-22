@@ -80,7 +80,7 @@ USER_AGENT = "NWS-PPC-Automation/2.0"
 # Amazon Ads API versions for Amazon-Advertising-API-Version header
 # For Sponsored Products endpoints (campaigns, ad groups, keywords): use v2
 # For Reporting API: use v3
-SP_API_VERSION = "v2"
+SP_API_VERSION = "v3"
 REPORTS_API_VERSION = "v3"
 
 # Rate limiting - Amazon Advertising API supports 10 requests/second

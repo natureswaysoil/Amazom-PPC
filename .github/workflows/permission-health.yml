@@ -1,0 +1,87 @@
+name: Sponsored Products Permission Health
+
+on:
+  schedule:
+    - cron: '25 3 * * *'  # Daily at 03:25 UTC
+  workflow_dispatch:
+    inputs:
+      function_url:
+        description: 'Cloud Function base URL (overrides secret)'
+        required: false
+        type: string
+
+jobs:
+  permission-health:
+    runs-on: ubuntu-latest
+    env:
+      INPUT_FUNCTION_URL: ${{ inputs.function_url }}
+      SECRET_FUNCTION_URL: ${{ secrets.FUNCTION_URL }}
+      REQUIRE_AUTH: ${{ secrets.HEALTH_REQUIRE_AUTH || true }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve Function URL
+        id: url
+        run: |
+          if [ -n "$INPUT_FUNCTION_URL" ]; then echo "function_url=$INPUT_FUNCTION_URL" >> $GITHUB_OUTPUT; exit 0; fi
+          if [ -n "$SECRET_FUNCTION_URL" ]; then echo "function_url=$SECRET_FUNCTION_URL" >> $GITHUB_OUTPUT; exit 0; fi
+          echo "::error::Function URL not provided."; exit 1
+
+      - name: Setup gcloud (auth optional)
+        if: env.REQUIRE_AUTH == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: '>= 471.0.0'
+
+      - name: Auth (OIDC) if configured
+        if: env.REQUIRE_AUTH == 'true' && env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Acquire Identity Token (if auth)
+        if: env.REQUIRE_AUTH == 'true'
+        id: token
+        run: |
+          TOKEN=$(gcloud auth print-identity-token)
+          echo "id_token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Permission Health Probe
+        id: probe
+        env:
+          FUNCTION_URL: ${{ steps.url.outputs.function_url }}
+          ID_TOKEN: ${{ steps.token.outputs.id_token }}
+        run: |
+          BASE_URL="${FUNCTION_URL%/}"
+          TARGET="${BASE_URL}?permission_health=true"
+          echo "Probing $TARGET"
+          if [ "$REQUIRE_AUTH" = "true" ]; then
+            RESP=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $ID_TOKEN" "$TARGET" || echo "\n000")
+          else
+            RESP=$(curl -s -w "\n%{http_code}" "$TARGET" || echo "\n000")
+          fi
+          CODE=$(echo "$RESP" | tail -n1)
+          BODY=$(echo "$RESP" | head -n-1)
+          echo "http_code=$CODE" >> $GITHUB_OUTPUT
+          echo "body=$BODY" >> $GITHUB_OUTPUT
+          echo "Response code: $CODE"
+          echo "Body: $BODY"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Permission health endpoint returned $CODE"; exit 1; fi
+          SP_STATUS=$(echo "$BODY" | python -c 'import sys,json; print((json.loads(sys.stdin.read()).get("sp_permission","unknown")))') || SP_STATUS=unknown
+          echo "sp_permission=$SP_STATUS" >> $GITHUB_OUTPUT
+          if [ "$SP_STATUS" = "missing" ]; then
+            echo "::warning::Sponsored Products permission appears missing"; fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Permission Health Result" >> $GITHUB_STEP_SUMMARY
+          echo "HTTP Code: ${{ steps.probe.outputs.http_code }}" >> $GITHUB_STEP_SUMMARY
+          echo "SP Permission: ${{ steps.probe.outputs.sp_permission }}" >> $GITHUB_STEP_SUMMARY
+          echo "Endpoint: ${{ steps.url.outputs.function_url }}?permission_health=true" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.probe.outputs.sp_permission }}" = "missing" ]; then
+            echo "\n⚠️ Detected potential Sponsored Products permission loss. See AMAZON_SP_REAUTHORIZATION_CHECKLIST.md." >> $GITHUB_STEP_SUMMARY
+          fi

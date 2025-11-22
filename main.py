@@ -718,6 +718,162 @@ def run_verify_connection(request) -> Tuple[Dict[str, Any], int]:
         }, 500
 
 
+def run_permission_health(request) -> Tuple[Dict[str, Any], int]:
+    """
+    Permission / product access health endpoint.
+
+    Performs lightweight probes against Amazon Advertising API endpoints to
+    classify access for Sponsored Products (SP), Sponsored Brands (SB), and
+    Sponsored Display (SD). Distinguishes SP permission loss (characteristic
+    403 with 'Invalid key=value pair' body) from generic auth failures.
+
+    Query Param:
+      ?permission_health=true
+
+    Returns:
+      JSON with probe results and inferred sp_permission status (present|missing|unknown).
+    """
+    logger.info("=== Permission Health Requested ===")
+    try:
+        config = load_config()
+        set_environment_variables(config)
+        validate_credentials(config)
+
+        profile_id = os.environ.get('AMAZON_PROFILE_ID', '').strip() or config.get('amazon_api', {}).get('profile_id', '').strip()
+        if not profile_id:
+            raise ValueError("profile_id is required for permission health checks")
+
+        # Obtain fresh access token via refresh grant
+        token_resp = requests.post(
+            'https://api.amazon.com/auth/o2/token',
+            data={
+                'grant_type': 'refresh_token',
+                'refresh_token': os.environ.get('AMAZON_REFRESH_TOKEN', ''),
+                'client_id': os.environ.get('AMAZON_CLIENT_ID', ''),
+                'client_secret': os.environ.get('AMAZON_CLIENT_SECRET', ''),
+            },
+            timeout=30
+        )
+        if token_resp.status_code != 200:
+            return {
+                'status': 'error',
+                'message': 'Failed to exchange refresh token',
+                'token_status_code': token_resp.status_code,
+                'token_body': token_resp.text[:400],
+                'timestamp': datetime.now().isoformat()
+            }, 500
+
+        access_token = token_resp.json().get('access_token', '')
+        if not access_token:
+            return {
+                'status': 'error',
+                'message': 'No access_token in token response',
+                'timestamp': datetime.now().isoformat()
+            }, 500
+
+        def _probe(name: str, path: str) -> Dict[str, Any]:
+            url = f"https://advertising-api.amazon.com{path}"
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Amazon-Advertising-API-ClientId': os.environ.get('AMAZON_CLIENT_ID', ''),
+                'Amazon-Advertising-API-Scope': profile_id,
+                'Content-Type': 'application/json'
+            }
+            # Add Accept headers for versioned campaign endpoints where required
+            if name.startswith('SB') and 'v4' in path and 'Accept' not in headers:
+                headers['Accept'] = 'application/vnd.sbCampaign.v4+json'
+            if name.startswith('SP') and '/sp/v3/' in path and 'Accept' not in headers:
+                headers['Accept'] = 'application/vnd.spCampaign.v3+json'
+            started = datetime.utcnow()
+            try:
+                resp = requests.get(url, headers=headers, timeout=30)
+                duration_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
+                body_preview = resp.text[:300].replace('\n', ' ')
+                classification = _classify(name, resp.status_code, resp.text)
+                return {
+                    'probe': name,
+                    'path': path,
+                    'status_code': resp.status_code,
+                    'duration_ms': duration_ms,
+                    'classification': classification,
+                    'body_preview': body_preview,
+                }
+            except Exception as ex:
+                return {
+                    'probe': name,
+                    'path': path,
+                    'status_code': -1,
+                    'duration_ms': 0,
+                    'classification': 'network_error',
+                    'error': str(ex)
+                }
+
+        def _classify(name: str, status: int, body: str) -> str:
+            if status == -1:
+                return 'network_error'
+            if status == 401:
+                return 'unauthorized'
+            if status == 403:
+                if 'Invalid key=value pair' in body:
+                    if name.startswith('SP'):
+                        return 'sp_permission_missing'
+                    return 'permission_denied_pattern'
+                return 'permission_denied'
+            if status == 404:
+                return 'not_found'
+            if status == 429:
+                return 'rate_limited'
+            if status >= 500:
+                return 'server_error'
+            if status == 200:
+                if name.startswith('SP'):
+                    return 'sp_access_ok'
+                if name.startswith('SB'):
+                    return 'sb_access_ok'
+                if name.startswith('SD'):
+                    return 'sd_access_ok'
+                return 'access_ok'
+            return 'other'
+
+        probes = [
+            ('Profiles', '/v2/profiles'),
+            ('SP Campaigns legacy', '/sp/campaigns?startIndex=0&count=1'),
+            ('SP Campaigns v3', '/sp/v3/campaigns?startIndex=0&count=1'),
+            ('SB Campaigns v4', '/sb/v4/campaigns?startIndex=0&count=1'),
+            ('SD Campaigns', '/sd/campaigns?startIndex=0&count=1'),
+        ]
+        results = [_probe(name, path) for name, path in probes]
+
+        sp_results = [r for r in results if r['probe'].startswith('SP')]
+        if sp_results and all(r['classification'] == 'sp_permission_missing' for r in sp_results):
+            sp_perm = 'missing'
+        elif any(r['classification'] == 'sp_access_ok' for r in sp_results):
+            sp_perm = 'present'
+        else:
+            sp_perm = 'unknown'
+
+        classification_counts: Dict[str, int] = {}
+        for r in results:
+            c = r['classification']
+            classification_counts[c] = classification_counts.get(c, 0) + 1
+
+        return {
+            'status': 'success',
+            'timestamp': datetime.now().isoformat(),
+            'profile_id': profile_id,
+            'sp_permission': sp_perm,
+            'classification_counts': classification_counts,
+            'probes': results,
+        }, 200
+    except Exception as e:
+        logger.error(f"Permission health check failed: {e}")
+        return {
+            'status': 'error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }, 500
+
+
 @functions_framework.http
 def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     """
@@ -753,6 +909,9 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     # Check for verify connection endpoint
     if request.args.get('verify_connection', '').lower() == 'true':
         return run_verify_connection(request)
+    # Check for permission health endpoint
+    if request.args.get('permission_health', '').lower() == 'true':
+        return run_permission_health(request)
     
     logger.info(f"=== Amazon PPC Optimizer Started at {start_time} ===")
     
