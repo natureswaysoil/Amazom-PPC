@@ -989,9 +989,16 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
             try:
                 # Build the same payload that's sent to the dashboard
                 results_payload = dashboard_client.build_results_payload(results, config, duration, dry_run)
-                bigquery_client.write_optimization_results(results_payload)
+                write_success = bigquery_client.write_optimization_results(results_payload)
+                if write_success:
+                    logger.info(f"✓ Successfully wrote optimization results to BigQuery (run_id: {run_id})")
+                else:
+                    logger.warning(f"⚠️ BigQuery write returned False (run_id: {run_id})")
             except Exception as bq_err:
                 logger.warning(f"BigQuery write failed (non-blocking): {bq_err}")
+                logger.error(traceback.format_exc())
+        else:
+            logger.info("BigQuery client not initialized - skipping BigQuery write")
         
         # Prepare summary
         summary = format_results_summary(results, duration, dry_run)
