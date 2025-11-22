@@ -16,6 +16,7 @@ Tables displayed:
 import os
 import json
 import logging
+import traceback
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
@@ -29,6 +30,9 @@ from gcp_credentials import load_credentials
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Error message constant
+BIGQUERY_CREDENTIAL_ERROR = "Could not load Google Cloud credentials for BigQuery. Please ensure GCP_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS is set."
 
 app = Flask(__name__)
 CORS(app)
@@ -53,8 +57,7 @@ def get_bigquery_client():
             return client
     except Exception as e:
         logger.error(f"Failed to initialize BigQuery client: {e}")
-        logger.error(f"Could not load Google Cloud credentials for BigQuery. Please ensure GCP_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS is set.")
-        import traceback
+        logger.error(BIGQUERY_CREDENTIAL_ERROR)
         logger.error(traceback.format_exc())
         return None
 
@@ -349,7 +352,6 @@ def bigquery_health():
         
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        import traceback
         logger.error(traceback.format_exc())
         return jsonify({
             'status': 'unhealthy',

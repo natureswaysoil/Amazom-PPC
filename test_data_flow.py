@@ -17,6 +17,8 @@ import json
 import logging
 import os
 import sys
+import traceback
+import uuid
 from datetime import datetime
 
 # Configure logging
@@ -65,7 +67,6 @@ def test_credentials():
         
     except Exception as e:
         logger.error(f"❌ Credential test failed: {e}")
-        import traceback
         logger.error(traceback.format_exc())
         return False, None
 
@@ -104,7 +105,6 @@ def test_bigquery_client(project_id: str):
         
     except Exception as e:
         logger.error(f"❌ BigQuery client test failed: {e}")
-        import traceback
         logger.error(traceback.format_exc())
         return False, None
 
@@ -120,7 +120,6 @@ def test_bigquery_write(bq_client, write_data: bool):
         return True
     
     try:
-        import uuid
         from dashboard_client import DashboardClient
         
         # Create minimal test config
@@ -177,7 +176,6 @@ def test_bigquery_write(bq_client, write_data: bool):
         
     except Exception as e:
         logger.error(f"❌ Write test failed: {e}")
-        import traceback
         logger.error(traceback.format_exc())
         return False
 
