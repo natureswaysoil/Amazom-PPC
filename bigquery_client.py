@@ -237,6 +237,8 @@ class BigQueryClient:
             
         except Exception as e:
             logger.error(f"Failed to write to BigQuery: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
     
     def _write_campaign_details(self, results_data: Dict):

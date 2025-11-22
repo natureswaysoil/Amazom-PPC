@@ -43,12 +43,19 @@ def get_bigquery_client():
         credentials = load_credentials()
         if credentials:
             logger.info("Using service account credentials for BigQuery")
-            return bigquery.Client(project=PROJECT_ID, credentials=credentials)
+            client = bigquery.Client(project=PROJECT_ID, credentials=credentials)
+            logger.info(f"✓ BigQuery client initialized successfully for project {PROJECT_ID}")
+            return client
         else:
             logger.info("Using Application Default Credentials for BigQuery")
-            return bigquery.Client(project=PROJECT_ID)
+            client = bigquery.Client(project=PROJECT_ID)
+            logger.info(f"✓ BigQuery client initialized with ADC for project {PROJECT_ID}")
+            return client
     except Exception as e:
         logger.error(f"Failed to initialize BigQuery client: {e}")
+        logger.error(f"Could not load Google Cloud credentials for BigQuery. Please ensure GCP_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS is set.")
+        import traceback
+        logger.error(traceback.format_exc())
         return None
 
 @app.route('/')
@@ -283,6 +290,72 @@ def get_chart_data(chart_type):
 def health():
     """Health check endpoint"""
     return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
+
+@app.route('/api/bigquery-health')
+def bigquery_health():
+    """Check BigQuery connectivity and credentials"""
+    try:
+        # Test credential loading
+        from gcp_credentials import validate_credentials_early
+        creds_valid, creds_error = validate_credentials_early()
+        
+        # Test BigQuery client initialization
+        client = get_bigquery_client()
+        client_ok = client is not None
+        
+        # Test dataset access if client initialized
+        dataset_accessible = False
+        dataset_error = None
+        row_count = 0
+        
+        if client:
+            try:
+                dataset_ref = f"{PROJECT_ID}.{DATASET_ID}"
+                dataset = client.get_dataset(dataset_ref)
+                dataset_accessible = True
+                
+                # Try to count rows in optimization_results table
+                query = f"""
+                    SELECT COUNT(*) as total 
+                    FROM `{PROJECT_ID}.{DATASET_ID}.optimization_results`
+                """
+                result = client.query(query).result()
+                for row in result:
+                    row_count = row['total']
+                    break
+                    
+            except Exception as dataset_err:
+                dataset_error = str(dataset_err)
+                logger.warning(f"Dataset access check failed: {dataset_err}")
+        
+        response = {
+            'status': 'healthy' if (client_ok and dataset_accessible) else 'unhealthy',
+            'timestamp': datetime.now().isoformat(),
+            'credentials': {
+                'valid': creds_valid,
+                'error': creds_error
+            },
+            'bigquery': {
+                'project_id': PROJECT_ID,
+                'dataset_id': DATASET_ID,
+                'client_initialized': client_ok,
+                'dataset_accessible': dataset_accessible,
+                'dataset_error': dataset_error,
+                'optimization_results_count': row_count
+            }
+        }
+        
+        return jsonify(response), 200 if response['status'] == 'healthy' else 500
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 8080))
