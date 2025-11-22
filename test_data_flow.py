@@ -238,7 +238,6 @@ def test_bigquery_read(project_id: str):
         
     except Exception as e:
         logger.error(f"❌ Read test failed: {e}")
-        import traceback
         logger.error(traceback.format_exc())
         return False
 
