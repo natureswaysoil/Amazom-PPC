@@ -1,13 +1,3 @@
 {
-  "buildCommand": "cd amazon_ppc_dashboard/nextjs_space && npm run build",
-  "devCommand": "cd amazon_ppc_dashboard/nextjs_space && npm run dev", 
-  "installCommand": "cd amazon_ppc_dashboard/nextjs_space && npm install",
-  "outputDirectory": "amazon_ppc_dashboard/nextjs_space/.next",
-  "framework": "nextjs",
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/amazon_ppc_dashboard/nextjs_space/$1"
-    }
-  ]
+  "version": 2
 }
