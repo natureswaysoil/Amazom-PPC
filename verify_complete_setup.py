@@ -67,6 +67,9 @@ def check_amazon_api_config(config):
     
     amazon_api = config.get('amazon_api', {})
     
+    # Placeholder patterns to detect unconfigured values
+    placeholders = ['xxxxx', 'YOUR_', 'PLACEHOLDER', 'EXAMPLE']
+    
     checks = {
         'profile_id': amazon_api.get('profile_id'),
         'client_id': amazon_api.get('client_id'),
@@ -77,7 +80,7 @@ def check_amazon_api_config(config):
     
     all_good = True
     for key, value in checks.items():
-        if value and not value.startswith('xxxxx'):
+        if value and not any(placeholder in str(value) for placeholder in placeholders):
             logger.info(f"   ✓ {key}: configured")
         else:
             logger.warning(f"   ⚠️ {key}: NOT configured")
@@ -101,18 +104,22 @@ def check_dashboard_config(config):
     logger.info(f"   URL: {url}")
     logger.info(f"   Enabled: {enabled}")
     
+    # Placeholder patterns
+    url_placeholders = ['YOUR_', 'EXAMPLE', 'PLACEHOLDER', 'your-dashboard']
+    key_placeholders = ['YOUR_DASHBOARD_API_KEY', 'YOUR_API_KEY', 'PLACEHOLDER']
+    
     issues = []
     
     if not url:
         logger.error("   ❌ Dashboard URL not configured")
         issues.append('url_missing')
-    elif url.startswith('YOUR_') or 'example' in url.lower():
+    elif any(placeholder in url for placeholder in url_placeholders):
         logger.error("   ❌ Dashboard URL is a placeholder")
         issues.append('url_placeholder')
     else:
         logger.info("   ✓ Dashboard URL is set")
     
-    if not api_key or api_key == 'YOUR_DASHBOARD_API_KEY':
+    if not api_key or api_key in key_placeholders:
         logger.warning("   ⚠️ Dashboard API key is placeholder or missing")
         issues.append('api_key_placeholder')
     else:

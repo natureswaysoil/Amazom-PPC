@@ -78,7 +78,8 @@ def update_config(dashboard_url, api_key=None):
     config['dashboard']['url'] = dashboard_url
     
     if api_key:
-        logger.info(f"   API Key: {'*' * 20} (set)")
+        mask_length = min(len(api_key), 20)
+        logger.info(f"   API Key: {'*' * mask_length} (set)")
         config['dashboard']['api_key'] = api_key
     else:
         current_key = config['dashboard'].get('api_key', '')
