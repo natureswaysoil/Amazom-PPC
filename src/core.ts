@@ -75,13 +75,21 @@ export class VideoProcessor {
     validateJob(job);
 
     const startedAt = new Date().toISOString();
-    const platforms = options.platforms?.length
+    const platforms = (options.platforms?.length
       ? options.platforms
-      : this.getRegisteredPlatforms();
+      : this.getRegisteredPlatforms())
+      .filter(Boolean);
+
+    const uniquePlatforms: PlatformName[] = [];
+    for (const platform of platforms) {
+      if (!uniquePlatforms.includes(platform)) {
+        uniquePlatforms.push(platform);
+      }
+    }
 
     const results: PublishResult[] = [];
 
-    for (const platform of platforms) {
+    for (const platform of uniquePlatforms) {
       const publisher = this.publishers.get(platform);
       if (!publisher) {
         results.push({
