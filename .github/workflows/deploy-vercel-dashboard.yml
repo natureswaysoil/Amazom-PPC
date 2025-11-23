@@ -1,0 +1,45 @@
+name: Deploy Dashboard to Vercel
+
+on:
+  push:
+    branches:
+      - main
+      - copilot/add-amazon-ppc-dashboard
+    paths:
+      - 'amazon_ppc_dashboard/nextjs_space/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: amazon_ppc_dashboard/nextjs_space/package-lock.json
+
+      - name: Install dependencies
+        working-directory: amazon_ppc_dashboard/nextjs_space
+        run: npm ci
+
+      - name: Build Next.js application
+        working-directory: amazon_ppc_dashboard/nextjs_space
+        run: npm run build
+        env:
+          # Build-time environment variables (if needed)
+          NODE_ENV: production
+
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: amazon_ppc_dashboard/nextjs_space
+          vercel-args: '--prod'
