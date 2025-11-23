@@ -131,7 +131,3 @@ gcloud functions deploy amazon-ppc-optimizer \
 **Common Issues**:
 - Most deployment errors are due to incorrect Root Directory setting
 - Ensure you're pointing to `amazon_ppc_dashboard/nextjs_space`, not the repository root
-
----
-
-For more details, see [VERCEL_DEPLOYMENT_GUIDE.md](../../VERCEL_DEPLOYMENT_GUIDE.md) in the repository root.
