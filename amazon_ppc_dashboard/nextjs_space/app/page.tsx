@@ -232,11 +232,11 @@ export default function Home() {
                 <ol style={{ textAlign: 'left', lineHeight: '1.8' }}>
                   <li><strong>Get your service account key:</strong> Download the JSON file from Google Cloud Console → IAM & Admin → Service Accounts</li>
                   <li><strong>Set the credential:</strong> In your deployment platform (Vercel, etc.), set <code>GCP_SERVICE_ACCOUNT_KEY</code> to the contents of the JSON file</li>
-                  <li><strong>Alternative (simpler):</strong> Or encode it as base64: <code>cat service-account.json | base64 | tr -d '\n'</code></li>
+                  <li><strong>Alternative (simpler):</strong> Or encode it as base64: <code>cat service-account.json | base64 | tr -d &apos;\n&apos;</code></li>
                   <li>Redeploy the dashboard</li>
                 </ol>
                 <p style={{ fontSize: '14px', marginTop: '15px', padding: '10px', background: '#e8f4f8', borderRadius: '5px' }}>
-                  <strong>💡 Tip:</strong> If you're running in Google Cloud (Cloud Run, Cloud Functions), 
+                  <strong>💡 Tip:</strong> If you&apos;re running in Google Cloud (Cloud Run, Cloud Functions), 
                   the dashboard can use Application Default Credentials automatically - no manual setup needed!
                 </p>
                 <p style={{ fontSize: '12px', marginTop: '10px', color: '#666' }}>
