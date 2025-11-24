@@ -44,24 +44,31 @@ PROJECT_ID = os.getenv('GCP_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT', 'a
 DATASET_ID = os.getenv('BIGQUERY_DATASET', 'amazon_ppc')
 
 def get_bigquery_client():
-    """Initialize BigQuery client with credentials"""
+    """
+    Initialize BigQuery client with credentials
+    
+    Returns:
+        tuple: (client, error_message) where client is the BigQuery client or None,
+               and error_message is a descriptive error string or None
+    """
     try:
         credentials = load_credentials()
         if credentials:
             logger.info("Using service account credentials for BigQuery")
             client = bigquery.Client(project=PROJECT_ID, credentials=credentials)
             logger.info(f"✓ BigQuery client initialized successfully for project {PROJECT_ID}")
-            return client
+            return client, None
         else:
             logger.info("Using Application Default Credentials for BigQuery")
             client = bigquery.Client(project=PROJECT_ID)
             logger.info(f"✓ BigQuery client initialized with ADC for project {PROJECT_ID}")
-            return client
+            return client, None
     except Exception as e:
+        error_msg = f"{BIGQUERY_CREDENTIAL_ERROR} Error details: {str(e)}"
         logger.error(f"Failed to initialize BigQuery client: {e}")
         logger.error(BIGQUERY_CREDENTIAL_ERROR)
         logger.error(traceback.format_exc())
-        return None
+        return None, error_msg
 
 @app.route('/')
 def index():
@@ -72,9 +79,9 @@ def index():
 def list_tables():
     """List all available BigQuery tables"""
     try:
-        client = get_bigquery_client()
+        client, error_msg = get_bigquery_client()
         if not client:
-            return jsonify({'error': 'Failed to initialize BigQuery client'}), 500
+            return jsonify({'error': error_msg or 'Failed to initialize BigQuery client'}), 500
         
         dataset_ref = f"{PROJECT_ID}.{DATASET_ID}"
         tables = client.list_tables(dataset_ref)
@@ -99,9 +106,9 @@ def list_tables():
 def get_table_data(table_name):
     """Get data from a specific BigQuery table"""
     try:
-        client = get_bigquery_client()
+        client, error_msg = get_bigquery_client()
         if not client:
-            return jsonify({'error': 'Failed to initialize BigQuery client'}), 500
+            return jsonify({'error': error_msg or 'Failed to initialize BigQuery client'}), 500
         
         # Get query parameters
         limit = request.args.get('limit', 100, type=int)
@@ -159,9 +166,9 @@ def get_table_data(table_name):
 def get_table_schema(table_name):
     """Get schema information for a specific table"""
     try:
-        client = get_bigquery_client()
+        client, error_msg = get_bigquery_client()
         if not client:
-            return jsonify({'error': 'Failed to initialize BigQuery client'}), 500
+            return jsonify({'error': error_msg or 'Failed to initialize BigQuery client'}), 500
         
         table_ref = f"{PROJECT_ID}.{DATASET_ID}.{table_name}"
         table = client.get_table(table_ref)
@@ -189,9 +196,9 @@ def get_table_schema(table_name):
 def get_summary():
     """Get summary statistics across all tables"""
     try:
-        client = get_bigquery_client()
+        client, error_msg = get_bigquery_client()
         if not client:
-            return jsonify({'error': 'Failed to initialize BigQuery client'}), 500
+            return jsonify({'error': error_msg or 'Failed to initialize BigQuery client'}), 500
         
         # Get optimization results summary
         query = f"""
@@ -227,9 +234,9 @@ def get_summary():
 def get_chart_data(chart_type):
     """Get data for various charts"""
     try:
-        client = get_bigquery_client()
+        client, error_msg = get_bigquery_client()
         if not client:
-            return jsonify({'error': 'Failed to initialize BigQuery client'}), 500
+            return jsonify({'error': error_msg or 'Failed to initialize BigQuery client'}), 500
         
         days = request.args.get('days', 30, type=int)
         
@@ -305,7 +312,7 @@ def bigquery_health():
         creds_valid, creds_error = validate_credentials_early()
         
         # Test BigQuery client initialization
-        client = get_bigquery_client()
+        client, client_error = get_bigquery_client()
         client_ok = client is not None
         
         # Test dataset access if client initialized
@@ -344,6 +351,7 @@ def bigquery_health():
                 'project_id': PROJECT_ID,
                 'dataset_id': DATASET_ID,
                 'client_initialized': client_ok,
+                'client_error': client_error,
                 'dataset_accessible': dataset_accessible,
                 'dataset_error': dataset_error,
                 'optimization_results_count': row_count
