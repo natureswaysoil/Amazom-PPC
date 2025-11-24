@@ -1119,7 +1119,8 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
                 config_path=config_file_path,
                 profile_id=profile_id,
                 dry_run=dry_run,
-                bigquery_client=bigquery_client
+                bigquery_client=bigquery_client,
+                dashboard_client=dashboard_client
             )
             
             # Run optimization

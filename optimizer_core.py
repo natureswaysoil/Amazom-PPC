@@ -2230,13 +2230,17 @@ class NegativeKeywordManager:
 # ============================================================================
 
 class PPCAutomation:
-    """Main automation orchestrator with comprehensive error handling"""
+    """Main automation orchestrator with comprehensive error handling.
+
+    Optionally accepts a dashboard client for streaming granular progress.
+    """
     
-    def __init__(self, config_path: str, profile_id: str, dry_run: bool = False, bigquery_client=None):
+    def __init__(self, config_path: str, profile_id: str, dry_run: bool = False, bigquery_client=None, dashboard_client=None):
         self.config = Config(config_path)
         self.profile_id = profile_id
         self.dry_run = dry_run
         self.bigquery_client = bigquery_client
+        self.dashboard_client = dashboard_client
         
         # Initialize API client with configurable rate limit
         region = self.config.get('api.region', 'NA')
@@ -2285,47 +2289,50 @@ class PPCAutomation:
         results = {}
         
         try:
-            # Run each feature with error handling
-            if 'bid_optimization' in features:
+            total = len(features)
+            # Define progress window (internal feature execution stays between 25% and 80%)
+            start_pct = 25.0
+            end_pct = 80.0
+            pct_span = end_pct - start_pct if total > 0 else 0
+
+            for idx, feature in enumerate(features):
+                current_pct = start_pct + (idx / max(total, 1)) * pct_span
+                if self.dashboard_client:
+                    try:
+                        self.dashboard_client.send_progress(f"Starting {feature}...", current_pct)
+                    except Exception:
+                        logger.debug("Dashboard progress send failed (non-blocking)")
+
                 try:
-                    results['bid_optimization'] = self.bid_optimizer.optimize(self.dry_run)
-                except Exception as e:
-                    logger.error(f"Bid optimization failed: {e}")
-                    results['bid_optimization'] = {'error': str(e)}
-            
-            if 'dayparting' in features:
-                try:
-                    # Use intelligent dayparting if BigQuery is available, otherwise fallback to config-based
-                    if self.bigquery_client:
-                        results['dayparting'] = self.dayparting.apply_intelligent_dayparting(self.dry_run)
+                    if feature == 'bid_optimization':
+                        results['bid_optimization'] = self.bid_optimizer.optimize(self.dry_run)
+                    elif feature == 'dayparting':
+                        if self.bigquery_client:
+                            results['dayparting'] = self.dayparting.apply_intelligent_dayparting(self.dry_run)
+                        else:
+                            results['dayparting'] = self.dayparting.apply_dayparting(self.dry_run)
+                    elif feature == 'campaign_management':
+                        results['campaign_management'] = self.campaign_manager.manage_campaigns(self.dry_run)
+                    elif feature == 'keyword_discovery':
+                        results['keyword_discovery'] = self.keyword_discovery.discover_keywords(self.dry_run)
+                    elif feature == 'negative_keywords':
+                        results['negative_keywords'] = self.negative_keywords.add_negative_keywords(self.dry_run)
                     else:
-                        results['dayparting'] = self.dayparting.apply_dayparting(self.dry_run)
+                        logger.warning(f"Unknown feature '{feature}' encountered; skipping")
+                        results[feature] = {'warning': 'unknown_feature'}
                 except Exception as e:
-                    logger.error(f"Dayparting failed: {e}")
+                    logger.error(f"{feature} failed: {e}")
                     logger.debug(traceback.format_exc())
-                    results['dayparting'] = {'error': str(e)}
-            
-            if 'campaign_management' in features:
-                try:
-                    results['campaign_management'] = self.campaign_manager.manage_campaigns(self.dry_run)
-                except Exception as e:
-                    logger.error(f"Campaign management failed: {e}")
-                    results['campaign_management'] = {'error': str(e)}
-            
-            if 'keyword_discovery' in features:
-                try:
-                    results['keyword_discovery'] = self.keyword_discovery.discover_keywords(self.dry_run)
-                except Exception as e:
-                    logger.error(f"Keyword discovery failed: {e}")
-                    results['keyword_discovery'] = {'error': str(e)}
-            
-            if 'negative_keywords' in features:
-                try:
-                    results['negative_keywords'] = self.negative_keywords.add_negative_keywords(self.dry_run)
-                except Exception as e:
-                    logger.error(f"Negative keywords management failed: {e}")
-                    results['negative_keywords'] = {'error': str(e)}
-            
+                    results[feature] = {'error': str(e)}
+
+                # After feature completion, emit feature-level update
+                post_pct = start_pct + ((idx + 1) / max(total, 1)) * pct_span
+                if self.dashboard_client:
+                    try:
+                        self.dashboard_client.send_feature_update(feature, results.get(feature, {}), post_pct)
+                    except Exception:
+                        logger.debug("Dashboard feature update failed (non-blocking)")
+
         except Exception as e:
             logger.error(f"Automation failed with unexpected error: {e}")
             logger.error(traceback.format_exc())

@@ -4,6 +4,24 @@
  */
 
 import { Buffer } from 'buffer';
+// Optional imports are resolved dynamically to avoid hard failures if the
+// dependency is not present (e.g. during initial deploy without secret manager use)
+// We declare types minimally to keep this file self-contained.
+
+type SecretManagerClientType = {
+  accessSecretVersion: (req: { name: string }) => Promise<[{ payload: { data: Buffer } }]>;
+};
+
+function getSecretManagerClient(): SecretManagerClientType | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+    return new SecretManagerServiceClient();
+  } catch (err) {
+    console.warn('[Credentials] Secret Manager library not available, skipping secret fetch');
+    return undefined;
+  }
+}
 
 export interface CredentialParseResult {
   success: boolean;
@@ -493,19 +511,81 @@ export function resolveGCPCredentials(): CredentialParseResult {
   }
 
   // No credentials found
-  console.error('[Credentials] No service account credentials found in environment variables');
+  console.warn('[Credentials] No direct credential env vars found. Attempting automatic fetch mechanisms...');
+
+  // 1. Attempt Secret Manager fetch if a secret name is provided.
+  const secretNameEnv = getFirstSetEnv(['GCP_SERVICE_ACCOUNT_SECRET_NAME', 'GCP_SECRET_NAME', 'GOOGLE_SERVICE_ACCOUNT_SECRET']);
+  if (secretNameEnv) {
+    const projectIdGuess = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
+    if (!projectIdGuess) {
+      console.warn('[Credentials] Project ID not set; Secret Manager fetch may fail (set GOOGLE_CLOUD_PROJECT).');
+    }
+    const client = getSecretManagerClient();
+    if (client) {
+      const projectIdForSecret = projectIdGuess || 'UNKNOWN_PROJECT';
+      const secretResource = secretNameEnv.includes('/secrets/')
+        ? secretNameEnv // full resource path provided
+        : `projects/${projectIdForSecret}/secrets/${secretNameEnv}/versions/latest`;
+      try {
+        console.log(`[Credentials] Attempting Secret Manager fetch: ${secretResource}`);
+        const [version] = await client.accessSecretVersion({ name: secretResource });
+        const payload = version.payload.data.toString('utf8');
+        const parsed = parseServiceAccountValue(payload, `${secretNameEnv} (secret manager)`);
+        if (parsed.success && parsed.credentials) {
+          const validated = validateServiceAccountStructure(parsed.credentials, parsed.source!);
+          if (validated.success) {
+            console.log('[Credentials] ✓ Successfully loaded credentials from Secret Manager');
+            return validated;
+          }
+          return validated; // return validation error if structure invalid
+        }
+        console.warn('[Credentials] Secret Manager payload did not parse as valid credentials');
+      } catch (e: any) {
+        console.warn(`[Credentials] Secret Manager fetch failed: ${e.message}`);
+      }
+    }
+  }
+
+  // 2. Attempt remote URL fetch if provided (raw JSON or base64 expected)
+  const remoteUrl = getFirstSetEnv(['GCP_SERVICE_ACCOUNT_KEY_URL', 'GCP_CREDENTIALS_URL', 'GOOGLE_CREDENTIALS_URL']);
+  if (remoteUrl) {
+    try {
+      console.log(`[Credentials] Attempting remote fetch of credentials from URL: ${remoteUrl}`);
+      const res = await fetch(remoteUrl);
+      if (!res.ok) {
+        console.warn(`[Credentials] Remote credential fetch failed with status ${res.status}`);
+      } else {
+        const text = await res.text();
+        const parsed = parseServiceAccountValue(text, `${remoteUrl} (fetched)`);
+        if (parsed.success && parsed.credentials) {
+          const validated = validateServiceAccountStructure(parsed.credentials, parsed.source!);
+          if (validated.success) {
+            console.log('[Credentials] ✓ Successfully loaded credentials from remote URL');
+            return validated;
+          }
+          return validated;
+        }
+        console.warn('[Credentials] Remote content did not parse as valid credentials');
+      }
+    } catch (e: any) {
+      console.warn(`[Credentials] Remote fetch error: ${e.message}`);
+    }
+  }
+
+  console.error('[Credentials] Automatic credential resolution failed (env vars, secret manager, URL).');
   return {
     success: false,
     error: {
       type: 'missing',
       message: 'No Google Cloud service account credentials configured',
-      details: 'No supported credential environment variables found',
+      details: 'Env vars, Secret Manager, and remote URL lookup all failed.',
       troubleshooting: [
         'Option 1: Set GCP_SERVICE_ACCOUNT_KEY with your service account JSON (raw or base64 encoded)',
-        'Option 2: Set GOOGLE_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS with your service account JSON',
-        'Option 3: Set individual variables: GCP_CLIENT_EMAIL + GCP_PRIVATE_KEY (with \\n for newlines)',
-        'After setting credentials, redeploy the application',
-        'Verify configuration at: /api/config-check',
+        'Option 2: Provide secret name via GCP_SERVICE_ACCOUNT_SECRET_NAME (with GOOGLE_CLOUD_PROJECT set)',
+        'Option 3: Set GCP_SERVICE_ACCOUNT_KEY_URL pointing to a secure HTTPS JSON credential',
+        'Option 4: Set GCP_CLIENT_EMAIL + GCP_PRIVATE_KEY (with \\n for newlines)',
+        'Redeploy after updating configuration',
+        'Verify at /api/config-check and /api/credentials-debug',
       ],
     },
   };
