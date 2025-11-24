@@ -43,7 +43,7 @@ class TestDashboardEndpoints(unittest.TestCase):
         """Test listing BigQuery tables"""
         # Mock BigQuery client and tables
         mock_bq = MagicMock()
-        mock_client.return_value = mock_bq
+        mock_client.return_value = (mock_bq, None)
         
         # Mock table list
         mock_table = MagicMock()
@@ -69,19 +69,20 @@ class TestDashboardEndpoints(unittest.TestCase):
     @patch('app.get_bigquery_client')
     def test_list_tables_no_client(self, mock_client):
         """Test listing tables when client fails"""
-        mock_client.return_value = None
+        mock_client.return_value = (None, "Could not load Google Cloud credentials for BigQuery. Please ensure GCP_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS is set.")
         
         response = self.client.get('/api/tables')
         self.assertEqual(response.status_code, 500)
         
         data = json.loads(response.data)
         self.assertIn('error', data)
+        self.assertIn('Could not load Google Cloud credentials', data['error'])
     
     @patch('app.get_bigquery_client')
     def test_get_table_data(self, mock_client):
         """Test getting table data"""
         mock_bq = MagicMock()
-        mock_client.return_value = mock_bq
+        mock_client.return_value = (mock_bq, None)
         
         # Mock query results
         mock_row = {'timestamp': '2024-01-01', 'run_id': 'test123', 'status': 'success'}
@@ -108,7 +109,7 @@ class TestDashboardEndpoints(unittest.TestCase):
     def test_get_table_schema(self, mock_client):
         """Test getting table schema"""
         mock_bq = MagicMock()
-        mock_client.return_value = mock_bq
+        mock_client.return_value = (mock_bq, None)
         
         # Mock table with schema
         mock_field = MagicMock()
@@ -136,7 +137,7 @@ class TestDashboardEndpoints(unittest.TestCase):
     def test_get_summary(self, mock_client):
         """Test getting summary statistics"""
         mock_bq = MagicMock()
-        mock_client.return_value = mock_bq
+        mock_client.return_value = (mock_bq, None)
         
         # Mock summary query result
         mock_result = [{
@@ -164,7 +165,7 @@ class TestDashboardEndpoints(unittest.TestCase):
     def test_get_chart_data_daily_performance(self, mock_client):
         """Test getting daily performance chart data"""
         mock_bq = MagicMock()
-        mock_client.return_value = mock_bq
+        mock_client.return_value = (mock_bq, None)
         
         # Mock chart data
         mock_result = [
@@ -193,7 +194,7 @@ class TestDashboardEndpoints(unittest.TestCase):
     def test_get_chart_data_invalid_type(self, mock_client):
         """Test getting chart data with invalid type"""
         mock_bq = MagicMock()
-        mock_client.return_value = mock_bq
+        mock_client.return_value = (mock_bq, None)
         
         response = self.client.get('/api/chart-data/invalid_chart')
         self.assertEqual(response.status_code, 400)
@@ -212,8 +213,9 @@ class TestUtilityFunctions(unittest.TestCase):
         mock_load.return_value = mock_creds
         
         with patch('app.bigquery.Client') as mock_bq_client:
-            client = app.get_bigquery_client()
+            client, error = app.get_bigquery_client()
             self.assertIsNotNone(client)
+            self.assertIsNone(error)
             mock_bq_client.assert_called_once()
     
     @patch('app.load_credentials')
@@ -222,9 +224,21 @@ class TestUtilityFunctions(unittest.TestCase):
         mock_load.return_value = None
         
         with patch('app.bigquery.Client') as mock_bq_client:
-            client = app.get_bigquery_client()
+            client, error = app.get_bigquery_client()
             self.assertIsNotNone(client)
+            self.assertIsNone(error)
             mock_bq_client.assert_called_once()
+    
+    @patch('app.load_credentials')
+    def test_get_bigquery_client_error_handling(self, mock_load):
+        """Test BigQuery client initialization with error"""
+        mock_load.side_effect = Exception("Credential loading failed")
+        
+        client, error = app.get_bigquery_client()
+        self.assertIsNone(client)
+        self.assertIsNotNone(error)
+        self.assertIn("Could not load Google Cloud credentials for BigQuery", error)
+        self.assertIn("Credential loading failed", error)
 
 
 if __name__ == '__main__':
