@@ -15,8 +15,12 @@ if 'GCP_SERVICE_ACCOUNT_KEY' in os.environ:
 if 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
     del os.environ['GOOGLE_APPLICATION_CREDENTIALS']
 
-# Add parent directory to path
+# Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import after path is set up
+import app
+from app import get_bigquery_client, BIGQUERY_CREDENTIAL_ERROR
 
 print("=" * 80)
 print("Verification: BigQuery Credential Error Message Fix")
@@ -26,8 +30,6 @@ print()
 # Test 1: Simulate missing credentials
 print("Test 1: Missing credentials")
 print("-" * 80)
-
-from dashboard.app import get_bigquery_client, BIGQUERY_CREDENTIAL_ERROR
 
 # This should fail due to missing credentials
 client, error_msg = get_bigquery_client()
