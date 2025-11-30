@@ -108,7 +108,6 @@ export async function POST(request: NextRequest) {
         process.env.GCP_PROJECT ||
         process.env.GOOGLE_CLOUD_PROJECT ||
         'amazon-ppc-474902';
-      const tableRef = `${projectId}.${datasetId}.optimization_results`;
 
       const summary = body.summary || {};
       const config = body.config_snapshot || {};
@@ -161,7 +160,7 @@ export async function POST(request: NextRequest) {
       }
     } catch (bqError: any) {
       console.error('Failed to store results in BigQuery:', bqError.message);
-      // We still return success to the optimizer even if logging failed
+      // Still respond 200 to the optimizer
     }
 
     return NextResponse.json(
