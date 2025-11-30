@@ -1,3 +1,6 @@
+cd /workspaces/Amazom-PPC/amazon_ppc_dashboard/nextjs_space
+
+cat > app/api/optimization-results/route.ts << 'EOF'
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
 import {
@@ -10,7 +13,7 @@ import {
 async function getBigQueryClient() {
   const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
 
-  // Resolve credentials (now async!)
+  // Resolve credentials (async)
   const credentialResult = await resolveGCPCredentials();
 
   let credentials: any = undefined;
@@ -22,7 +25,6 @@ async function getBigQueryClient() {
       projectId = credentialResult.projectId;
     }
   } else {
-    // Log warning but continue with Application Default Credentials
     console.warn(
       `Failed to resolve credentials: ${
         credentialResult.error?.message ?? 'Unknown error'
@@ -60,7 +62,6 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
 
-    // Log the results
     console.log('Optimization results received:', {
       run_id: body.run_id,
       status: body.status,
@@ -68,7 +69,6 @@ export async function POST(request: NextRequest) {
       summary: body.summary,
     });
 
-    // Validate required fields from enhanced schema
     const requiredFields = ['run_id', 'status', 'timestamp'];
     const missingFields = requiredFields.filter((field) => !body[field]);
 
@@ -83,7 +83,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check for expected enhanced fields and log warnings
     const expectedFields = [
       'summary',
       'features',
@@ -160,7 +159,6 @@ export async function POST(request: NextRequest) {
       }
     } catch (bqError: any) {
       console.error('Failed to store results in BigQuery:', bqError.message);
-      // Still respond 200 to the optimizer
     }
 
     return NextResponse.json(
@@ -181,3 +179,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+EOF
