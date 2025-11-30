@@ -274,4 +274,399 @@ def create_kpi_metrics(df: pd.DataFrame):
 
     with col5:
         st.metric("ROAS", f"{overall_roas:.2f}x")
-        st.met
+        st.metric("Conversions", f"{total_conversions:,}")
+
+
+def create_performance_trend_chart(df: pd.DataFrame):
+    if df.empty:
+        st.info("No performance data for selected range.")
+        return
+
+    daily_metrics = df.groupby('report_date').agg({
+        'impressions': 'sum',
+        'clicks': 'sum',
+        'cost': 'sum',
+        'attributedSales14d': 'sum',
+    }).reset_index()
+
+    daily_metrics = calculate_metrics(daily_metrics)
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=('Spend & Sales Over Time', 'ACOS Trend',
+                       'Clicks & Impressions', 'ROAS Trend'),
+        specs=[[{"secondary_y": False}, {"secondary_y": False}],
+               [{"secondary_y": True}, {"secondary_y": False}]]
+    )
+
+    fig.add_trace(
+        go.Scatter(x=daily_metrics['report_date'], y=daily_metrics['cost'],
+                   name='Spend', line=dict(color='#ff6b6b')),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=daily_metrics['report_date'], y=daily_metrics['attributedSales14d'],
+                   name='Sales', line=dict(color='#51cf66')),
+        row=1, col=1
+    )
+
+    fig.add_trace(
+        go.Scatter(x=daily_metrics['report_date'], y=daily_metrics['acos'],
+                   name='ACOS', line=dict(color='#748ffc')),
+        row=1, col=2
+    )
+    fig.add_hline(y=30, line_dash="dash", line_color="orange",
+                  annotation_text="Target ACOS", row=1, col=2)
+
+    fig.add_trace(
+        go.Scatter(x=daily_metrics['report_date'], y=daily_metrics['impressions'],
+                   name='Impressions', line=dict(color='#4dabf7')),
+        row=2, col=1, secondary_y=False
+    )
+    fig.add_trace(
+        go.Scatter(x=daily_metrics['report_date'], y=daily_metrics['clicks'],
+                   name='Clicks', line=dict(color='#ff9900')),
+        row=2, col=1, secondary_y=True
+    )
+
+    fig.add_trace(
+        go.Scatter(x=daily_metrics['report_date'], y=daily_metrics['roas'],
+                   name='ROAS', line=dict(color='#20c997')),
+        row=2, col=2
+    )
+
+    fig.update_layout(height=600, showlegend=True, title_text="Performance Trends")
+    fig.update_xaxes(title_text="Date")
+    fig.update_yaxes(title_text="Amount ($)", row=1, col=1)
+    fig.update_yaxes(title_text="ACOS (%)", row=1, col=2)
+    fig.update_yaxes(title_text="Impressions", row=2, col=1, secondary_y=False)
+    fig.update_yaxes(title_text="Clicks", row=2, col=1, secondary_y=True)
+    fig.update_yaxes(title_text="ROAS", row=2, col=2)
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def create_campaign_comparison(df: pd.DataFrame):
+    if df.empty:
+        st.info("No campaign data for selected range.")
+        return
+
+    campaign_summary = df.groupby('campaign_name').agg({
+        'impressions': 'sum',
+        'clicks': 'sum',
+        'cost': 'sum',
+        'attributedSales14d': 'sum',
+        'attributedConversions14d': 'sum'
+    }).reset_index()
+
+    campaign_summary = calculate_metrics(campaign_summary)
+    campaign_summary = campaign_summary.sort_values('cost', ascending=True)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        y=campaign_summary['campaign_name'],
+        x=campaign_summary['cost'],
+        name='Spend',
+        orientation='h',
+        marker=dict(color='#ff6b6b')
+    ))
+
+    fig.add_trace(go.Bar(
+        y=campaign_summary['campaign_name'],
+        x=campaign_summary['attributedSales14d'],
+        name='Sales',
+        orientation='h',
+        marker=dict(color='#51cf66')
+    ))
+
+    fig.update_layout(
+        title="Campaign Performance Comparison",
+        xaxis_title="Amount ($)",
+        yaxis_title="Campaign",
+        barmode='group',
+        height=400
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Campaign Details")
+    display_df = campaign_summary[[
+        'campaign_name', 'impressions', 'clicks', 'cost',
+        'attributedSales14d', 'ctr', 'cpc', 'acos', 'roas'
+    ]].copy()
+
+    display_df.columns = [
+        'Campaign', 'Impressions', 'Clicks', 'Spend',
+        'Sales', 'CTR (%)', 'CPC ($)', 'ACOS (%)', 'ROAS'
+    ]
+
+    display_df['Spend'] = display_df['Spend'].apply(lambda x: f"${x:,.2f}")
+    display_df['Sales'] = display_df['Sales'].apply(lambda x: f"${x:,.2f}")
+    display_df['CTR (%)'] = display_df['CTR (%)'].apply(lambda x: f"{x:.2f}%")
+    display_df['CPC ($)'] = display_df['CPC ($)'].apply(lambda x: f"${x:.2f}")
+    display_df['ACOS (%)'] = display_df['ACOS (%)'].apply(lambda x: f"{x:.2f}%")
+    display_df['ROAS'] = display_df['ROAS'].apply(lambda x: f"{x:.2f}x")
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+
+def create_keyword_performance(df: pd.DataFrame):
+    if df.empty:
+        st.info("No keyword performance data available")
+        return
+
+    keyword_summary = df.groupby(['keywordText', 'matchType']).agg({
+        'impressions': 'sum',
+        'clicks': 'sum',
+        'cost': 'sum',
+        'attributedSales14d': 'sum',
+        'attributedConversions14d': 'sum'
+    }).reset_index()
+
+    keyword_summary = calculate_metrics(keyword_summary)
+    keyword_summary = keyword_summary.sort_values('cost', ascending=False).head(20)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = px.bar(
+            keyword_summary.head(10),
+            x='cost',
+            y='keywordText',
+            color='matchType',
+            orientation='h',
+            title='Top 10 Keywords by Spend',
+            labels={'cost': 'Spend ($)', 'keywordText': 'Keyword'},
+            color_discrete_map={'EXACT': '#20c997', 'PHRASE': '#4dabf7', 'BROAD': '#ff9900'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        keyword_summary_filtered = keyword_summary[keyword_summary['acos'] < 200]
+        fig = px.scatter(
+            keyword_summary_filtered,
+            x='cost',
+            y='acos',
+            size='attributedSales14d',
+            color='matchType',
+            hover_data=['keywordText'],
+            title='Keyword ACOS vs Spend',
+            labels={'cost': 'Spend ($)', 'acos': 'ACOS (%)'},
+            color_discrete_map={'EXACT': '#20c997', 'PHRASE': '#4dabf7', 'BROAD': '#ff9900'}
+        )
+        fig.add_hline(y=30, line_dash="dash", line_color="red", annotation_text="Target ACOS")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Top Keywords Details")
+    display_df = keyword_summary[[
+        'keywordText', 'matchType', 'impressions', 'clicks',
+        'cost', 'attributedSales14d', 'ctr', 'cpc', 'acos', 'roas'
+    ]].copy()
+
+    display_df.columns = [
+        'Keyword', 'Match Type', 'Impressions', 'Clicks',
+        'Spend', 'Sales', 'CTR (%)', 'CPC ($)', 'ACOS (%)', 'ROAS'
+    ]
+
+    display_df['Spend'] = display_df['Spend'].apply(lambda x: f"${x:,.2f}")
+    display_df['Sales'] = display_df['Sales'].apply(lambda x: f"${x:,.2f}")
+    display_df['CTR (%)'] = display_df['CTR (%)'].apply(lambda x: f"{x:.2f}%")
+    display_df['CPC ($)'] = display_df['CPC ($)'].apply(lambda x: f"${x:.2f}")
+    display_df['ACOS (%)'] = display_df['ACOS (%)'].apply(lambda x: f"{x:.2f}%")
+    display_df['ROAS'] = display_df['ROAS'].apply(lambda x: f"{x:.2f}x")
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+
+def create_budget_utilization(campaign_budgets: pd.DataFrame, campaign_performance: pd.DataFrame):
+    if campaign_performance.empty:
+        st.info("No performance data available for budget analysis.")
+        return
+
+    latest_budgets = campaign_budgets.copy()
+
+    recent_date = campaign_performance['report_date'].max()
+    week_ago = recent_date - timedelta(days=7)
+    recent_performance = campaign_performance[
+        campaign_performance['report_date'] > week_ago
+    ].groupby('campaignId').agg({
+        'cost': 'sum'
+    }).reset_index()
+    recent_performance['daily_avg_spend'] = recent_performance['cost'] / 7
+
+    budget_analysis = latest_budgets.merge(
+        recent_performance,
+        left_on='campaign_id',
+        right_on='campaignId',
+        how='left'
+    )
+    budget_analysis['daily_avg_spend'] = budget_analysis['daily_avg_spend'].fillna(0)
+    budget_analysis['utilization'] = (
+        budget_analysis['daily_avg_spend'] / budget_analysis['daily_budget'] * 100
+    )
+
+    st.subheader("Budget Utilization (Last 7 Days)")
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        y=budget_analysis['campaign_name'],
+        x=budget_analysis['daily_budget'],
+        name='Daily Budget',
+        orientation='h',
+        marker=dict(color='lightblue')
+    ))
+
+    fig.add_trace(go.Bar(
+        y=budget_analysis['campaign_name'],
+        x=budget_analysis['daily_avg_spend'],
+        name='Avg Daily Spend',
+        orientation='h',
+        marker=dict(color='#ff9900')
+    ))
+
+    fig.update_layout(
+        barmode='overlay',
+        xaxis_title="Amount ($)",
+        yaxis_title="Campaign",
+        height=400
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Budget Recommendations")
+
+    over_budget = budget_analysis[budget_analysis['utilization'] >= 90]
+    under_budget = budget_analysis[budget_analysis['utilization'] < 50]
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if not over_budget.empty:
+            st.warning("⚠️ Campaigns Near/Over Budget")
+            for _, row in over_budget.iterrows():
+                st.write(f"- **{row['campaign_name']}**: {row['utilization']:.1f}% utilized")
+        else:
+            st.success("✅ No campaigns over budget")
+
+    with col2:
+        if not under_budget.empty:
+            st.info("💡 Campaigns Under-Utilizing Budget")
+            for _, row in under_budget.iterrows():
+                st.write(f"- **{row['campaign_name']}**: {row['utilization']:.1f}% utilized")
+        else:
+            st.success("✅ All campaigns utilizing budget well")
+
+
+# ============================================================================
+# MAIN DASHBOARD
+# ============================================================================
+
+def main():
+    st.title("📊 Amazon PPC Performance Dashboard")
+    st.markdown("Real-time insights into your Amazon advertising campaigns")
+
+    st.sidebar.title("⚙️ Configuration")
+
+    data_source = st.sidebar.radio(
+        "Data Source",
+        ["Sample Data (Demo)", "BigQuery"]
+    )
+
+    if data_source == "BigQuery":
+        st.sidebar.subheader("BigQuery Settings")
+        default_project = os.getenv("GCP_PROJECT_ID", "")
+        project_id = st.sidebar.text_input("Project ID", value=default_project)
+        dataset_id = st.sidebar.text_input("Dataset ID", value="amazon_ads_data")
+
+        if project_id:
+            with st.spinner("Loading data from BigQuery..."):
+                data = load_data_from_bigquery(project_id, dataset_id)
+        else:
+            st.warning("Please enter BigQuery Project ID in the sidebar; using sample data instead.")
+            data = generate_sample_data()
+    else:
+        data = generate_sample_data()
+
+    campaign_budgets = data['campaign_budgets']
+    campaign_performance = data['campaign_performance']
+    keyword_performance = data['keyword_performance']
+
+    for df in (campaign_performance, keyword_performance):
+        if "report_date" in df.columns:
+            df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
+
+    campaign_performance = calculate_metrics(campaign_performance)
+    keyword_performance = calculate_metrics(keyword_performance)
+
+    st.sidebar.subheader("📅 Date Range")
+    if 'report_date' in campaign_performance.columns and not campaign_performance.empty:
+        min_ts = campaign_performance['report_date'].min()
+        max_ts = campaign_performance['report_date'].max()
+
+        if pd.isna(min_ts) or pd.isna(max_ts):
+            today = date.today()
+            min_date_val = today - timedelta(days=30)
+            max_date_val = today
+        else:
+            min_date_val = min_ts.date()
+            max_date_val = max_ts.date()
+
+        default_start = max_date_val - timedelta(days=7)
+        if default_start < min_date_val:
+            default_start = min_date_val
+
+        date_range = st.sidebar.date_input(
+            "Select Date Range",
+            value=(default_start, max_date_val),
+            min_value=min_date_val,
+            max_value=max_date_val
+        )
+
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_date_input, end_date_input = date_range
+            start_ts = pd.to_datetime(start_date_input)
+            end_ts = pd.to_datetime(end_date_input)
+
+            campaign_performance = campaign_performance[
+                (campaign_performance['report_date'] >= start_ts) &
+                (campaign_performance['report_date'] <= end_ts)
+            ]
+            keyword_performance = keyword_performance[
+                (keyword_performance['report_date'] >= start_ts) &
+                (keyword_performance['report_date'] <= end_ts)
+            ]
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    st.header("📈 Key Performance Indicators")
+    create_kpi_metrics(campaign_performance)
+
+    st.markdown("---")
+
+    st.header("📊 Performance Trends")
+    create_performance_trend_chart(campaign_performance)
+
+    st.markdown("---")
+
+    st.header("🎯 Campaign Performance")
+    create_campaign_comparison(campaign_performance)
+
+    st.markdown("---")
+
+    st.header("💰 Budget Management")
+    create_budget_utilization(campaign_budgets, campaign_performance)
+
+    st.markdown("---")
+
+    st.header("🔑 Keyword Performance")
+    create_keyword_performance(keyword_performance)
+
+    st.markdown("---")
+    st.caption("Amazon PPC Dashboard | Powered by Nature's Way Soil Optimizer | v1.0.1")
+
+
+if __name__ == "__main__":
+    main()
