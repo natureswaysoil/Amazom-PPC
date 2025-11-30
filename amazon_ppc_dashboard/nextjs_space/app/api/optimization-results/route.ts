@@ -1,5 +1,9 @@
 cd /workspaces/Amazom-PPC/amazon_ppc_dashboard/nextjs_space
 
+# 1) Remove the old file completely
+rm app/api/optimization-results/route.ts
+
+# 2) Recreate it with a clean, simple version
 cat > app/api/optimization-results/route.ts << 'EOF'
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
@@ -88,7 +92,6 @@ export async function POST(request: NextRequest) {
       enabled_features: enabledFeatures,
       errors,
       warnings,
-      // Enhanced JSON fields
       campaigns: JSON.stringify(body.campaigns || []),
       top_performers: JSON.stringify(body.top_performers || []),
       features: JSON.stringify(body.features || {}),
@@ -130,3 +133,4 @@ export async function POST(request: NextRequest) {
   }
 }
 EOF
+
