@@ -6,37 +6,32 @@ import {
   PROJECT_ID_ENV_NAMES,
 } from '../lib/credentials';
 
-const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
-const DEFAULT_DATASET_ID = process.env.BQ_DATASET_ID || 'amazon_ppc';
-
-// If needed, force Node runtime (optional)
-// export const runtime = 'nodejs';
-
 // Get BigQuery client with proper credential handling
-async function getBigQueryClient(): Promise<BigQuery> {
-  let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES) || DEFAULT_PROJECT_ID;
-  let credentials: any | undefined;
+async function getBigQueryClient() {
+  const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
 
-  try {
-    // ✅ ASYNC now
-    const credentialResult = await resolveGCPCredentials();
+  // Resolve credentials (now async!)
+  const credentialResult = await resolveGCPCredentials();
 
-    if (credentialResult.success && credentialResult.credentials) {
-      credentials = credentialResult.credentials;
+  let credentials: any = undefined;
+  let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
 
-      if (!projectId && credentialResult.projectId) {
-        projectId = credentialResult.projectId;
-      }
-    } else if (credentialResult.error) {
-      console.warn(
-        `[BigQuery] Failed to resolve credentials: ${credentialResult.error.message}`
-      );
+  if (credentialResult.success) {
+    credentials = credentialResult.credentials;
+    if (!projectId && credentialResult.projectId) {
+      projectId = credentialResult.projectId;
     }
-  } catch (err: any) {
+  } else {
+    // Log warning but continue with Application Default Credentials
     console.warn(
-      '[BigQuery] Error while resolving credentials:',
-      err?.message || String(err)
+      `Failed to resolve credentials: ${
+        credentialResult.error?.message ?? 'Unknown error'
+      }`,
     );
+  }
+
+  if (!projectId) {
+    projectId = DEFAULT_PROJECT_ID;
   }
 
   return new BigQuery({
@@ -84,7 +79,7 @@ export async function POST(request: NextRequest) {
           error: 'Invalid payload',
           message: `Missing required fields: ${missingFields.join(', ')}`,
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -101,20 +96,18 @@ export async function POST(request: NextRequest) {
     if (missingEnhancedFields.length > 0) {
       console.warn('⚠️ Missing enhanced fields in payload:', missingEnhancedFields);
       console.warn(
-        'This may indicate the optimizer is not sending the complete enhanced payload.'
+        'This may indicate the optimizer is not sending the complete enhanced payload.',
       );
     }
 
     // Store in BigQuery
     try {
-      // ✅ ASYNC client
       const bigquery = await getBigQueryClient();
-      const datasetId = DEFAULT_DATASET_ID;
+      const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
       const projectId =
         process.env.GCP_PROJECT ||
         process.env.GOOGLE_CLOUD_PROJECT ||
-        DEFAULT_PROJECT_ID;
-
+        'amazon-ppc-474902';
       const tableRef = `${projectId}.${datasetId}.optimization_results`;
 
       const summary = body.summary || {};
@@ -150,27 +143,25 @@ export async function POST(request: NextRequest) {
         enabled_features: enabledFeatures,
         errors,
         warnings,
-        // Enhanced fields stored as JSON
         campaigns: JSON.stringify(body.campaigns || []),
         top_performers: JSON.stringify(body.top_performers || []),
         features: JSON.stringify(body.features || {}),
         config_snapshot: JSON.stringify(body.config_snapshot || {}),
       };
 
-      const insertErrors = await bigquery
+      const [insertErrors] = await bigquery
         .dataset(datasetId)
         .table('optimization_results')
         .insert([row]);
 
       if (insertErrors && insertErrors.length > 0) {
         console.error('BigQuery insert errors:', insertErrors);
-        // Don't fail the request, just log the error
       } else {
         console.log('✅ Successfully stored optimization results in BigQuery');
       }
     } catch (bqError: any) {
-      console.error('Failed to store results in BigQuery:', bqError?.message || bqError);
-      // Don't fail the request if BigQuery storage fails
+      console.error('Failed to store results in BigQuery:', bqError.message);
+      // We still return success to the optimizer even if logging failed
     }
 
     return NextResponse.json(
@@ -179,7 +170,7 @@ export async function POST(request: NextRequest) {
         received: true,
         run_id: body.run_id,
       },
-      { status: 200 }
+      { status: 200 },
     );
   } catch (error) {
     console.error('Error processing results:', error);
@@ -187,7 +178,7 @@ export async function POST(request: NextRequest) {
       {
         error: 'Internal server error',
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
