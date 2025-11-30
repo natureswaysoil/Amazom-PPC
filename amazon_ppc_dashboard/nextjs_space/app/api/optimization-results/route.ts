@@ -4,6 +4,7 @@ import { BigQuery } from '@google-cloud/bigquery';
 
 export async function POST(request: NextRequest) {
   try {
+    // Optional API key auth
     const apiKey = process.env.DASHBOARD_API_KEY;
     const authHeader = request.headers.get('authorization');
     const bearerToken = authHeader?.startsWith('Bearer ')
@@ -24,22 +25,23 @@ export async function POST(request: NextRequest) {
     }
 
     const bigquery = new BigQuery();
-
     const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
 
     await bigquery
       .dataset(datasetId)
       .table('optimization_results')
-      .insert([{
-        ...body,
-        timestamp: body.timestamp || new Date().toISOString(),
-      }]);
+      .insert([
+        {
+          ...body,
+          timestamp: body.timestamp || new Date().toISOString(),
+        },
+      ]);
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (err: any) {
-    console.error(err);
+    console.error('Error in optimization-results route:', err);
     return NextResponse.json(
-      { error: err.message || 'Internal error' },
+      { error: err?.message || 'Internal server error' },
       { status: 500 },
     );
   }
