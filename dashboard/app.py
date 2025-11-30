@@ -12,36 +12,29 @@ Tables displayed:
 - optimization_errors
 - optimizer_run_events
 """
-
 import os
-import json
-import logging
-import traceback
-from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
 from google.cloud import bigquery
-from google.oauth2 import service_account
-
-# Import centralized credential loading
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from gcp_credentials import load_credentials
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Error message constant
-BIGQUERY_CREDENTIAL_ERROR = "Could not load Google Cloud credentials for BigQuery. Please ensure GCP_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS is set."
+BIGQUERY_CREDENTIAL_ERROR = (
+    "Could not load Google Cloud credentials for BigQuery. "
+    "Make sure GOOGLE_APPLICATION_CREDENTIALS is set to your key.json "
+    "or that Application Default Credentials are configured."
+)
 
 app = Flask(__name__)
 CORS(app)
 
 # Configuration
-# Project ID should be set via GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT environment variable
-# or configured in config.json
-PROJECT_ID = os.getenv('GCP_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT', 'amazon-ppc-474902')
-DATASET_ID = os.getenv('BIGQUERY_DATASET', 'amazon_ppc')
+# Project ID can come from env vars; falls back to your project
+PROJECT_ID = (
+    os.getenv("GCP_PROJECT_ID")
+    or os.getenv("GOOGLE_CLOUD_PROJECT")
+    or "amazon-ppc-474902"
+)
+
 
 def get_bigquery_client():
     """
