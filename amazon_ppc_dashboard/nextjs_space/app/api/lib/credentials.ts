@@ -203,30 +203,30 @@ function buildCredentialsFromEnvironmentParts(): any | undefined {
 function detectBase64Likelihood(value: string): number {
   // Remove whitespace for analysis
   const cleaned = value.trim().replace(/\s+/g, '');
-  
+
   // Check if it starts with { or [ (likely raw JSON)
   if (cleaned.startsWith('{') || cleaned.startsWith('[')) {
     return 0.0;
   }
-  
+
   // Check character composition
   const base64Pattern = /^[A-Za-z0-9+/]+=*$/;
   if (!base64Pattern.test(cleaned)) {
     return 0.0;
   }
-  
+
   // Base64 strings are typically much longer and have specific length characteristics
   if (cleaned.length < 100) {
     return 0.3; // Might be base64 but suspicious
   }
-  
+
   // Check for typical base64 padding
   const paddingMatch = cleaned.match(/=*$/);
   const padding = paddingMatch ? paddingMatch[0].length : 0;
   if (padding > 2) {
     return 0.2; // Invalid base64 padding
   }
-  
+
   // Strong indicator: Length is a multiple of 4 (or close to it)
   const remainder = cleaned.length % 4;
   if (remainder === 0) {
@@ -234,7 +234,7 @@ function detectBase64Likelihood(value: string): number {
   } else if (remainder <= 2) {
     return 0.7;
   }
-  
+
   return 0.5;
 }
 
@@ -261,13 +261,13 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
 
   // Clean up common issues: extra whitespace, newlines within the value
   let cleanedValue = value.trim();
-  
+
   // Remove line breaks that might have been added during copy/paste
   if (cleanedValue.includes('\n') && !cleanedValue.startsWith('{')) {
     cleanedValue = cleanedValue.replace(/\n/g, '');
     console.log(`[Credentials] Removed embedded newlines from ${source}`);
   }
-  
+
   // Try URL decoding if it looks URL encoded
   if (cleanedValue.includes('%22') || cleanedValue.includes('%7B') || cleanedValue.includes('%7D')) {
     try {
@@ -275,7 +275,7 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
       console.log(`[Credentials] ${source} appears to be URL-encoded, attempting to decode...`);
       cleanedValue = urlDecoded;
     } catch (urlErr) {
-      console.log(`[Credentials] URL decode failed, continuing with original value`);
+      console.log('[Credentials] URL decode failed, continuing with original value');
     }
   }
 
@@ -306,7 +306,7 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
       console.log(`[Credentials] Successfully decoded ${source} from base64`);
       console.log(`[Credentials] Decoded length: ${decoded.length} characters`);
       console.log(`[Credentials] Decoded preview (first 100 chars): ${decoded.substring(0, 100)}`);
-      
+
       try {
         const parsed = JSON.parse(decoded);
         console.log(`[Credentials] ✓ Successfully parsed decoded ${source} as JSON`);
@@ -319,17 +319,19 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
       } catch (decodedJsonError: any) {
         console.error(`[Credentials] Decoded ${source} is not valid JSON: ${decodedJsonError.message}`);
         console.error(`[Credentials] Decoded content (first 500 chars): ${decoded.substring(0, 500)}`);
-        
+
         // Check if the decoded content looks like it might be double-encoded or has other issues
         let additionalGuidance: string[] = [];
         if (decoded.startsWith('data:') || decoded.includes('base64,')) {
-          additionalGuidance.push('The decoded content appears to contain a data URL. Use only the service account JSON, not a data URL.');
+          additionalGuidance.push(
+            'The decoded content appears to contain a data URL. Use only the service account JSON, not a data URL.',
+          );
         } else if (decoded.includes('\\n') && !decoded.includes('\n')) {
           additionalGuidance.push('The decoded content contains escaped newlines (\\n). These should be actual newlines in the JSON.');
         } else if (decoded.trim().length === 0) {
           additionalGuidance.push('The decoded content is empty. The base64 string may be invalid or incomplete.');
         }
-        
+
         return {
           success: false,
           error: {
@@ -342,7 +344,7 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
               `Verify your service-account.json file is valid JSON before encoding: 'cat service-account.json | jq .'`,
               `Test the encoding/decoding locally: 'echo "$GCP_SERVICE_ACCOUNT_KEY" | base64 -d | jq .'`,
               ...additionalGuidance,
-              `After correcting the value, redeploy the application`,
+              'After correcting the value, redeploy the application',
             ],
           },
         };
@@ -360,9 +362,9 @@ function parseServiceAccountValue(value: string | undefined, source: string): Cr
   let troubleshooting = [
     `Option 1 (Raw JSON - Recommended): Set ${source} to the entire contents of your service account key file`,
     `Option 2 (Base64): Run 'cat service-account.json | base64 | tr -d "\\n"' and set ${source} to the output`,
-    `Ensure there are no extra spaces, line breaks, or special characters in the environment variable`,
-    `Verify the JSON is valid before encoding: 'cat service-account.json | jq .'`,
-    `After correcting the value, redeploy the application`,
+    'Ensure there are no extra spaces, line breaks, or special characters in the environment variable',
+    'Verify the JSON is valid before encoding: \'cat service-account.json | jq .\'',
+    'After correcting the value, redeploy the application',
   ];
 
   if (cleanedValue.startsWith('{') || cleanedValue.startsWith('[')) {
@@ -459,7 +461,7 @@ function validateServiceAccountStructure(credentials: any, source: string): Cred
  * Resolve GCP service account credentials from environment variables.
  * Returns parsed credentials, project ID, and detailed error information if parsing fails.
  */
-export function resolveGCPCredentials(): CredentialParseResult {
+export async function resolveGCPCredentials(): Promise<CredentialParseResult> {
   console.log('[Credentials] Starting credential resolution...');
 
   // Try to get credentials from JSON environment variable
@@ -467,7 +469,7 @@ export function resolveGCPCredentials(): CredentialParseResult {
   if (serviceAccountKeyResult) {
     console.log(`[Credentials] Found credentials in ${serviceAccountKeyResult.name}`);
     const parseResult = parseServiceAccountValue(serviceAccountKeyResult.value, serviceAccountKeyResult.name);
-    
+
     if (parseResult.success && parseResult.credentials) {
       const validationResult = validateServiceAccountStructure(parseResult.credentials, parseResult.source!);
       if (validationResult.success) {
@@ -475,7 +477,7 @@ export function resolveGCPCredentials(): CredentialParseResult {
       }
       return validationResult;
     }
-    
+
     // If parsing failed, return the error
     return parseResult;
   }
@@ -485,7 +487,7 @@ export function resolveGCPCredentials(): CredentialParseResult {
   if (googleCredentialsResult) {
     console.log(`[Credentials] Found credentials in ${googleCredentialsResult.name}`);
     const parseResult = parseServiceAccountValue(googleCredentialsResult.value, googleCredentialsResult.name);
-    
+
     if (parseResult.success && parseResult.credentials) {
       const validationResult = validateServiceAccountStructure(parseResult.credentials, parseResult.source!);
       if (validationResult.success) {
@@ -493,7 +495,7 @@ export function resolveGCPCredentials(): CredentialParseResult {
       }
       return validationResult;
     }
-    
+
     // If parsing failed, continue to try building from parts
     console.log('[Credentials] Failed to parse GOOGLE_APPLICATION_CREDENTIALS, trying credential parts...');
   }
@@ -503,7 +505,10 @@ export function resolveGCPCredentials(): CredentialParseResult {
   const credentialsFromParts = buildCredentialsFromEnvironmentParts();
   if (credentialsFromParts) {
     console.log('[Credentials] Successfully built credentials from individual environment variables');
-    const validationResult = validateServiceAccountStructure(credentialsFromParts, 'credential parts (GCP_CLIENT_EMAIL + GCP_PRIVATE_KEY)');
+    const validationResult = validateServiceAccountStructure(
+      credentialsFromParts,
+      'credential parts (GCP_CLIENT_EMAIL + GCP_PRIVATE_KEY)',
+    );
     if (validationResult.success) {
       return validationResult;
     }
@@ -514,7 +519,11 @@ export function resolveGCPCredentials(): CredentialParseResult {
   console.warn('[Credentials] No direct credential env vars found. Attempting automatic fetch mechanisms...');
 
   // 1. Attempt Secret Manager fetch if a secret name is provided.
-  const secretNameEnv = getFirstSetEnv(['GCP_SERVICE_ACCOUNT_SECRET_NAME', 'GCP_SECRET_NAME', 'GOOGLE_SERVICE_ACCOUNT_SECRET']);
+  const secretNameEnv = getFirstSetEnv([
+    'GCP_SERVICE_ACCOUNT_SECRET_NAME',
+    'GCP_SECRET_NAME',
+    'GOOGLE_SERVICE_ACCOUNT_SECRET',
+  ]);
   if (secretNameEnv) {
     const projectIdGuess = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
     if (!projectIdGuess) {
