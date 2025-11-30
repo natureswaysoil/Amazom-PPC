@@ -3,15 +3,10 @@ cd /workspaces/Amazom-PPC/amazon_ppc_dashboard/nextjs_space
 cat > app/api/optimization-results/route.ts << 'EOF'
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
-import {
-  resolveGCPCredentials,
-  getFirstSetEnv,
-  PROJECT_ID_ENV_NAMES,
-} from '../lib/credentials';
 
 export async function POST(request: NextRequest) {
   try {
-    // Verify API key
+    // Optional API key auth
     const apiKey = process.env.DASHBOARD_API_KEY;
     const authHeader = request.headers.get('authorization');
     const bearerToken = authHeader?.startsWith('Bearer ')
@@ -36,7 +31,7 @@ export async function POST(request: NextRequest) {
       summary: body.summary,
     });
 
-    // --- Validate payload ---
+    // Basic payload validation
     const requiredFields = ['run_id', 'status', 'timestamp'];
     const missingFields = requiredFields.filter((field) => !body[field]);
 
@@ -51,55 +46,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const expectedFields = [
-      'summary',
-      'features',
-      'campaigns',
-      'top_performers',
-      'config_snapshot',
-    ];
-    const missingEnhancedFields = expectedFields.filter((field) => !body[field]);
+    // Create BigQuery client using ADC / Vercel’s GCP integration
+    const bigquery = new BigQuery();
 
-    if (missingEnhancedFields.length > 0) {
-      console.warn('⚠️ Missing enhanced fields in payload:', missingEnhancedFields);
-      console.warn(
-        'This may indicate the optimizer is not sending the complete enhanced payload.',
-      );
-    }
-
-    // --- Resolve credentials & BigQuery client (ALL INSIDE async POST) ---
-    const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
-
-    const credentialResult = await resolveGCPCredentials();
-
-    let credentials: any = undefined;
-    let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
-
-    if (credentialResult.success) {
-      credentials = credentialResult.credentials;
-      if (!projectId && credentialResult.projectId) {
-        projectId = credentialResult.projectId;
-      }
-    } else {
-      console.warn(
-        `Failed to resolve credentials: ${
-          credentialResult.error?.message ?? 'Unknown error'
-        }`,
-      );
-    }
-
-    if (!projectId) {
-      projectId = DEFAULT_PROJECT_ID;
-    }
-
-    const bigquery = new BigQuery({
-      projectId,
-      ...(credentials && { credentials }),
-    });
-
-    // --- Build BigQuery row ---
     const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
-    const projectForTable =
+    const projectId =
       process.env.GCP_PROJECT ||
       process.env.GOOGLE_CLOUD_PROJECT ||
       'amazon-ppc-474902';
@@ -156,7 +107,7 @@ export async function POST(request: NextRequest) {
       }
     } catch (bqError: any) {
       console.error('Failed to store results in BigQuery:', bqError.message);
-      // Don’t fail the HTTP 200 just because logging to BigQuery failed
+      // Don’t fail the request just because logging to BigQuery failed
     }
 
     return NextResponse.json(
@@ -178,3 +129,4 @@ export async function POST(request: NextRequest) {
   }
 }
 EOF
+
