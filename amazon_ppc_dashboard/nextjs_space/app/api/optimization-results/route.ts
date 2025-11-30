@@ -88,6 +88,7 @@ export async function POST(request: NextRequest) {
       enabled_features: enabledFeatures,
       errors,
       warnings,
+      // Enhanced JSON fields
       campaigns: JSON.stringify(body.campaigns || []),
       top_performers: JSON.stringify(body.top_performers || []),
       features: JSON.stringify(body.features || {}),
@@ -129,4 +130,3 @@ export async function POST(request: NextRequest) {
   }
 }
 EOF
-
