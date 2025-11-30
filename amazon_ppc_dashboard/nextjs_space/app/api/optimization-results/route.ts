@@ -9,39 +9,6 @@ import {
   PROJECT_ID_ENV_NAMES,
 } from '../lib/credentials';
 
-// Get BigQuery client with proper credential handling
-async function getBigQueryClient() {
-  const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
-
-  // Resolve credentials (async)
-  const credentialResult = await resolveGCPCredentials();
-
-  let credentials: any = undefined;
-  let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
-
-  if (credentialResult.success) {
-    credentials = credentialResult.credentials;
-    if (!projectId && credentialResult.projectId) {
-      projectId = credentialResult.projectId;
-    }
-  } else {
-    console.warn(
-      `Failed to resolve credentials: ${
-        credentialResult.error?.message ?? 'Unknown error'
-      }`,
-    );
-  }
-
-  if (!projectId) {
-    projectId = DEFAULT_PROJECT_ID;
-  }
-
-  return new BigQuery({
-    projectId,
-    ...(credentials && { credentials }),
-  });
-}
-
 export async function POST(request: NextRequest) {
   try {
     // Verify API key
@@ -69,6 +36,7 @@ export async function POST(request: NextRequest) {
       summary: body.summary,
     });
 
+    // --- Validate payload ---
     const requiredFields = ['run_id', 'status', 'timestamp'];
     const missingFields = requiredFields.filter((field) => !body[field]);
 
@@ -99,54 +67,83 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store in BigQuery
+    // --- Resolve credentials & BigQuery client (ALL INSIDE async POST) ---
+    const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
+
+    const credentialResult = await resolveGCPCredentials();
+
+    let credentials: any = undefined;
+    let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
+
+    if (credentialResult.success) {
+      credentials = credentialResult.credentials;
+      if (!projectId && credentialResult.projectId) {
+        projectId = credentialResult.projectId;
+      }
+    } else {
+      console.warn(
+        `Failed to resolve credentials: ${
+          credentialResult.error?.message ?? 'Unknown error'
+        }`,
+      );
+    }
+
+    if (!projectId) {
+      projectId = DEFAULT_PROJECT_ID;
+    }
+
+    const bigquery = new BigQuery({
+      projectId,
+      ...(credentials && { credentials }),
+    });
+
+    // --- Build BigQuery row ---
+    const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
+    const projectForTable =
+      process.env.GCP_PROJECT ||
+      process.env.GOOGLE_CLOUD_PROJECT ||
+      'amazon-ppc-474902';
+
+    const summary = body.summary || {};
+    const config = body.config_snapshot || {};
+    const enabledFeatures = Array.isArray(config.enabled_features)
+      ? config.enabled_features
+      : [];
+    const errors = Array.isArray(body.errors)
+      ? body.errors.map((e: any) => String(e))
+      : [];
+    const warnings = Array.isArray(body.warnings)
+      ? body.warnings.map((w: any) => String(w))
+      : [];
+
+    const row = {
+      timestamp: body.timestamp || new Date().toISOString(),
+      run_id: body.run_id,
+      status: body.status || 'success',
+      profile_id: body.profile_id || '',
+      dry_run: body.dry_run || false,
+      duration_seconds: body.duration_seconds || 0,
+      campaigns_analyzed: summary.campaigns_analyzed || 0,
+      keywords_optimized: summary.keywords_optimized || 0,
+      bids_increased: summary.bids_increased || 0,
+      bids_decreased: summary.bids_decreased || 0,
+      negative_keywords_added: summary.negative_keywords_added || 0,
+      budget_changes: summary.budget_changes || 0,
+      total_spend: summary.total_spend || 0.0,
+      total_sales: summary.total_sales || 0.0,
+      average_acos: summary.average_acos || 0.0,
+      target_acos: config.target_acos || null,
+      lookback_days: config.lookback_days || null,
+      enabled_features: enabledFeatures,
+      errors,
+      warnings,
+      campaigns: JSON.stringify(body.campaigns || []),
+      top_performers: JSON.stringify(body.top_performers || []),
+      features: JSON.stringify(body.features || {}),
+      config_snapshot: JSON.stringify(body.config_snapshot || {}),
+    };
+
     try {
-      const bigquery = await getBigQueryClient();
-      const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
-      const projectId =
-        process.env.GCP_PROJECT ||
-        process.env.GOOGLE_CLOUD_PROJECT ||
-        'amazon-ppc-474902';
-
-      const summary = body.summary || {};
-      const config = body.config_snapshot || {};
-      const enabledFeatures = Array.isArray(config.enabled_features)
-        ? config.enabled_features
-        : [];
-      const errors = Array.isArray(body.errors)
-        ? body.errors.map((e: any) => String(e))
-        : [];
-      const warnings = Array.isArray(body.warnings)
-        ? body.warnings.map((w: any) => String(w))
-        : [];
-
-      const row = {
-        timestamp: body.timestamp || new Date().toISOString(),
-        run_id: body.run_id,
-        status: body.status || 'success',
-        profile_id: body.profile_id || '',
-        dry_run: body.dry_run || false,
-        duration_seconds: body.duration_seconds || 0,
-        campaigns_analyzed: summary.campaigns_analyzed || 0,
-        keywords_optimized: summary.keywords_optimized || 0,
-        bids_increased: summary.bids_increased || 0,
-        bids_decreased: summary.bids_decreased || 0,
-        negative_keywords_added: summary.negative_keywords_added || 0,
-        budget_changes: summary.budget_changes || 0,
-        total_spend: summary.total_spend || 0.0,
-        total_sales: summary.total_sales || 0.0,
-        average_acos: summary.average_acos || 0.0,
-        target_acos: config.target_acos || null,
-        lookback_days: config.lookback_days || null,
-        enabled_features: enabledFeatures,
-        errors,
-        warnings,
-        campaigns: JSON.stringify(body.campaigns || []),
-        top_performers: JSON.stringify(body.top_performers || []),
-        features: JSON.stringify(body.features || {}),
-        config_snapshot: JSON.stringify(body.config_snapshot || {}),
-      };
-
       const [insertErrors] = await bigquery
         .dataset(datasetId)
         .table('optimization_results')
@@ -159,6 +156,7 @@ export async function POST(request: NextRequest) {
       }
     } catch (bqError: any) {
       console.error('Failed to store results in BigQuery:', bqError.message);
+      // Don’t fail the HTTP 200 just because logging to BigQuery failed
     }
 
     return NextResponse.json(
