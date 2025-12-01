@@ -1,3 +1,5 @@
+cd /workspaces/Amazom-PPC/amazon_ppc_dashboard/nextjs_space
+
 cat << 'EOF' > app/api/optimization-results/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
@@ -17,13 +19,15 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
 
+    // Basic validation
     if (!body.run_id || !body.status || !body.timestamp) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 },
+        { error: 'Missing required fields: run_id, status, timestamp' },
+        { status: 400 }
       );
     }
 
+    // Use Application Default Credentials (Vercel/GCP-friendly)
     const bigquery = new BigQuery();
     const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
 
@@ -37,12 +41,19 @@ export async function POST(request: NextRequest) {
         },
       ]);
 
-    return NextResponse.json({ success: true }, { status: 200 });
+    return NextResponse.json(
+      {
+        success: true,
+        received: true,
+        run_id: body.run_id,
+      },
+      { status: 200 }
+    );
   } catch (err: any) {
     console.error('Error in optimization-results route:', err);
     return NextResponse.json(
       { error: err?.message || 'Internal server error' },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }
