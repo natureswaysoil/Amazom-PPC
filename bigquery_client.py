@@ -21,6 +21,7 @@ import os
 import traceback
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
+
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 from google.oauth2 import service_account
@@ -43,7 +44,6 @@ RUN_EVENTS_SCHEMA = [
 
 def _normalise_timestamp(value: Optional[datetime]) -> Optional[datetime]:
     """Convert BigQuery timestamps to naive UTC datetimes."""
-
     if not isinstance(value, datetime):
         return None
 
@@ -109,15 +109,113 @@ class BigQueryClient:
 
     def _resolve_credentials(self) -> Optional[service_account.Credentials]:
         """
-        Attempt to load service account credentials from environment variables.
+        Resolve service account credentials.
 
-        Uses the centralized gcp_credentials module for consistent credential handling.
+        Precedence:
+        1. Centralized load_credentials()
+        2. JSON / base64 JSON from env:
+           - GCP_SERVICE_ACCOUNT_KEY
+           - GOOGLE_APPLICATION_CREDENTIALS_JSON
+        3. Service account JSON file via GOOGLE_APPLICATION_CREDENTIALS
+        4. Secret Manager via GCP_SERVICE_ACCOUNT_SECRET_NAME
+        5. Fall back to Application Default Credentials (return None)
         """
+        # 1) Central helper
         try:
-            return load_credentials()
+            creds = load_credentials()
+            if creds:
+                logger.info("Loaded credentials via gcp_credentials.load_credentials()")
+                return creds
         except Exception as exc:
-            logger.error(f"Failed to load GCP credentials for BigQuery: {exc}")
-            return None
+            logger.warning("load_credentials() failed: %s", exc)
+
+        # Helper: parse JSON or base64 JSON from a raw string
+        def _creds_from_raw_json_or_b64(raw: str, source: str):
+            if not raw:
+                return None
+
+            text = raw.strip()
+            # Try plain JSON first
+            try:
+                info = json.loads(text)
+                logger.info("Parsed service account JSON from %s", source)
+                return service_account.Credentials.from_service_account_info(info)
+            except Exception:
+                pass
+
+            # Try base64-decode → JSON
+            try:
+                decoded = base64.b64decode(text).decode("utf-8")
+                info = json.loads(decoded)
+                logger.info("Parsed base64-encoded service account JSON from %s", source)
+                return service_account.Credentials.from_service_account_info(info)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to parse credentials from %s as JSON or base64 JSON: %s",
+                    source,
+                    exc,
+                )
+                return None
+
+        # 2) Env JSON / base64 JSON
+        env_raw = (
+            os.getenv("GCP_SERVICE_ACCOUNT_KEY")
+            or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        )
+        if env_raw:
+            creds = _creds_from_raw_json_or_b64(
+                env_raw, "GCP_SERVICE_ACCOUNT_KEY / GOOGLE_APPLICATION_CREDENTIALS_JSON"
+            )
+            if creds:
+                return creds
+
+        # 3) File path (GOOGLE_APPLICATION_CREDENTIALS)
+        path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if path and os.path.isfile(path):
+            try:
+                logger.info("Loading credentials from file path GOOGLE_APPLICATION_CREDENTIALS=%s", path)
+                return service_account.Credentials.from_service_account_file(path)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load credentials from file %s: %s", path, exc
+                )
+
+        # 4) Secret Manager (GCP_SERVICE_ACCOUNT_SECRET_NAME)
+        secret_name = os.getenv("GCP_SERVICE_ACCOUNT_SECRET_NAME")
+        if secret_name:
+            try:
+                from google.cloud import secretmanager  # lazy import
+
+                client = secretmanager.SecretManagerServiceClient()
+
+                # If just a secret ID is given, build the resource path
+                if "/secrets/" not in secret_name:
+                    project_for_secret = (
+                        self.project_id
+                        or os.getenv("GCP_PROJECT")
+                        or os.getenv("GOOGLE_CLOUD_PROJECT")
+                    )
+                    if project_for_secret:
+                        secret_name = f"projects/{project_for_secret}/secrets/{secret_name}/versions/latest"
+                    else:
+                        logger.warning(
+                            "GCP_SERVICE_ACCOUNT_SECRET_NAME set but no project ID to build resource path"
+                        )
+
+                logger.info("Fetching service account JSON from Secret Manager: %s", secret_name)
+                response = client.access_secret_version(name=secret_name)
+                payload = response.payload.data.decode("utf-8")
+                creds = _creds_from_raw_json_or_b64(payload, "Secret Manager")
+                if creds:
+                    return creds
+            except Exception as exc:
+                logger.warning("Failed to load credentials from Secret Manager: %s", exc)
+
+        # 5) Fall back to ADC
+        logger.info(
+            "No explicit service account credentials resolved; using Application Default Credentials"
+        )
+        return None
 
     def _ensure_dataset_exists(self):
         """Create dataset if it doesn't exist."""
@@ -138,22 +236,23 @@ class BigQueryClient:
             dataset.location = self.location
             dataset.description = "Amazon PPC Optimization data"
             self.client.create_dataset(dataset, timeout=30)
-            logger.info(f"Created dataset {self.dataset_ref}")
+            logger.info("Created dataset %s", self.dataset_ref)
 
     def _ensure_table_exists(self, table_id: str, schema: List[bigquery.SchemaField]):
         """Create table if it doesn't exist"""
         table_ref = f"{self.dataset_ref}.{table_id}"
         try:
             self.client.get_table(table_ref)
-            logger.debug(f"Table {table_ref} exists")
+            logger.debug("Table %s exists", table_ref)
         except NotFound:
-            logger.info(f"Creating table {table_ref}")
+            logger.info("Creating table %s", table_ref)
             table = bigquery.Table(table_ref, schema=schema)
             table.time_partitioning = bigquery.TimePartitioning(
-                type_=bigquery.TimePartitioningType.DAY, field="timestamp"
+                type_=bigquery.TimePartitioningType.DAY,
+                field="timestamp",
             )
             self.client.create_table(table, timeout=30)
-            logger.info(f"Created table {table_ref}")
+            logger.info("Created table %s", table_ref)
 
     def write_optimization_results(self, results_data: Dict) -> bool:
         """
@@ -253,7 +352,7 @@ class BigQueryClient:
             errors = self.client.insert_rows_json(table_ref, [row])
 
             if errors:
-                logger.error(f"Error inserting rows to BigQuery: {errors}")
+                logger.error("Error inserting rows to BigQuery: %s", errors)
                 return False
 
             logger.info(
@@ -267,7 +366,7 @@ class BigQueryClient:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to write to BigQuery: {str(e)}")
+            logger.error("Failed to write to BigQuery: %s", str(e))
             logger.error(traceback.format_exc())
             return False
 
@@ -320,14 +419,14 @@ class BigQueryClient:
             errors = self.client.insert_rows_json(table_ref, rows)
 
             if errors:
-                logger.error(f"Error inserting campaign details to BigQuery: {errors}")
+                logger.error("Error inserting campaign details to BigQuery: %s", errors)
             else:
                 logger.info(
                     "Successfully wrote %d campaign details to BigQuery", len(rows)
                 )
 
         except Exception as e:
-            logger.error(f"Failed to write campaign details to BigQuery: {str(e)}")
+            logger.error("Failed to write campaign details to BigQuery: %s", str(e))
 
     def insert_campaign_budgets(
         self, budget_data: List[Dict[str, Any]], run_id: str
@@ -393,7 +492,7 @@ class BigQueryClient:
             errors = self.client.insert_rows_json(table_ref, rows)
 
             if errors:
-                logger.error(f"Error inserting campaign budgets to BigQuery: {errors}")
+                logger.error("Error inserting campaign budgets to BigQuery: %s", errors)
                 return False
 
             logger.info(
@@ -402,7 +501,7 @@ class BigQueryClient:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to insert campaign budgets to BigQuery: {str(e)}")
+            logger.error("Failed to insert campaign budgets to BigQuery: %s", str(e))
             logger.error(traceback.format_exc())
             return False
 
@@ -443,13 +542,13 @@ class BigQueryClient:
             errors = self.client.insert_rows_json(table_ref, [row])
 
             if errors:
-                logger.error(f"Error inserting progress update to BigQuery: {errors}")
+                logger.error("Error inserting progress update to BigQuery: %s", errors)
                 return False
 
             return True
 
         except Exception as e:
-            logger.error(f"Failed to write progress update to BigQuery: {str(e)}")
+            logger.error("Failed to write progress update to BigQuery: %s", str(e))
             return False
 
     def write_error(self, error_data: Dict) -> bool:
@@ -493,7 +592,7 @@ class BigQueryClient:
             errors = self.client.insert_rows_json(table_ref, [row])
 
             if errors:
-                logger.error(f"Error inserting error log to BigQuery: {errors}")
+                logger.error("Error inserting error log to BigQuery: %s", errors)
                 return False
 
             logger.info(
@@ -502,7 +601,7 @@ class BigQueryClient:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to write error to BigQuery: {str(e)}")
+            logger.error("Failed to write error to BigQuery: %s", str(e))
             return False
 
     def record_run_event(
@@ -528,9 +627,9 @@ class BigQueryClient:
             errors = self.client.insert_rows_json(table_ref, [payload])
 
             if errors:
-                logger.warning(f"Error inserting run event to BigQuery: {errors}")
+                logger.warning("Error inserting run event to BigQuery: %s", errors)
         except Exception as exc:
-            logger.debug(f"Failed to record run event in BigQuery: {exc}")
+            logger.debug("Failed to record run event in BigQuery: %s", exc)
 
     def _execute_single_timestamp_query(
         self,
@@ -552,9 +651,9 @@ class BigQueryClient:
         except (core_exceptions.NotFound, NotFound):
             logger.debug("Query target not found for timestamp query: %s", query)
         except core_exceptions.BadRequest as exc:
-            logger.warning(f"Bad request when executing timestamp query: {exc}")
+            logger.warning("Bad request when executing timestamp query: %s", exc)
         except Exception as exc:
-            logger.warning(f"Failed to execute timestamp query: {exc}")
+            logger.warning("Failed to execute timestamp query: %s", exc)
 
         return None
 
