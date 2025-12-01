@@ -1,120 +1,171 @@
+cd /workspaces/Amazom-PPC/amazon_ppc_dashboard/nextjs_space
+
+cat > app/api/bigquery-data/route.ts << 'EOF'
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
 
+const DEFAULT_DATASET_ID = process.env.BQ_DATASET_ID || 'amazon_ppc';
 const PROJECT_ID =
   process.env.GOOGLE_CLOUD_PROJECT ||
   process.env.GCP_PROJECT ||
+  process.env.GCLOUD_PROJECT ||
   'amazon-ppc-474902';
 
-const DATASET_ID = process.env.BQ_DATASET_ID || 'amazon_ppc';
+let cachedDatasetLocation: string | null = null;
 
-// Single BigQuery client – location is auto–detected by dataset metadata
-const bigquery = new BigQuery({ projectId: PROJECT_ID });
+/**
+ * Auto-detect the dataset location from BigQuery metadata.
+ * Falls back to BQ_LOCATION / BIGQUERY_LOCATION if metadata lookup fails.
+ */
+async function getDatasetLocation(bigquery: BigQuery, datasetId: string) {
+  if (cachedDatasetLocation) {
+    return cachedDatasetLocation;
+  }
 
-async function runQuery<T = any>(
-  sql: string,
-  params: Record<string, any> = {}
-): Promise<T[]> {
-  const [rows] = await bigquery.query({
-    query: sql,
-    params,
-    // ⚠️ No location here – lets BigQuery use the dataset’s own location (US in your case)
-  });
-  return rows as T[];
+  try {
+    const [metadata] = await bigquery.dataset(datasetId).getMetadata();
+    const loc = (metadata.location as string | undefined) || null;
+    if (loc) {
+      cachedDatasetLocation = loc;
+      console.log(
+        `[BigQuery] Auto-detected dataset location for ${datasetId}: ${loc}`,
+      );
+      return loc;
+    }
+  } catch (err: any) {
+    console.warn(
+      `[BigQuery] Could not auto-detect location for dataset ${datasetId}:`,
+      err?.message || err,
+    );
+  }
+
+  const envLoc =
+    process.env.BQ_LOCATION ||
+    process.env.BIGQUERY_LOCATION ||
+    process.env.BQ_REGION ||
+    null;
+
+  if (envLoc) {
+    cachedDatasetLocation = envLoc;
+    console.log(
+      `[BigQuery] Using dataset location from env for ${datasetId}: ${envLoc}`,
+    );
+  } else {
+    console.log(
+      `[BigQuery] No explicit dataset location set; letting BigQuery choose default.`,
+    );
+  }
+
+  return cachedDatasetLocation;
+}
+
+/**
+ * Optional API key check for external callers.
+ * If DASHBOARD_API_KEY is unset, auth is skipped (handy for local dev).
+ */
+function verifyApiKey(req: NextRequest): string | null {
+  const apiKey = process.env.DASHBOARD_API_KEY;
+  if (!apiKey) return null;
+
+  const authHeader = req.headers.get('authorization');
+  const bearer =
+    authHeader && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : undefined;
+  const headerApiKey = req.headers.get('x-api-key') ?? undefined;
+
+  if (bearer === apiKey || headerApiKey === apiKey) {
+    return null;
+  }
+
+  return 'Unauthorized';
 }
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const table = searchParams.get('table') || 'optimization_results';
-  const limit = Number(searchParams.get('limit') || '100');
-
   try {
-    //
-    // SPECIAL CASE: optimization_results with fallback to campaign_performance
-    //
-    if (table === 'optimization_results') {
-      const optTable = `\`${PROJECT_ID}.${DATASET_ID}.optimization_results\``;
-
-      // 1) Try the optimizer results first (what the UI expects)
-      const optRows = await runQuery(
-        `
-        SELECT *
-        FROM ${optTable}
-        ORDER BY timestamp DESC
-        LIMIT @limit
-        `,
-        { limit }
-      );
-
-      if (optRows.length > 0) {
-        return NextResponse.json({
-          table: 'optimization_results',
-          source: 'optimization_results',
-          rows: optRows,
-        });
-      }
-
-      // 2) Fallback: derive a “summary-like” dataset from campaign_performance
-      const perfTable = `\`${PROJECT_ID}.${DATASET_ID}.campaign_performance\``;
-
-      const fallbackRows = await runQuery(
-        `
-        -- Aggregate recent performance as a stand-in for optimizer summary
-        SELECT
-          date,
-          campaign_id,
-          campaign_name,
-          impressions,
-          clicks,
-          cost,
-          sales,
-          orders,
-          SAFE_DIVIDE(cost, GREATEST(clicks, 1)) AS cpc,
-          SAFE_DIVIDE(clicks, GREATEST(impressions, 1)) AS ctr,
-          SAFE_DIVIDE(cost, GREATEST(sales, 0.01))  AS acos,
-          SAFE_DIVIDE(sales, GREATEST(cost, 0.01)) AS roas
-        FROM ${perfTable}
-        ORDER BY date DESC
-        LIMIT @limit
-        `,
-        { limit }
-      );
-
-      return NextResponse.json({
-        table: 'campaign_performance',
-        source: 'fallback_campaign_performance',
-        rows: fallbackRows,
-      });
+    // --- Auth (optional) ---
+    const authError = verifyApiKey(request);
+    if (authError) {
+      return NextResponse.json({ error: authError }, { status: 401 });
     }
 
-    //
-    // GENERIC: /api/bigquery-data?table=some_table&limit=50
-    //
-    const fullTable = `\`${PROJECT_ID}.${DATASET_ID}.${table}\``;
+    const { searchParams } = new URL(request.url);
+    const table = searchParams.get('table') || 'optimization_results';
+    const limit = Number.parseInt(searchParams.get('limit') ?? '100', 10) || 100;
 
-    const rows = await runQuery(
-      `
-      SELECT *
-      FROM ${fullTable}
-      LIMIT @limit
-      `,
-      { limit }
+    const projectId = PROJECT_ID;
+    const datasetId = DEFAULT_DATASET_ID;
+
+    console.log(
+      `[BigQuery API] Fetching data from ${projectId}.${datasetId}.${table} (limit=${limit})`,
     );
 
-    return NextResponse.json({
-      table,
-      source: 'direct',
-      rows,
+    const bigquery = new BigQuery({ projectId });
+
+    // Auto-detect dataset location for the query job
+    const location = await getDatasetLocation(bigquery, datasetId);
+
+    const query = `
+      SELECT *
+      FROM \`${projectId}.${datasetId}.${table}\`
+      ORDER BY timestamp DESC
+      LIMIT @limit
+    `;
+
+    const [job] = await bigquery.createQueryJob({
+      query,
+      params: { limit },
+      // Only set location if we know it; otherwise let BigQuery decide.
+      ...(location ? { location } : {}),
     });
-  } catch (err: any) {
-    console.error('[bigquery-data] Error:', err?.message || err);
+
+    const [rows] = await job.getQueryResults();
 
     return NextResponse.json(
       {
-        error: 'BigQuery query failed',
-        message: err?.message || String(err),
+        ok: true,
+        projectId,
+        datasetId,
+        location: location || 'auto',
+        table,
+        rowCount: rows.length,
+        rows,
       },
-      { status: 500 }
+      { status: 200 },
+    );
+  } catch (err: any) {
+    const message = err?.message || String(err);
+
+    // 404-style: dataset or table missing
+    if (
+      message.includes('Not found: Dataset') ||
+      message.includes('Not found: Table') ||
+      message.includes('Not found: Dataset') ||
+      message.includes('Not found:') && message.includes('amazon_ppc')
+    ) {
+      return NextResponse.json(
+        {
+          error: 'Dataset or table not found in BigQuery',
+          message:
+            'The dataset/table you requested does not exist in this project.',
+          details: message,
+          hint:
+            'Confirm that the dataset "amazon_ppc" and the requested table exist in project "amazon-ppc-474902". ' +
+            'You do NOT need to run any setup script; just ensure the dataset and table names match.',
+        },
+        { status: 404 },
+      );
+    }
+
+    console.error('[BigQuery API] Unexpected error:', err);
+
+    return NextResponse.json(
+      {
+        error: 'Failed to query BigQuery',
+        message,
+      },
+      { status: 500 },
     );
   }
 }
+EOF
