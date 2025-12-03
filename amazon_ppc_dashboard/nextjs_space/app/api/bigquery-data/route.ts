@@ -1,6 +1,3 @@
-cd /workspaces/Amazom-PPC/amazon_ppc_dashboard/nextjs_space
-
-cat > app/api/bigquery-data/route.ts << 'EOF'
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
 
@@ -168,4 +165,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-EOF
