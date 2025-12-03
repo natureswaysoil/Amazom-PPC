@@ -1,4 +1,9 @@
 {
+  "scripts": {
+    "vercel-build": "npm run build"
+  }
+}
+{
   "name": "amazon-ppc-sync",
   "version": "1.1.0",
   "description": "Amazon PPC data sync service for Cloud Run with documentation helper scripts",
