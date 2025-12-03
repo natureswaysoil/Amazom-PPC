@@ -125,6 +125,7 @@ export async function resolveGCPCredentials(): Promise<CredentialResolutionResul
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
 
+    // Verify credentials are accessible by getting a client
     await auth.getClient();
     const projectId = await auth.getProjectId().catch(() => undefined);
 
