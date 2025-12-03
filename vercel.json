@@ -1,9 +1,7 @@
 {
-  "version": 2,
-  "builds": [
-    { "src": "api/index.ts", "use": "@vercel/node" }
-  ],
-  "routes": [
-    { "src": "/(.*)", "dest": "/api/index.ts" }
-  ]
+  "buildCommand": "cd amazon_ppc_dashboard/nextjs_space && npm install && npm run build",
+  "outputDirectory": "amazon_ppc_dashboard/nextjs_space/.next",
+  "devCommand": "cd amazon_ppc_dashboard/nextjs_space && npm run dev",
+  "installCommand": "cd amazon_ppc_dashboard/nextjs_space && npm install",
+  "framework": "nextjs"
 }
