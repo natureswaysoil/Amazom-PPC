@@ -1,6 +1,7 @@
 # Dashboard Requirements
 Flask==3.0.0
 flask-cors==4.0.0
-google-cloud-bigquery==3.25.0
+google-cloud-bigquery>=3.25.0,<4.0.0  # Allow patches/minor updates, prevent breaking changes
 google-auth==2.27.0
 gunicorn==21.2.0
+db-dtypes>=1.2.0
