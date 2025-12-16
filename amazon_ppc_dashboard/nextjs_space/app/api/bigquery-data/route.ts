@@ -340,7 +340,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         error: 'Dataset or table not found',
         message: 'Please run setup-bigquery.sh to create the BigQuery dataset and tables',
-        details: error.message
+        details: error.message,
+        troubleshooting: [
+          'Run ./setup-bigquery.sh (or bash setup-bigquery.sh <PROJECT_ID> <DATASET_ID> <LOCATION>)',
+          'Confirm BQ_DATASET_ID and BQ_LOCATION match where your optimizer writes data',
+          'After creating the dataset, trigger a new optimization run to populate rows'
+        ]
       }, { status: 404 });
     }
 
