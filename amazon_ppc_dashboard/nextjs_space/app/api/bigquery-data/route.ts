@@ -3,18 +3,19 @@ import { BigQuery } from '@google-cloud/bigquery';
 import { resolveGCPCredentials, getFirstSetEnv, PROJECT_ID_ENV_NAMES } from '../lib/credentials';
 
 export async function GET(request: NextRequest) {
+  // Get configuration from environment variables with fallback to default
+  const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
+  const location = process.env.BQ_LOCATION || 'us-east4';
+  const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
+
+  // These variables need to be accessible inside the catch block for error reporting
+  let credentials: any = undefined;
+  let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
+  let credentialSource = 'Application Default Credentials';
+
   try {
-    // Get configuration from environment variables with fallback to default
-    const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
-    const location = process.env.BQ_LOCATION || 'us-east4';
-    const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
-    
     // Resolve credentials using the new shared utility
     const credentialResult = resolveGCPCredentials();
-    
-    let credentials: any = undefined;
-    let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
-    let credentialSource = 'Application Default Credentials';
 
     // Handle credential resolution errors
     if (!credentialResult.success) {
@@ -340,9 +341,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         error: 'Dataset or table not found',
         message: 'Please run setup-bigquery.sh to create the BigQuery dataset and tables',
-        details: error.message
+        details: error.message,
+        troubleshooting: [
+          'Run ./setup-bigquery.sh (or bash setup-bigquery.sh <PROJECT_ID> <DATASET_ID> <LOCATION>)',
+          'Confirm BQ_DATASET_ID and BQ_LOCATION match where your optimizer writes data',
+          'After creating the dataset, trigger a new optimization run to populate rows'
+        ]
       }, { status: 404 });
     }
+
+    const activeProjectId = projectId || getFirstSetEnv(PROJECT_ID_ENV_NAMES) || DEFAULT_PROJECT_ID;
+    const datasetPath = `${activeProjectId}.${datasetId}`;
 
     // Check for BigQuery permission errors
     if (error.message && (
@@ -352,16 +361,21 @@ export async function GET(request: NextRequest) {
       error.message.includes('does not have bigquery') ||
       (error.code === 403 || error.code === 7) // 403 Forbidden or gRPC PERMISSION_DENIED
     )) {
-      const projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES) || 'amazon-ppc-474902';
-      
       return NextResponse.json({
         error: 'Access Denied',
         message: 'The service account does not have sufficient BigQuery permissions',
         details: error.message,
+        projectId: activeProjectId,
+        datasetId,
+        datasetPath,
         troubleshooting: [
           'The service account needs these BigQuery IAM roles:',
           '  • roles/bigquery.dataViewer (or roles/bigquery.dataEditor) - to read/write data',
           '  • roles/bigquery.jobUser - to create and run query jobs',
+          '',
+          `Active project/dataset: ${datasetPath} (location: ${location})`,
+          'If your optimizer writes to a different dataset, set BQ_DATASET_ID to match.',
+          'Ensure the dataset ID is amazon_ppc_data when using the default deployment settings.',
           '',
           'To grant the required permissions, run these commands in Google Cloud Shell:',
           '',

@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
       },
       bq_dataset_id: {
         set: !!process.env.BQ_DATASET_ID,
-        value: process.env.BQ_DATASET_ID || 'amazon_ppc (default)',
+        value: process.env.BQ_DATASET_ID || 'amazon_ppc_data (default)',
       },
       bq_location: {
         set: !!process.env.BQ_LOCATION,

@@ -15,6 +15,26 @@ See **[DASHBOARD_SETUP_QUICKSTART.md](DASHBOARD_SETUP_QUICKSTART.md)** for a sim
 - **Diagnostics**: Built-in tools at `/api/config-check` and `/api/bigquery-data`
 - **Graceful Fallbacks**: Works with Application Default Credentials in GCP environments
 
+### 🧭 Navigation at a Glance
+
+The dashboard now ships with 13 organized tabs to surface the new data views and automation features:
+
+1. **Overview** — Summary stats and recent optimization runs
+2. **Campaigns** — Campaign-level performance (spend, sales, ACOS, changes)
+3. **Automation** — Bid optimization, dayparting, campaign management, keyword discovery, and negative keywords
+4. **Discovery** — Top-performing keywords with recent bid changes
+5. **Budget Manager** — Budget tracking (coming soon)
+6. **Dayparting** — Time-based bid multiplier details
+7. **Reports** — Summary reporting and success metrics
+8. **Analytics** — Advanced analytics (coming soon)
+9. **Performance** — ROI and performance highlights
+10. **Hourly Analysis** — Hour-by-hour breakdown (coming soon)
+11. **Search Terms** — Search term reporting (coming soon)
+12. **Data Table** — Full export-ready optimization table
+13. **Settings** — Configuration snapshot from the latest optimization run
+
+Each tab includes responsive styling, active-state highlighting, and “New” badges where applicable to showcase recent additions.
+
 ## Directory Structure
 
 ```

@@ -50,13 +50,15 @@ git push origin main
    - **Build Command**: `npm run build` (auto-filled)
    - **Output Directory**: `.next` (auto-filled)
 
+   The repository now includes a root-level `vercel.json` that pins `rootDirectory` to `amazon_ppc_dashboard/nextjs_space` and re-runs `npm install`/`npm run build` from there. This prevents Vercel from parsing the wrong package.json (the source of the `Unexpected non-whitespace character after JSON` error) and keeps the dashboard package as the build root.
+
 ### Step 4: Configure Environment Variables
 
 In the Vercel deployment configuration, add these environment variables:
 
 **Required**:
 ```
-BQ_DATASET_ID=amazon_ppc
+BQ_DATASET_ID=amazon_ppc_data
 BQ_LOCATION=us-east4
 ```
 
