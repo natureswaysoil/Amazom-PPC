@@ -4,12 +4,20 @@ cat > app/api/bigquery-data/route.ts << 'EOF'
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
 
-const DEFAULT_DATASET_ID = process.env.BQ_DATASET_ID || 'amazon_ppc';
-const PROJECT_ID =
-  process.env.GOOGLE_CLOUD_PROJECT ||
-  process.env.GCP_PROJECT ||
-  process.env.GCLOUD_PROJECT ||
-  'amazon-ppc-474902';
+export async function GET(request: NextRequest) {
+  // Get configuration from environment variables with fallback to default
+  const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
+  const location = process.env.BQ_LOCATION || 'us-east4';
+  const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
+
+  // These variables need to be accessible inside the catch block for error reporting
+  let credentials: any = undefined;
+  let projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
+  let credentialSource = 'Application Default Credentials';
+
+  try {
+    // Resolve credentials using the new shared utility
+    const credentialResult = resolveGCPCredentials();
 
 let cachedDatasetLocation: string | null = null;
 
@@ -128,33 +136,81 @@ export async function GET(request: NextRequest) {
         datasetId,
         location: location || 'auto',
         table,
-        rowCount: rows.length,
-        rows,
-      },
-      { status: 200 },
-    );
-  } catch (err: any) {
-    const message = err?.message || String(err);
+        rowCount: processedRows.length,
+        credentialSource: credentialSource
+      }
+    }, { status: 200 });
+    
+  } catch (error: any) {
+    console.error('BigQuery query error:', error);
+    
+    // Check if it's a "not found" error
+    if (error.message && error.message.includes('Not found')) {
+      return NextResponse.json({
+        error: 'Dataset or table not found',
+        message: 'Please run setup-bigquery.sh to create the BigQuery dataset and tables',
+        details: error.message,
+        troubleshooting: [
+          'Run ./setup-bigquery.sh (or bash setup-bigquery.sh <PROJECT_ID> <DATASET_ID> <LOCATION>)',
+          'Confirm BQ_DATASET_ID and BQ_LOCATION match where your optimizer writes data',
+          'After creating the dataset, trigger a new optimization run to populate rows'
+        ]
+      }, { status: 404 });
+    }
 
-    // 404-style: dataset or table missing
-    if (
-      message.includes('Not found: Dataset') ||
-      message.includes('Not found: Table') ||
-      message.includes('Not found: Dataset') ||
-      message.includes('Not found:') && message.includes('amazon_ppc')
-    ) {
-      return NextResponse.json(
-        {
-          error: 'Dataset or table not found in BigQuery',
-          message:
-            'The dataset/table you requested does not exist in this project.',
-          details: message,
-          hint:
-            'Confirm that the dataset "amazon_ppc" and the requested table exist in project "amazon-ppc-474902". ' +
-            'You do NOT need to run any setup script; just ensure the dataset and table names match.',
-        },
-        { status: 404 },
-      );
+    const activeProjectId = projectId || getFirstSetEnv(PROJECT_ID_ENV_NAMES) || DEFAULT_PROJECT_ID;
+    const datasetPath = `${activeProjectId}.${datasetId}`;
+
+    // Check for BigQuery permission errors
+    if (error.message && (
+      error.message.includes('bigquery.jobs.create') ||
+      error.message.includes('bigquery.tables.get') ||
+      error.message.includes('Access Denied') ||
+      error.message.includes('does not have bigquery') ||
+      (error.code === 403 || error.code === 7) // 403 Forbidden or gRPC PERMISSION_DENIED
+    )) {
+      return NextResponse.json({
+        error: 'Access Denied',
+        message: 'The service account does not have sufficient BigQuery permissions',
+        details: error.message,
+        projectId: activeProjectId,
+        datasetId,
+        datasetPath,
+        troubleshooting: [
+          'The service account needs these BigQuery IAM roles:',
+          '  • roles/bigquery.dataViewer (or roles/bigquery.dataEditor) - to read/write data',
+          '  • roles/bigquery.jobUser - to create and run query jobs',
+          '',
+          `Active project/dataset: ${datasetPath} (location: ${location})`,
+          'If your optimizer writes to a different dataset, set BQ_DATASET_ID to match.',
+          'Ensure the dataset ID is amazon_ppc_data when using the default deployment settings.',
+          '',
+          'To grant the required permissions, run these commands in Google Cloud Shell:',
+          '',
+          `# Get the service account email from your credentials`,
+          `SERVICE_ACCOUNT_EMAIL=$(echo "$GCP_SERVICE_ACCOUNT_KEY" | jq -r .client_email)`,
+          '',
+          `# Grant BigQuery Data Viewer role`,
+          `gcloud projects add-iam-policy-binding ${projectId} \\`,
+          `  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \\`,
+          `  --role="roles/bigquery.dataViewer"`,
+          '',
+          `# Grant BigQuery Job User role (required to run queries)`,
+          `gcloud projects add-iam-policy-binding ${projectId} \\`,
+          `  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \\`,
+          `  --role="roles/bigquery.jobUser"`,
+          '',
+          'Alternatively, you can grant these roles in the Google Cloud Console:',
+          `  1. Go to https://console.cloud.google.com/iam-admin/iam?project=${projectId}`,
+          '  2. Find your service account in the list',
+          '  3. Click "Edit principal" (pencil icon)',
+          '  4. Add the roles: BigQuery Data Viewer + BigQuery Job User',
+          '  5. Click "Save"',
+          '',
+          'After granting permissions, refresh this page to try again.',
+        ],
+        documentation: 'See BIGQUERY_DATASET_FIX.md and ACCESS_GUIDE.md for more details.',
+      }, { status: 403 });
     }
 
     console.error('[BigQuery API] Unexpected error:', err);
