@@ -5,7 +5,7 @@ import { resolveGCPCredentials, getFirstSetEnv, PROJECT_ID_ENV_NAMES } from '../
 export async function GET(request: NextRequest) {
   try {
     // Get configuration from environment variables with fallback to default
-    const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
+    const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
     const location = process.env.BQ_LOCATION || 'us-east4';
     const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
     
@@ -349,6 +349,8 @@ export async function GET(request: NextRequest) {
       }, { status: 404 });
     }
 
+    const datasetPath = `${projectId}.${datasetId}`;
+
     // Check for BigQuery permission errors
     if (error.message && (
       error.message.includes('bigquery.jobs.create') ||
@@ -363,10 +365,17 @@ export async function GET(request: NextRequest) {
         error: 'Access Denied',
         message: 'The service account does not have sufficient BigQuery permissions',
         details: error.message,
+        projectId,
+        datasetId,
+        datasetPath,
         troubleshooting: [
           'The service account needs these BigQuery IAM roles:',
           '  • roles/bigquery.dataViewer (or roles/bigquery.dataEditor) - to read/write data',
           '  • roles/bigquery.jobUser - to create and run query jobs',
+          '',
+          `Active project/dataset: ${datasetPath} (location: ${location})`,
+          'If your optimizer writes to a different dataset, set BQ_DATASET_ID to match.',
+          'Ensure the dataset ID is amazon_ppc_data when using the default deployment settings.',
           '',
           'To grant the required permissions, run these commands in Google Cloud Shell:',
           '',

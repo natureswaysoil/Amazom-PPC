@@ -32,7 +32,7 @@ Create a `.env.local` file:
 
 ```bash
 # BigQuery Configuration
-BQ_DATASET_ID=amazon_ppc
+BQ_DATASET_ID=amazon_ppc_data
 BQ_LOCATION=us-east4
 
 # Optional: Project ID (auto-extracted from service account if not provided)
@@ -87,7 +87,7 @@ git push
 In Vercel project settings → Environment Variables, add:
 
 ```
-BQ_DATASET_ID=amazon_ppc
+BQ_DATASET_ID=amazon_ppc_data
 BQ_LOCATION=us-east4
 DASHBOARD_API_KEY=your_api_key_here
 
@@ -175,7 +175,7 @@ curl "https://your-dashboard.vercel.app/api/bigquery-data?table=campaign_details
   ],
   "metadata": {
     "projectId": "amazon-ppc-474902",
-    "datasetId": "amazon_ppc",
+    "datasetId": "amazon_ppc_data",
     "table": "optimization_results",
     "rowCount": 5
   }
@@ -234,7 +234,7 @@ The dashboard can now automatically extract the project ID from your service acc
 
 3. **Add BigQuery Configuration:**
    ```
-   BQ_DATASET_ID=amazon_ppc
+   BQ_DATASET_ID=amazon_ppc_data
    BQ_LOCATION=us-east4
    ```
 
@@ -271,7 +271,7 @@ For detailed deployment instructions, see [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ```bash
 cd ../..
-./setup-bigquery.sh amazon-ppc-474902 amazon_ppc us-east4
+./setup-bigquery.sh amazon-ppc-474902 amazon_ppc_data us-east4
 ```
 
 ### Error: "Permission denied"
@@ -296,13 +296,13 @@ gcloud projects add-iam-policy-binding amazon-ppc-474902 \
 
 1. Check if tables exist:
    ```bash
-   bq ls amazon-ppc-474902:amazon_ppc
+   bq ls amazon-ppc-474902:amazon_ppc_data
    ```
 
 2. Check if data exists:
    ```bash
    bq query --use_legacy_sql=false \
-     "SELECT COUNT(*) FROM \`amazon-ppc-474902.amazon_ppc.optimization_results\`"
+     "SELECT COUNT(*) FROM \`amazon-ppc-474902.amazon_ppc_data.optimization_results\`"
    ```
 
 3. Check Vercel logs for errors:
