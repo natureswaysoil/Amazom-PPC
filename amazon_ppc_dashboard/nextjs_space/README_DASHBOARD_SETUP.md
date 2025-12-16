@@ -24,7 +24,7 @@ GCP_PROJECT=your-project-id
 GOOGLE_CLOUD_PROJECT=your-project-id
 
 # BigQuery Configuration
-BQ_DATASET_ID=amazon_ppc
+BQ_DATASET_ID=amazon_ppc_data
 BQ_LOCATION=us-east4
 
 # Dashboard API Key (must match optimizer)
@@ -64,7 +64,7 @@ Visit these diagnostic endpoints:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BQ_DATASET_ID` | BigQuery dataset name | `amazon_ppc` |
+| `BQ_DATASET_ID` | BigQuery dataset name | `amazon_ppc_data` |
 | `BQ_LOCATION` | BigQuery dataset location | `us-east4` |
 | `NODE_ENV` | Node environment | `production` |
 
@@ -112,6 +112,21 @@ export GCP_PROJECT="your-project-id"
 **Note:** Private key must use `\n` for newlines.
 
 ## Deployment
+
+### Cloud Run / Cloud Functions (ADC)
+
+If you're deploying the dashboard to Google Cloud Run or Cloud Functions, you can rely on Application Default Credentials (ADC):
+
+- Skip setting `GCP_SERVICE_ACCOUNT_KEY` in your environment.
+- Ensure the Cloud Run/Functions service account has BigQuery read permissions for `amazon-ppc-474902.amazon_ppc_data`.
+- The dashboard will automatically use ADC when no explicit credentials are provided.
+
+Need more help?
+
+- 📖 See `/api/setup-guide` for interactive setup guidance.
+- 🔍 See `/api/config-check` for configuration status.
+- 📚 See `README_DASHBOARD_SETUP.md` for detailed docs.
+- 🐛 See `TROUBLESHOOTING.md` for common issues.
 
 ### Vercel
 
