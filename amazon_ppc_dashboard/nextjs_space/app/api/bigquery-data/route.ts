@@ -1,10 +1,7 @@
-cd /workspaces/Amazom-PPC/amazon_ppc_dashboard/nextjs_space
-
-cat > app/api/bigquery-data/route.ts << 'EOF'
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
 
-const DEFAULT_DATASET_ID = process.env.BQ_DATASET_ID || 'amazon_ppc';
+const DEFAULT_DATASET_ID = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
 const PROJECT_ID =
   process.env.GOOGLE_CLOUD_PROJECT ||
   process.env.GCP_PROJECT ||
@@ -141,7 +138,7 @@ export async function GET(request: NextRequest) {
       message.includes('Not found: Dataset') ||
       message.includes('Not found: Table') ||
       message.includes('Not found: Dataset') ||
-      message.includes('Not found:') && message.includes('amazon_ppc')
+      (message.includes('Not found:') && message.includes('amazon_ppc_data'))
     ) {
       return NextResponse.json(
         {
@@ -150,7 +147,7 @@ export async function GET(request: NextRequest) {
             'The dataset/table you requested does not exist in this project.',
           details: message,
           hint:
-            'Confirm that the dataset "amazon_ppc" and the requested table exist in project "amazon-ppc-474902". ' +
+            'Confirm that the dataset "amazon_ppc_data" and the requested table exist in project "amazon-ppc-474902". ' +
             'You do NOT need to run any setup script; just ensure the dataset and table names match.',
         },
         { status: 404 },
@@ -168,4 +165,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-EOF
