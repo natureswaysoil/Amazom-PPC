@@ -50,13 +50,15 @@ git push origin main
    - **Build Command**: `npm run build` (auto-filled)
    - **Output Directory**: `.next` (auto-filled)
 
+   The repository now includes a root-level `vercel.json` that pins the install/build commands to `amazon_ppc_dashboard/nextjs_space`. If Vercel auto-detects the wrong package.json, keep the root directory set to `amazon_ppc_dashboard/nextjs_space` so the dashboard package is parsed correctly.
+
 ### Step 4: Configure Environment Variables
 
 In the Vercel deployment configuration, add these environment variables:
 
 **Required**:
 ```
-BQ_DATASET_ID=amazon_ppc
+BQ_DATASET_ID=amazon_ppc_data
 BQ_LOCATION=us-east4
 ```
 
