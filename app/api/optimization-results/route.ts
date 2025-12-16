@@ -26,23 +26,25 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    
-    // Store in BigQuery
-    try {
-      const bigquery = getBigQueryClient();
-      const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
-      const projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'amazon-ppc-474902';
-      const tableRef = `${projectId}.${datasetId}.optimization_results`;
-      
-      // Build row matching the schema in bigquery_client.py
-      const summary = body.summary || {};
-      const config = body.config_snapshot || {};
-      const enabledFeatures = Array.isArray(config.enabled_features) ? config.enabled_features : [];
-      const errors = Array.isArray(body.errors) ? body.errors.map((e: any) => String(e)) : [];
-      const warnings = Array.isArray(body.warnings) ? body.warnings.map((w: any) => String(w)) : [];
-      
-      const row = {
-        timestamp: body.timestamp || new Date().toISOString(),
+
+    // Use Application Default Credentials (Vercel/GCP-friendly)
+    const bigquery = new BigQuery();
+    const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
+
+    await bigquery
+      .dataset(datasetId)
+      .table('optimization_results')
+      .insert([
+        {
+          ...body,
+          timestamp: body.timestamp || new Date().toISOString(),
+        },
+      ]);
+
+    return NextResponse.json(
+      {
+        success: true,
+        received: true,
         run_id: body.run_id,
       },
       { status: 200 }
