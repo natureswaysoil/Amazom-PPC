@@ -6,7 +6,7 @@ set -e
 
 # Configuration
 PROJECT_ID="${1:-amazon-ppc-474902}"
-DATASET_ID="${2:-amazon_ppc}"
+DATASET_ID="${2:-amazon_ppc_data}"
 LOCATION="${3:-us-east4}"
 
 # Create temporary file for schema

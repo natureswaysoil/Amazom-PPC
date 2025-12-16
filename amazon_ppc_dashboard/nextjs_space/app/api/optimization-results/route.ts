@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
     // Store in BigQuery
     try {
       const bigquery = getBigQueryClient();
-      const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
+      const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
       const projectId = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'amazon-ppc-474902';
       const tableRef = `${projectId}.${datasetId}.optimization_results`;
       

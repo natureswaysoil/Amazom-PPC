@@ -205,7 +205,9 @@ export default function Home() {
                 🧪 Test Connection
               </a>
             </div>
-            {error.includes('Not found') && (
+            {(error.includes('Not found') ||
+              error.toLowerCase().includes('setup-bigquery') ||
+              error.toLowerCase().includes('dataset or table not found')) && (
               <div style={styles.setupInstructions}>
                 <p><strong>Setup Required:</strong></p>
                 <ol style={{ textAlign: 'left', lineHeight: '1.8' }}>
