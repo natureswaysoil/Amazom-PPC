@@ -270,6 +270,51 @@ class DashboardClient:
         
         response = self._make_request('/api/optimization-status', payload)
         return response is not None
+
+    def send_feature_update(self, feature_name: str, feature_result: Dict, percent_complete: float) -> bool:
+        """Send granular feature-level progress and partial result snapshot.
+
+        Payload is posted to the same `/api/optimization-status` endpoint to avoid
+        additional dashboard surface area. The dashboard can distinguish these
+        messages via the `stage` key.
+
+        Args:
+            feature_name: Name of the optimization feature just processed
+            feature_result: Result dictionary returned by that feature
+            percent_complete: Current overall completion percentage (0-100)
+
+        Returns:
+            True if the dashboard accepted the update, False otherwise
+        """
+        if not self.enabled or not self.send_real_time_updates:
+            return False
+
+        # Trim oversized structures (defensive) while keeping key metrics
+        safe_result: Dict[str, Any] = {}
+        if isinstance(feature_result, dict):
+            for k, v in feature_result.items():
+                # Avoid sending huge arrays; send counts instead
+                if isinstance(v, list):
+                    safe_result[f"{k}_count"] = len(v)
+                    # Optionally include first few entries for preview
+                    if k in ('campaigns', 'top_performers'):
+                        safe_result[k] = v[:5]
+                else:
+                    safe_result[k] = v
+
+        payload = {
+            'timestamp': datetime.now().isoformat(),
+            'run_id': self.current_run_id,
+            'status': 'running',
+            'stage': 'feature_completed',
+            'feature': feature_name,
+            'percent_complete': percent_complete,
+            'profile_id': self.profile_id,
+            'partial_result': safe_result,
+        }
+
+        response = self._make_request('/api/optimization-status', payload)
+        return response is not None
     
     def send_error(self, error: Exception, context: Dict = None) -> bool:
         """

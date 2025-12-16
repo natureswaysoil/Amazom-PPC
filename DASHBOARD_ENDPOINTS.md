@@ -257,6 +257,7 @@ Then check your dashboard logs to see the incoming data!
 1. **Start notification** → `/api/optimization-status`
 2. **Progress updates** → `/api/optimization-status`
 3. **Final results** → `/api/optimization-results`
+4. **Feature-level snapshots** → `/api/optimization-status` (stage = `feature_completed`)
 
 ### Example Final Results Payload:
 ```json
@@ -287,6 +288,33 @@ Then check your dashboard logs to see the incoming data!
   "top_performers": [...]
 }
 ```
+
+### Example Feature-Level Update Payload
+```json
+{
+  "timestamp": "2025-11-24T12:34:56.789Z",
+  "run_id": "uuid-here",
+  "status": "running",
+  "stage": "feature_completed",
+  "feature": "bid_optimization",
+  "percent_complete": 47.2,
+  "profile_id": "your-profile-id",
+  "partial_result": {
+    "bids_increased": 611,
+    "bids_decreased": 0,
+    "keywords_optimized": 1000,
+    "total_spend": 1234.56,
+    "total_sales": 3456.78,
+    "average_acos": 0.36,
+    "top_performers_count": 20,
+    "top_performers": [
+      {"keyword_text": "sample keyword", "sales": 123.45, "acos": 0.22, "bid_change": 0.15 }
+    ]
+  }
+}
+```
+
+The dashboard can render a live timeline by listening for `stage=feature_completed` messages and appending the `partial_result` to an in-memory list or streaming UI component.
 
 ---
 
