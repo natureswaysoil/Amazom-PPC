@@ -9,6 +9,7 @@ Handles all communication with the PPC Dashboard including:
 - Health checks
 - Retry logic with exponential backoff
 - Secure authentication
+- BigQuery integration for data persistence
 
 Author: Nature's Way Soil
 Version: 1.0.0
@@ -18,9 +19,13 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 import requests
 from functools import wraps
+
+# Use TYPE_CHECKING to avoid circular imports
+if TYPE_CHECKING:
+    from bigquery_client import BigQueryClient
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +76,7 @@ class DashboardClient:
     - API key authentication
     """
     
-    def __init__(self, config: Dict, bigquery_client: Optional[Any] = None):
+    def __init__(self, config: Dict, bigquery_client: Optional['BigQueryClient'] = None):
         """
         Initialize dashboard client
         
@@ -216,7 +221,7 @@ class DashboardClient:
             try:
                 self.bigquery_client.record_run_event(self.current_run_id, 'started', {'dry_run': dry_run})
             except Exception as e:
-                logger.debug(f"Failed to record start event in BigQuery: {e}")
+                logger.debug(f"Failed to record run start event in BigQuery: {e}")
         
         return self.current_run_id
     
@@ -302,7 +307,7 @@ class DashboardClient:
             try:
                 self.bigquery_client.write_progress_update(payload)
             except Exception as e:
-                logger.debug(f"Failed to write progress to BigQuery: {e}")
+                logger.debug(f"Failed to write progress update to BigQuery: {e}")
         
         response = self._make_request('/api/optimization-status', payload)
         return response is not None
@@ -388,7 +393,7 @@ class DashboardClient:
             try:
                 self.bigquery_client.write_error(payload)
             except Exception as e:
-                logger.debug(f"Failed to write error to BigQuery: {e}")
+                logger.debug(f"Failed to write error event to BigQuery: {e}")
         
         response = self._make_request('/api/optimization-error', payload)
         
