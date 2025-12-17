@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
+import { resolveGCPCredentials, getFirstSetEnv, PROJECT_ID_ENV_NAMES } from '../lib/credentials';
 
 const DEFAULT_DATASET_ID = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
 const PROJECT_ID =
@@ -90,14 +91,32 @@ export async function GET(request: NextRequest) {
     const table = searchParams.get('table') || 'optimization_results';
     const limit = Number.parseInt(searchParams.get('limit') ?? '100', 10) || 100;
 
-    const projectId = PROJECT_ID;
+    // Resolve GCP credentials
+    const credentialResult = await resolveGCPCredentials();
+    if (!credentialResult.success) {
+      return NextResponse.json(
+        {
+          error: 'Failed to resolve GCP credentials',
+          message: credentialResult.error?.message || 'Unknown credential error',
+          hint: 'Set GCP_SERVICE_ACCOUNT_KEY environment variable with your service account JSON credentials',
+        },
+        { status: 500 },
+      );
+    }
+
+    const projectId = credentialResult.projectId || getFirstSetEnv(PROJECT_ID_ENV_NAMES) || PROJECT_ID;
     const datasetId = DEFAULT_DATASET_ID;
 
     console.log(
       `[BigQuery API] Fetching data from ${projectId}.${datasetId}.${table} (limit=${limit})`,
     );
 
-    const bigquery = new BigQuery({ projectId });
+    // Initialize BigQuery client with credentials if available
+    const bigqueryOptions: any = { projectId };
+    if (credentialResult.credentials) {
+      bigqueryOptions.credentials = credentialResult.credentials;
+    }
+    const bigquery = new BigQuery(bigqueryOptions);
 
     // Auto-detect dataset location for the query job
     const location = await getDatasetLocation(bigquery, datasetId);
