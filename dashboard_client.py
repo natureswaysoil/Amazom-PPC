@@ -9,6 +9,7 @@ Handles all communication with the PPC Dashboard including:
 - Health checks
 - Retry logic with exponential backoff
 - Secure authentication
+- BigQuery integration for data persistence
 
 Author: Nature's Way Soil
 Version: 1.0.0
@@ -18,9 +19,13 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 import requests
 from functools import wraps
+
+# Use TYPE_CHECKING to avoid circular imports
+if TYPE_CHECKING:
+    from bigquery_client import BigQueryClient
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +76,13 @@ class DashboardClient:
     - API key authentication
     """
     
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, bigquery_client: Optional['BigQueryClient'] = None):
         """
         Initialize dashboard client
         
         Args:
             config: Configuration dictionary containing dashboard settings
+            bigquery_client: Optional BigQueryClient instance for direct BigQuery integration
         """
         dashboard_config = config.get('dashboard', {})
         
@@ -89,6 +95,7 @@ class DashboardClient:
         self.session = requests.Session()
         self.current_run_id = None
         self.profile_id = config.get('amazon_api', {}).get('profile_id', '')
+        self.bigquery_client = bigquery_client
         
         if not self.url:
             logger.warning("Dashboard URL not configured")
@@ -96,6 +103,10 @@ class DashboardClient:
         
         if self.enabled and not self.api_key:
             logger.warning("Dashboard API key not configured - requests may be rejected")
+        
+        # Log BigQuery integration status
+        if self.bigquery_client:
+            logger.info("Dashboard client initialized with BigQuery integration")
     
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for dashboard API requests"""
@@ -205,6 +216,13 @@ class DashboardClient:
             }
             self._make_request('/api/optimization-status', payload)
         
+        # Record start event in BigQuery if configured
+        if self.bigquery_client:
+            try:
+                self.bigquery_client.record_run_event(self.current_run_id, 'started', {'dry_run': dry_run})
+            except Exception as e:
+                logger.debug(f"Failed to record run start event in BigQuery: {e}")
+        
         return self.current_run_id
     
     @retry_with_backoff(max_attempts=3, initial_delay=2, max_delay=10)
@@ -212,6 +230,8 @@ class DashboardClient:
                     dry_run: bool = False) -> bool:
         """
         Send optimization results to dashboard with enhanced payload
+        
+        If BigQueryClient is configured, also writes results to BigQuery for analytics.
         
         Args:
             results: Optimization results from PPCAutomation.run()
@@ -229,6 +249,18 @@ class DashboardClient:
         try:
             # Build enhanced payload
             payload = self.build_results_payload(results, config, duration_seconds, dry_run)
+            
+            # Write to BigQuery if configured
+            if self.bigquery_client:
+                try:
+                    logger.info("Writing optimization results to BigQuery...")
+                    bq_success = self.bigquery_client.write_optimization_results(payload)
+                    if bq_success:
+                        logger.info("✅ Successfully wrote results to BigQuery")
+                    else:
+                        logger.warning("⚠️ BigQuery write returned False")
+                except Exception as bq_err:
+                    logger.error(f"Failed to write to BigQuery: {str(bq_err)}")
             
             # Send to dashboard
             response = self._make_request('/api/optimization-results', payload)
@@ -249,6 +281,8 @@ class DashboardClient:
         """
         Send real-time progress update to dashboard
         
+        If BigQueryClient is configured, also writes progress to BigQuery.
+        
         Args:
             message: Progress message (e.g., "Analyzing keywords")
             percent_complete: Percentage complete (0-100)
@@ -267,6 +301,13 @@ class DashboardClient:
             'percent_complete': percent_complete,
             'profile_id': self.profile_id
         }
+        
+        # Write to BigQuery if configured
+        if self.bigquery_client:
+            try:
+                self.bigquery_client.write_progress_update(payload)
+            except Exception as e:
+                logger.debug(f"Failed to write progress update to BigQuery: {e}")
         
         response = self._make_request('/api/optimization-status', payload)
         return response is not None
@@ -320,6 +361,8 @@ class DashboardClient:
         """
         Send error details to dashboard
         
+        If BigQueryClient is configured, also writes error to BigQuery.
+        
         Args:
             error: Exception that occurred
             context: Additional context about the error
@@ -344,6 +387,13 @@ class DashboardClient:
                 'context': context or {}
             }
         }
+        
+        # Write to BigQuery if configured
+        if self.bigquery_client:
+            try:
+                self.bigquery_client.write_error(payload)
+            except Exception as e:
+                logger.debug(f"Failed to write error event to BigQuery: {e}")
         
         response = self._make_request('/api/optimization-error', payload)
         
