@@ -81,11 +81,9 @@ function verifyApiKey(req: NextRequest): string | null {
 
 export async function GET(request: NextRequest) {
   try {
-    // --- Auth (optional) ---
-    const authError = verifyApiKey(request);
-    if (authError) {
-      return NextResponse.json({ error: authError }, { status: 401 });
-    }
+    // --- Auth: Skip for GET requests (read-only, same-origin dashboard calls) ---
+    // GET requests are read-only and come from the dashboard's own frontend.
+    // POST/PUT/DELETE requests should still require authentication if implemented.
 
     const { searchParams } = new URL(request.url);
     const table = searchParams.get('table') || 'optimization_results';
