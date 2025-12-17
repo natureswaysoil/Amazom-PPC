@@ -1,4 +1,3 @@
-cat > app/api/lib/credentials.ts << 'EOF'
 import { GoogleAuth } from 'google-auth-library';
 
 export const SERVICE_ACCOUNT_ENV_NAMES = [
@@ -126,7 +125,7 @@ export async function resolveGCPCredentials(): Promise<CredentialResolutionResul
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
 
-    const client = await auth.getClient(); // eslint-disable-line @typescript-eslint/no-unused-vars
+    await auth.getClient(); // Validate credentials work
     const projectId = await auth.getProjectId().catch(() => undefined);
 
     return {
@@ -143,4 +142,3 @@ export async function resolveGCPCredentials(): Promise<CredentialResolutionResul
     };
   }
 }
-EOF
