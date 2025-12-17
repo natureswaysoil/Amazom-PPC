@@ -112,9 +112,10 @@ export async function GET(request: NextRequest) {
     );
 
     // Initialize BigQuery client with credentials if available
-    const bigqueryOptions = credentialResult.credentials 
-      ? { projectId, credentials: credentialResult.credentials }
-      : { projectId };
+    const bigqueryOptions: any = { projectId };
+    if (credentialResult.credentials) {
+      bigqueryOptions.credentials = credentialResult.credentials;
+    }
     const bigquery = new BigQuery(bigqueryOptions);
 
     // Auto-detect dataset location for the query job
