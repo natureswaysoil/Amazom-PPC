@@ -111,9 +111,11 @@ export async function GET(request: NextRequest) {
       `[BigQuery API] Fetching data from ${projectId}.${datasetId}.${table} (limit=${limit})`,
     );
 
-    const bigquery = credentialResult.credentials 
-      ? new BigQuery({ projectId, credentials: credentialResult.credentials })
-      : new BigQuery({ projectId });
+    // Initialize BigQuery client with credentials if available
+    const bigqueryOptions = credentialResult.credentials 
+      ? { projectId, credentials: credentialResult.credentials }
+      : { projectId };
+    const bigquery = new BigQuery(bigqueryOptions);
 
     // Auto-detect dataset location for the query job
     const location = await getDatasetLocation(bigquery, datasetId);
