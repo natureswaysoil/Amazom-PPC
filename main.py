@@ -652,24 +652,25 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     
     dry_run = request.args.get('dry_run', '').lower() == 'true' or request_json.get('dry_run', False)
     
-    # Initialize Dashboard Client
-    dashboard_client = DashboardClient(config)
-
-    # Initialize BigQuery Client
+    # Initialize BigQuery Client first (so it can be passed to DashboardClient)
+    bigquery_client = None
     bigquery_config = config.get('bigquery', {})
     if bigquery_config.get('enabled', False):
       try:
         project_id = bigquery_config.get('project_id') or os.getenv('GCP_PROJECT') or os.getenv('GOOGLE_CLOUD_PROJECT')
         if project_id:
           set_bigquery_env_vars(project_id)
-          dataset_id = bigquery_config.get('dataset_id', 'amazon_ppc')
+          dataset_id = bigquery_config.get('dataset_id', 'amazon_ppc_data')
           location = bigquery_config.get('location', 'us-east4')
           bigquery_client = BigQueryClient(project_id, dataset_id, location)
-          logger.info(f"BigQuery client initialized for project {project_id}")
+          logger.info(f"BigQuery client initialized for project {project_id}, dataset {dataset_id}")
         else:
           logger.warning("BigQuery enabled but no project_id configured")
       except Exception as bq_err:
         logger.warning(f"Failed to initialize BigQuery client: {bq_err}")
+
+    # Initialize Dashboard Client with BigQuery integration
+    dashboard_client = DashboardClient(config, bigquery_client=bigquery_client)
 
     # Run Interval Logic
     now_utc = datetime.utcnow()
@@ -683,12 +684,6 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     # Start Run
     run_id = dashboard_client.start_run(dry_run=dry_run)
     logger.info(f"Started optimization run: {run_id}")
-
-    if bigquery_client:
-      try:
-        bigquery_client.record_run_event(run_id, 'started', {'dry_run': dry_run})
-      except Exception as e:
-        logger.debug(f"Failed to record start event: {e}")
 
     # Optimize
     with create_config_file(config) as config_file_path:
@@ -712,27 +707,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
     
-    # --- BIGQUERY INTEGRATION (STEP 3) ---
-    # This block handles the requirement to feed results into the "amazon-ppc" BigQuery dataset
-    if bigquery_client and dashboard_client:
-      logger.info("⏳ Sending data to BigQuery...")
-      try:
-        # Build the payload containing the granular changes/results
-        results_payload = dashboard_client.build_results_payload(results, config, duration, dry_run)
-        # Write to the BigQuery table
-        write_success = bigquery_client.write_optimization_results(results_payload)
-        if write_success:
-          logger.info(f"✅ Successfully wrote optimization results to BigQuery (run_id: {run_id})")
-        else:
-          logger.warning(f"⚠️ BigQuery write returned False (run_id: {run_id})")
-      except Exception as bq_err:
-        logger.warning(f"⚠️ Failed to write to BigQuery: {str(bq_err)}")
-        logger.error(traceback.format_exc())
-    elif not bigquery_client:
-      logger.info("BigQuery client not initialized - skipping BigQuery write")
-    # -------------------------------------
-    
-    # Send to Dashboard
+    # Send to Dashboard (which now also writes to BigQuery automatically)
     try:
       dashboard_client.send_results(results, config, duration, dry_run)
     except Exception as e:
