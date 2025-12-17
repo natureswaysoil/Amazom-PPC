@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
   let allStepsComplete = true;
   
   // Step 1: Check GCP Credentials
-  const credentialResult = resolveGCPCredentials();
+  const credentialResult = await resolveGCPCredentials();
   const step1 = {
     step: currentStep++,
     title: 'Google Cloud Service Account Credentials',
