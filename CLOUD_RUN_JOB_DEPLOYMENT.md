@@ -46,7 +46,7 @@ gcloud run jobs deploy $JOB_NAME \
 If deploying with buildpacks (no explicit Dockerfile), the `project.toml` file in the repository root specifies the correct function target.
 
 ```bash
-# Deploy using buildpacks (project.toml will be used)
+# Deploy using buildpacks (project.toml will be used automatically)
 gcloud run jobs deploy $JOB_NAME \
   --source=. \
   --region=$REGION \
@@ -56,10 +56,10 @@ gcloud run jobs deploy $JOB_NAME \
   --memory=1Gi \
   --cpu=1 \
   --set-secrets=AMAZON_CLIENT_ID=AMAZON_CLIENT_ID:latest,AMAZON_CLIENT_SECRET=AMAZON_CLIENT_SECRET:latest,AMAZON_REFRESH_TOKEN=AMAZON_REFRESH_TOKEN:latest,AMAZON_PROFILE_ID=AMAZON_PROFILE_ID:latest,DASHBOARD_API_KEY=DASHBOARD_API_KEY:latest \
-  --set-env-vars="LOG_LEVEL=INFO,MIN_RUN_INTERVAL_MINUTES=120,GOOGLE_FUNCTION_TARGET=run_optimizer"
+  --set-env-vars="LOG_LEVEL=INFO,MIN_RUN_INTERVAL_MINUTES=120"
 ```
 
-**Note**: The `GOOGLE_FUNCTION_TARGET=run_optimizer` environment variable ensures the correct function is targeted.
+**Note**: The `project.toml` file in the repository root automatically configures the function target when using buildpacks.
 
 ### Option 3: Deploy with Pre-built Container Image
 

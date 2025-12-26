@@ -480,6 +480,14 @@ gcloud functions describe amazon-ppc-optimizer \
 - ❌ **DON'T** use `--allow-unauthenticated` (causes rate limiting issues)
 - ❌ **DON'T** pass secrets as environment variables in command line
 
+### Cloud Run Job Deployment
+
+For scheduled batch jobs, you can deploy as a Cloud Run Job instead of Cloud Functions. See [CLOUD_RUN_JOB_DEPLOYMENT.md](CLOUD_RUN_JOB_DEPLOYMENT.md) for detailed instructions.
+
+**Important**: The entry point must be `run_optimizer`, not `run_pipeline`. The repository includes:
+- `project.toml` - Configures buildpack deployments with the correct function target
+- `Dockerfile.python` - Production-ready Dockerfile with correct entry point
+
 ## 🔄 Token Refresh
 
 The optimizer **automatically refreshes** the Amazon Advertising API access token:
