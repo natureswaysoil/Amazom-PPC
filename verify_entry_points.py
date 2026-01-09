@@ -29,7 +29,7 @@ def parse_main_py() -> ast.Module:
 
 
 def find_http_decorated_functions(tree: ast.Module) -> List[str]:
-    """Find all functions decorated with @functions_framework.http."""
+    """Find all functions decorated with @functions_framework.http or @http."""
     http_functions = []
     
     for node in ast.walk(tree):
@@ -41,6 +41,9 @@ def find_http_decorated_functions(tree: ast.Module) -> List[str]:
                         decorator.value.id == 'functions_framework' and 
                         decorator.attr == 'http'):
                         http_functions.append(node.name)
+                # Also check for @http (if imported directly)
+                elif isinstance(decorator, ast.Name) and decorator.id == 'http':
+                    http_functions.append(node.name)
     
     return http_functions
 
@@ -114,7 +117,6 @@ def main():
         sys.exit(1)
     
     print("✅ Verification PASSED")
-    sys.exit(0)
 
 
 if __name__ == '__main__':
