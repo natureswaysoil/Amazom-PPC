@@ -765,9 +765,13 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
 
 
 # Create aliases for backward compatibility
-# Note: optimizePPC and run_pipeline need to be actual functions, not just references,
-# so that functions_framework can find them by name
-optimizePPC = run_optimizer
+# Note: These must be actual functions with @functions_framework.http decorator,
+# not just variable references, so that functions_framework can find them by name
+
+@functions_framework.http
+def optimizePPC(request) -> Tuple[Dict[str, Any], int]:
+  """Alias for run_optimizer for backward compatibility"""
+  return run_optimizer(request)
 
 @functions_framework.http
 def run_pipeline(request) -> Tuple[Dict[str, Any], int]:
