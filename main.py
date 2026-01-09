@@ -765,6 +765,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
 
 
 optimizePPC = run_optimizer
+run_pipeline = run_optimizer  # Alias for Cloud Run Job compatibility
 
 
 def load_config() -> Dict[str, Any]:
