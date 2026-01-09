@@ -24,53 +24,8 @@ function runPythonOptimizer(requestData) {
     // Set environment variables
     const env = { ...process.env };
     
-    // Create a Python script that invokes the optimizer
-    // We'll pass the request data via stdin to avoid escaping issues
-    const pythonScript = `
-import sys
-import json
-import os
-
-# Add current directory to path
-sys.path.insert(0, '/workspace')
-sys.path.insert(0, '/app')
-sys.path.insert(0, os.getcwd())
-
-try:
-    from main import run_optimizer
-    
-    class MockRequest:
-        def __init__(self, json_data, query_params):
-            self.args = {}
-            for param in query_params:
-                if '=' in param:
-                    key, val = param.split('=', 1)
-                    self.args[key] = val
-            self._json = json_data
-        
-        def get_json(self, silent=True):
-            return self._json
-    
-    # Read request data from stdin
-    input_data = json.load(sys.stdin)
-    request_data = input_data.get('request_data', {})
-    query_params = input_data.get('query_params', [])
-    
-    request = MockRequest(request_data, query_params)
-    result, status = run_optimizer(request)
-    
-    print(json.dumps({'result': result, 'status': status}))
-    sys.exit(0)
-    
-except Exception as e:
-    import traceback
-    error_details = traceback.format_exc()
-    error_msg = {'error': str(e), 'details': error_details, 'status': 500}
-    print(json.dumps(error_msg), file=sys.stderr)
-    sys.exit(1)
-`;
-
-    const python = spawn(pythonCommand, ['-c', pythonScript], { 
+    // Invoke the bridge script
+    const python = spawn(pythonCommand, ['run_optimizer_bridge.py'], { 
       env,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -99,10 +54,31 @@ except Exception as e:
     
     python.on('close', (code) => {
       if (code !== 0) {
-        // Try to parse error from stderr
+        // Try to parse error from stderr - look for our error marker
         try {
-          const errorData = JSON.parse(stderr);
-          reject({ status: errorData.status || 500, data: errorData });
+          // Parse each line to find the error marker
+          const stderrLines = stderr.trim().split('\n');
+          for (const line of stderrLines) {
+            try {
+              const parsed = JSON.parse(line);
+              if (parsed.__OPTIMIZER_ERROR__) {
+                reject({ status: parsed.status || 500, data: parsed });
+                return;
+              }
+            } catch (e) {
+              // Not JSON, skip this line
+            }
+          }
+          // No error marker found, use generic error
+          reject({ 
+            status: 500, 
+            data: { 
+              status: 'error', 
+              error: 'Optimizer initialization failed. Check logs for details.',
+              details: stderr.slice(0, 1000),
+              stdout: stdout.slice(0, 500)
+            } 
+          });
         } catch (e) {
           reject({ 
             status: 500, 
@@ -118,11 +94,23 @@ except Exception as e:
       }
       
       try {
-        // Parse successful response
-        const lines = stdout.trim().split('\n');
-        const lastLine = lines[lines.length - 1];
+        // Parse successful response - look for our result marker
+        const stdoutLines = stdout.trim().split('\n');
+        for (const line of stdoutLines) {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.__OPTIMIZER_RESULT__) {
+              resolve({ status: parsed.status || 200, data: parsed.result });
+              return;
+            }
+          } catch (e) {
+            // Not JSON, skip this line
+          }
+        }
+        // No result marker found, try parsing the last line as fallback
+        const lastLine = stdoutLines[stdoutLines.length - 1];
         const result = JSON.parse(lastLine);
-        resolve({ status: result.status || 200, data: result.result });
+        resolve({ status: result.status || 200, data: result.result || result });
       } catch (error) {
         reject({ 
           status: 500, 

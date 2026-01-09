@@ -24,11 +24,7 @@ RUN npm install --production
 # Copy application code (both Node.js and Python)
 COPY index.js ./
 COPY server.js ./
-COPY main.py ./
-COPY optimizer_core.py ./
-COPY bigquery_client.py ./
-COPY dashboard_client.py ./
-COPY gcp_credentials.py ./
+COPY *.py ./
 COPY config.json ./
 
 # Set environment variable to use python3
