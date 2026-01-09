@@ -61,6 +61,14 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           export_default_credentials: true
 
+      - name: Verify entry points
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Verifying Cloud Function entry points..."
+          python3 verify_entry_points.py
+          echo "✓ Entry point verification passed"
+
       - name: Set variables
         id: vars
         shell: bash

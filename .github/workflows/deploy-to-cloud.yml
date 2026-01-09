@@ -82,6 +82,12 @@ jobs:
           fi
           echo "✅ Required secrets validated"
       
+      - name: Verify entry points
+        run: |
+          echo "Verifying Cloud Function entry points..."
+          python3 verify_entry_points.py
+          echo "✓ Entry point verification passed"
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
