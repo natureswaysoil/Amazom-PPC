@@ -474,7 +474,7 @@ class AmazonAdsAPI:
                 response_data = response.json()
                 if response.status_code != 200:
                     logger.error(f"Amazon auth error response: {response_data}")
-            except (ValueError, KeyError, AttributeError) as e:
+            except (ValueError, KeyError, AttributeError):
                 logger.debug(f"Response body (first 200 chars): {response.text[:200]}")
             
             response.raise_for_status()

@@ -675,7 +675,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     dashboard_client = DashboardClient(config, bigquery_client=bigquery_client)
 
     # Run Interval Logic
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_utc = _normalise_timestamp(datetime.now(timezone.utc))
     min_interval_minutes = _get_min_run_interval_minutes(config)
     force_run = request.args.get('force', '').lower() == 'true' or bool(request_json.get('force'))
 
