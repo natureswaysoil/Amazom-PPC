@@ -65,6 +65,12 @@ jobs:
             echo "✓ $file"
           done
       
+      - name: Verify entry points
+        run: |
+          echo "Verifying Cloud Function entry points..."
+          python3 verify_entry_points.py
+          echo "✓ Entry point verification passed"
+      
       - name: Verify secrets exist
         run: |
           echo "Verifying secrets in Secret Manager..."
