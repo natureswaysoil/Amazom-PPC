@@ -23,9 +23,9 @@ function runPythonOptimizer(requestData) {
     
     // Set environment variables
     const env = { ...process.env };
-    const requestJson = JSON.stringify(requestData);
     
     // Create a Python script that invokes the optimizer
+    // We'll pass the request data via stdin to avoid escaping issues
     const pythonScript = `
 import sys
 import json
@@ -33,6 +33,7 @@ import os
 
 # Add current directory to path
 sys.path.insert(0, '/workspace')
+sys.path.insert(0, '/app')
 sys.path.insert(0, os.getcwd())
 
 try:
@@ -42,15 +43,18 @@ try:
         def __init__(self, json_data, query_params):
             self.args = {}
             for param in query_params:
-                key, val = param.split('=')
-                self.args[key] = val
+                if '=' in param:
+                    key, val = param.split('=', 1)
+                    self.args[key] = val
             self._json = json_data
         
         def get_json(self, silent=True):
             return self._json
     
-    request_data = json.loads('''${requestJson.replace(/'/g, "\\'")}''')
-    query_params = '''${queryParams.join('&')}'''.split('&') if '''${queryParams.join('&')}''' else []
+    # Read request data from stdin
+    input_data = json.load(sys.stdin)
+    request_data = input_data.get('request_data', {})
+    query_params = input_data.get('query_params', [])
     
     request = MockRequest(request_data, query_params)
     result, status = run_optimizer(request)
@@ -61,11 +65,22 @@ try:
 except Exception as e:
     import traceback
     error_details = traceback.format_exc()
-    print(json.dumps({'error': str(e), 'details': error_details, 'status': 500}), file=sys.stderr)
+    error_msg = {'error': str(e), 'details': error_details, 'status': 500}
+    print(json.dumps(error_msg), file=sys.stderr)
     sys.exit(1)
 `;
 
-    const python = spawn(pythonCommand, ['-c', pythonScript], { env });
+    const python = spawn(pythonCommand, ['-c', pythonScript], { 
+      env,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    
+    // Send request data via stdin
+    python.stdin.write(JSON.stringify({
+      request_data: requestData,
+      query_params: queryParams
+    }));
+    python.stdin.end();
     
     let stdout = '';
     let stderr = '';
