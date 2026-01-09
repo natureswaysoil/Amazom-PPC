@@ -6,7 +6,7 @@ import tempfile
 import traceback
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -183,7 +183,7 @@ def _get_min_run_interval_minutes(config: Dict[str, Any]) -> int:
 
 
 @contextmanager
-def create_config_file(config_dict: Dict) -> str:
+def create_config_file(config_dict: Dict) -> Iterator[str]:
   """
   Create a temporary config file from dictionary using context manager
   The optimizer_core expects YAML format file.
@@ -216,12 +216,13 @@ def create_config_file(config_dict: Dict) -> str:
       except Exception as e:
         logger.warning(f"Failed to cleanup temp file {temp_file.name}: {e}")
 
-def _resolve_config_path(request_data: Dict[str, Any]) -> str:
+def _resolve_config_path(request_data: Dict[str, Any]) -> Optional[str]:
   request_path = request_data.get("config_path")
   if request_path:
     if os.path.exists(request_path):
       return request_path
     logger.warning("Requested config_path '%s' was not found; falling back to defaults", request_path)
+  return None
 
 def send_email_notification(subject: str, body: str, config: Dict) -> bool:
   """Send email notification via SMTP with retry logic"""
@@ -301,7 +302,7 @@ def update_dashboard(results, config):
     dashboard_url = config.get('dashboard', {}).get('url')
     if not dashboard_url:
       logger.warning("Dashboard URL not configured")
-      return
+      return False
     
     # Send POST request to dashboard API endpoint
     api_endpoint = f"{dashboard_url}/api/optimization-results"
@@ -328,7 +329,7 @@ def update_dashboard(results, config):
         
         if response.status_code == 200:
           logger.info("Dashboard updated successfully")
-          return
+          return True
         else:
           body_preview = response.text[:1000] if response.text else 'Empty response'
           logger.warning(f"Dashboard update returned status {response.status_code}: {body_preview}")
@@ -345,6 +346,7 @@ def update_dashboard(results, config):
           time.sleep(wait_time)
     
     logger.error(f"Failed to update dashboard after {max_retries} attempts")
+    return False
       
   except Exception as e:
     logger.error(f"Failed to update dashboard: {str(e)}")
@@ -673,13 +675,31 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     dashboard_client = DashboardClient(config, bigquery_client=bigquery_client)
 
     # Run Interval Logic
-    now_utc = datetime.utcnow()
+    now_utc = _normalise_timestamp(datetime.now(timezone.utc))
     min_interval_minutes = _get_min_run_interval_minutes(config)
     force_run = request.args.get('force', '').lower() == 'true' or bool(request_json.get('force'))
 
     if not force_run and min_interval_minutes > 0:
-      # ... (Interval checking logic remains consistent)
-      pass # Abbreviated for brevity, assuming standard logic matches
+      # Check if enough time has passed since last run
+      last_run_memory = _get_last_run_memory()
+      last_run_cache = _read_last_run_from_cache()
+      last_run = _select_latest_timestamp(last_run_memory, last_run_cache)
+      
+      if last_run:
+        time_since_last_run = (now_utc - last_run).total_seconds() / 60  # minutes
+        if time_since_last_run < min_interval_minutes:
+          wait_minutes = min_interval_minutes - time_since_last_run
+          logger.info(f"Skipping run - only {time_since_last_run:.1f} minutes since last run. Need {min_interval_minutes} minutes. Wait {wait_minutes:.1f} more minutes.")
+          return {
+            'status': 'skipped',
+            'message': f'Run interval not met. Wait {wait_minutes:.1f} more minutes.',
+            'last_run': last_run.isoformat(),
+            'min_interval_minutes': min_interval_minutes
+          }, 200
+      
+      # Update last run time
+      _update_last_run_memory(now_utc)
+      _write_last_run_to_cache(now_utc)
 
     # Start Run
     run_id = dashboard_client.start_run(dry_run=dry_run)

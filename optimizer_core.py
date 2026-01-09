@@ -42,7 +42,7 @@ import time
 import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
@@ -372,7 +372,7 @@ class AuditLogger:
             old_value: str, new_value: str, reason: str, dry_run: bool = False):
         """Log an audit entry"""
         entry = AuditEntry(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             action_type=action_type,
             entity_type=entity_type,
             entity_id=entity_id,
@@ -474,7 +474,7 @@ class AmazonAdsAPI:
                 response_data = response.json()
                 if response.status_code != 200:
                     logger.error(f"Amazon auth error response: {response_data}")
-            except:
+            except (ValueError, KeyError, AttributeError):
                 logger.debug(f"Response body (first 200 chars): {response.text[:200]}")
             
             response.raise_for_status()
@@ -1096,7 +1096,7 @@ class AmazonAdsAPI:
                 else:
                     start_date = datetime.strptime(report_date, '%Y-%m-%d').date()
             else:
-                start_date = (datetime.utcnow() - timedelta(days=1)).date()
+                start_date = (datetime.now(timezone.utc) - timedelta(days=1)).date()
             end_date = start_date
         except ValueError as exc:
             logger.error(f"Invalid report date '{report_date}': {exc}")

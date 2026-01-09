@@ -469,7 +469,7 @@ class BigQueryClient:
             self._ensure_table_exists("campaign_details", schema)
 
             rows = []
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = datetime.now(timezone.utc).isoformat()
 
             for campaign in budget_data:
                 row = {
@@ -617,7 +617,7 @@ class BigQueryClient:
             self._ensure_table_exists(RUN_EVENTS_TABLE, RUN_EVENTS_SCHEMA)
 
             payload = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "run_id": str(run_id),
                 "status": str(status),
                 "details": json.dumps(details, default=str) if details else None,
