@@ -764,8 +764,19 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     return {'status': 'error', 'message': error_msg}, 500
 
 
-optimizePPC = run_optimizer
-run_pipeline = run_optimizer  # Alias for Cloud Run Job compatibility
+# Create aliases for backward compatibility
+# Note: These must be actual functions with @functions_framework.http decorator,
+# not just variable references, so that functions_framework can find them by name
+
+@functions_framework.http
+def optimizePPC(request) -> Tuple[Dict[str, Any], int]:
+  """Alias for run_optimizer for backward compatibility"""
+  return run_optimizer(request)
+
+@functions_framework.http
+def run_pipeline(request) -> Tuple[Dict[str, Any], int]:
+  """Alias for run_optimizer to support Cloud Run Job compatibility"""
+  return run_optimizer(request)
 
 
 def load_config() -> Dict[str, Any]:
