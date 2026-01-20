@@ -7,10 +7,12 @@
 
 const https = require('https');
 const querystring = require('querystring');
+const aws4 = require('aws4');
 
 // SP-API endpoints
 const TOKEN_URL = 'https://api.amazon.com/auth/o2/token';
-const SP_API_ENDPOINT = 'https://sellingpartnerapi-na.amazon.com';
+const DEFAULT_SP_API_HOST = 'sellingpartnerapi-na.amazon.com';
+const DEFAULT_SP_API_REGION = 'us-east-1';
 
 // Secret Manager client (for production)
 let secretManagerClient;
@@ -95,17 +97,35 @@ async function getAccessToken(clientId, clientSecret, refreshToken) {
 /**
  * Make an authenticated request to Amazon SP-API
  */
-async function callSpApi(endpoint, accessToken, marketplaceId) {
+async function callSpApi(endpoint, accessToken, awsCredentials, spApiConfig) {
   return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'sellingpartnerapi-na.amazon.com',
+    const { host, region } = spApiConfig;
+    const { accessKeyId, secretAccessKey, sessionToken } = awsCredentials;
+
+    const unsignedRequest = {
+      host,
       path: endpoint,
       method: 'GET',
+      service: 'execute-api',
+      region,
       headers: {
         'x-amz-access-token': accessToken,
-        'x-amz-date': new Date().toISOString(),
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
+    };
+
+    const signedRequest = aws4.sign(unsignedRequest, {
+      accessKeyId,
+      secretAccessKey,
+      sessionToken: sessionToken || undefined,
+    });
+
+    const options = {
+      hostname: signedRequest.host,
+      path: signedRequest.path,
+      method: signedRequest.method,
+      headers: signedRequest.headers,
     };
 
     const req = https.request(options, (res) => {
@@ -126,6 +146,10 @@ async function callSpApi(endpoint, accessToken, marketplaceId) {
 
     req.on('error', (err) => {
       reject(new Error(`SP-API request failed: ${err.message}`));
+    });
+
+    req.setTimeout(30000, () => {
+      req.destroy(new Error('SP-API request timed out after 30 seconds'));
     });
 
     req.end();
@@ -159,6 +183,14 @@ exports.amazonSalesData = async (req, res) => {
     const clientSecret = await getSecret('AMAZON_SP_API_CLIENT_SECRET');
     const refreshToken = await getSecret('AMAZON_SP_API_REFRESH_TOKEN');
     const marketplaceId = await getSecret('AMAZON_MARKETPLACE_ID') || 'ATVPDKIKX0DER'; // Default to US
+    const accessKeyId = await getSecret('AWS_ACCESS_KEY_ID');
+    const secretAccessKey = await getSecret('AWS_SECRET_ACCESS_KEY');
+    const sessionToken = await getSecret('AWS_SESSION_TOKEN');
+    const spApiHost = (await getSecret('SP_API_HOST')) || DEFAULT_SP_API_HOST;
+    const spApiRegion = (await getSecret('SP_API_REGION')) ||
+      process.env.AWS_REGION ||
+      process.env.AWS_DEFAULT_REGION ||
+      DEFAULT_SP_API_REGION;
 
     if (!clientId || !clientSecret || !refreshToken) {
       console.error('Missing required credentials');
@@ -168,8 +200,18 @@ exports.amazonSalesData = async (req, res) => {
       });
     }
 
+    if (!accessKeyId || !secretAccessKey) {
+      console.error('Missing AWS credentials for SP-API signing');
+      return res.status(500).json({
+        error: 'Configuration error',
+        message: 'Missing AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY for SP-API signing',
+      });
+    }
+
     console.log('Credentials loaded successfully');
     console.log('Marketplace ID:', marketplaceId);
+    console.log('SP-API host:', spApiHost);
+    console.log('SP-API region:', spApiRegion);
 
     // Get access token
     console.log('Requesting access token...');
@@ -190,7 +232,12 @@ exports.amazonSalesData = async (req, res) => {
     const ordersEndpoint = `/orders/v0/orders?MarketplaceIds=${marketplaceId}&CreatedAfter=${start.toISOString()}`;
     
     console.log('Calling SP-API:', ordersEndpoint);
-    const result = await callSpApi(ordersEndpoint, accessToken, marketplaceId);
+    const result = await callSpApi(
+      ordersEndpoint,
+      accessToken,
+      { accessKeyId, secretAccessKey, sessionToken },
+      { host: spApiHost, region: spApiRegion }
+    );
 
     console.log('SP-API response status:', result.statusCode);
 
