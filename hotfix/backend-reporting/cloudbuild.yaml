@@ -1,0 +1,35 @@
+# Cloud Build config to build/push the amazon-ppc-backend reporting/budget-pacer hotfix image.
+#
+# Usage:
+#   export PROJECT=amazon-ppc-474902
+#   export REGION=us-central1
+#   export REPO=ppc-automation
+#   export IMAGE=amazon-ppc-backend-hotfix
+#   export BASE_IMAGE=gcr.io/amazon-ppc-bid-optimizer/amazon-ppc-backend:latest
+#   export TAG=backend-hotfix-$(date +%Y%m%d-%H%M%S)
+#   export DEST_IMAGE=$REGION-docker.pkg.dev/$PROJECT/$REPO/$IMAGE:$TAG
+#
+#   gcloud builds submit hotfix/backend-reporting \
+#     --project=$PROJECT \
+#     --config=cloudbuild.yaml \
+#     --substitutions=_BASE_IMAGE=$BASE_IMAGE,_DEST_IMAGE=$DEST_IMAGE \
+#     .
+
+substitutions:
+  _BASE_IMAGE: ""
+  _DEST_IMAGE: ""
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile
+      - --build-arg
+      - BASE_IMAGE=${_BASE_IMAGE}
+      - -t
+      - ${_DEST_IMAGE}
+      - .
+
+images:
+  - ${_DEST_IMAGE}
