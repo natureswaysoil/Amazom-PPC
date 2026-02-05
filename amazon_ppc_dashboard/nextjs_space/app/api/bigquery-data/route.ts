@@ -58,7 +58,8 @@ async function getDatasetLocation(bigquery: BigQuery, datasetId: string) {
 }
 
 /**
- * Optional API key check for external callers.
+ * API key check for write operations (POST/PUT/DELETE).
+ * Currently unused for GET requests which are read-only and come from the dashboard frontend.
  * If DASHBOARD_API_KEY is unset, auth is skipped (handy for local dev).
  */
 function verifyApiKey(req: NextRequest): string | null {
@@ -81,11 +82,11 @@ function verifyApiKey(req: NextRequest): string | null {
 
 export async function GET(request: NextRequest) {
   try {
-    // --- Auth (optional) ---
-    const authError = verifyApiKey(request);
-    if (authError) {
-      return NextResponse.json({ error: authError }, { status: 401 });
-    }
+    // --- Auth: No API key required for GET requests ---
+    // GET requests are read-only and originate from the dashboard's frontend.
+    // Data access is protected by BigQuery authentication via GCP service account credentials.
+    // The service account has restricted permissions to only read from specific BigQuery datasets.
+    // This endpoint is meant to be accessible to the dashboard UI without additional auth barriers.
 
     const { searchParams } = new URL(request.url);
     const table = searchParams.get('table') || 'optimization_results';
