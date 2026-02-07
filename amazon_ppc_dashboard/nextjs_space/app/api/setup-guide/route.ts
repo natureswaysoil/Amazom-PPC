@@ -9,28 +9,46 @@ export async function GET(request: NextRequest) {
   const setupSteps = [];
   let currentStep = 1;
   let allStepsComplete = true;
+
+  const runningInGCP = Boolean(
+    process.env.K_SERVICE ||
+      process.env.FUNCTION_TARGET ||
+      process.env.GAE_SERVICE ||
+      process.env.CLOUD_RUN_JOB,
+  );
   
   // Step 1: Check GCP Credentials
   const credentialResult = await resolveGCPCredentials();
   const step1 = {
     step: currentStep++,
     title: 'Google Cloud Service Account Credentials',
-    status: credentialResult.success ? 'complete' : 'incomplete',
+    status: credentialResult.success || runningInGCP ? 'complete' : 'incomplete',
     required: true,
     description: 'Service account credentials are required to read optimization data from BigQuery',
-    currentValue: credentialResult.success 
-      ? `✓ Credentials loaded from ${credentialResult.source}` 
-      : '✗ No valid credentials found',
-    instructions: credentialResult.success ? [] : [
-      'Download your service account key JSON file from Google Cloud Console',
-      'Go to: https://console.cloud.google.com/iam-admin/serviceaccounts',
-      'Select your service account (or create a new one)',
-      'Go to "Keys" tab → "Add Key" → "Create new key" → JSON format',
-      'Copy the entire JSON file contents',
-      'In your Vercel/deployment platform, set environment variable: GCP_SERVICE_ACCOUNT_KEY',
-      'Paste the JSON as the value (can be raw JSON or base64-encoded)',
-      'Redeploy the dashboard',
-    ],
+    currentValue: credentialResult.success
+      ? `✓ Credentials loaded from ${credentialResult.source}`
+      : runningInGCP
+        ? '✓ Running in Google Cloud - using Application Default Credentials (Cloud Run service account)'
+        : '✗ No valid credentials found',
+    instructions: credentialResult.success
+      ? []
+      : runningInGCP
+        ? [
+            'This service is running on Google Cloud (Cloud Run / Functions).',
+            'It should use the attached service account automatically (ADC).',
+            'Next: verify BigQuery access by visiting: /api/bigquery-data?limit=1',
+            'If you see a permissions error, grant BigQuery roles to the Cloud Run service account.',
+          ]
+        : [
+            'Download your service account key JSON file from Google Cloud Console',
+            'Go to: https://console.cloud.google.com/iam-admin/serviceaccounts',
+            'Select your service account (or create a new one)',
+            'Go to "Keys" tab → "Add Key" → "Create new key" → JSON format',
+            'Copy the entire JSON file contents',
+            'In your Vercel/deployment platform, set environment variable: GCP_SERVICE_ACCOUNT_KEY',
+            'Paste the JSON as the value (can be raw JSON or base64-encoded)',
+            'Redeploy the dashboard',
+          ],
     helpfulLinks: [
       'https://cloud.google.com/iam/docs/keys-create-delete',
       'https://vercel.com/docs/projects/environment-variables',
@@ -62,13 +80,13 @@ export async function GET(request: NextRequest) {
   const step3 = {
     step: currentStep++,
     title: 'BigQuery Permissions',
-    status: credentialResult.success ? 'needs_verification' : 'incomplete',
+    status: credentialResult.success || runningInGCP ? 'needs_verification' : 'incomplete',
     required: true,
     description: 'Service account needs permissions to read BigQuery data',
-    currentValue: credentialResult.success 
-      ? 'Credentials loaded - permissions need verification' 
+    currentValue: credentialResult.success || runningInGCP
+      ? 'Credentials available - permissions need verification'
       : 'Cannot check until credentials are configured',
-    instructions: credentialResult.success ? [
+    instructions: credentialResult.success || runningInGCP ? [
       'Test BigQuery access by visiting: /api/bigquery-data?limit=1',
       'If you see a permissions error, grant these roles to your service account:',
       '  • roles/bigquery.dataViewer (to read data)',

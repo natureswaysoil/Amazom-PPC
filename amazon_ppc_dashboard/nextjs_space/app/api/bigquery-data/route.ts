@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
-import { resolveGCPCredentials, getFirstSetEnv, PROJECT_ID_ENV_NAMES } from '../lib/credentials';
+import {
+  resolveGCPCredentials,
+  getFirstSetEnv,
+  PROJECT_ID_ENV_NAMES,
+} from '../lib/credentials';
+import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
+
+export const dynamic = 'force-dynamic';
 
 const DEFAULT_DATASET_ID = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
 const PROJECT_ID =
   process.env.GOOGLE_CLOUD_PROJECT ||
   process.env.GCP_PROJECT ||
+  process.env.GCP_PROJECT_ID ||
   process.env.GCLOUD_PROJECT ||
   'amazon-ppc-474902';
 
@@ -16,9 +24,7 @@ let cachedDatasetLocation: string | null = null;
  * Falls back to BQ_LOCATION / BIGQUERY_LOCATION if metadata lookup fails.
  */
 async function getDatasetLocation(bigquery: BigQuery, datasetId: string) {
-  if (cachedDatasetLocation) {
-    return cachedDatasetLocation;
-  }
+  if (cachedDatasetLocation) return cachedDatasetLocation;
 
   try {
     const [metadata] = await bigquery.dataset(datasetId).getMetadata();
@@ -28,7 +34,7 @@ async function getDatasetLocation(bigquery: BigQuery, datasetId: string) {
       console.log(
         `[BigQuery] Auto-detected dataset location for ${datasetId}: ${loc}`,
       );
-      return loc;
+      return cachedDatasetLocation;
     }
   } catch (err: any) {
     console.warn(
@@ -49,42 +55,35 @@ async function getDatasetLocation(bigquery: BigQuery, datasetId: string) {
       `[BigQuery] Using dataset location from env for ${datasetId}: ${envLoc}`,
     );
   } else {
-    console.log(
-      `[BigQuery] No explicit dataset location set; letting BigQuery choose default.`,
-    );
+    console.log('[BigQuery] No explicit dataset location set; using default.');
   }
 
   return cachedDatasetLocation;
 }
 
-/**
- * Optional API key check for external callers.
- * If DASHBOARD_API_KEY is unset, auth is skipped (handy for local dev).
- */
-function verifyApiKey(req: NextRequest): string | null {
-  const apiKey = process.env.DASHBOARD_API_KEY;
-  if (!apiKey) return null;
-
-  const authHeader = req.headers.get('authorization');
+function isAuthorized(request: NextRequest, apiKey: string): boolean {
+  const authHeader = request.headers.get('authorization');
   const bearer =
     authHeader && authHeader.startsWith('Bearer ')
       ? authHeader.slice(7)
       : undefined;
-  const headerApiKey = req.headers.get('x-api-key') ?? undefined;
-
-  if (bearer === apiKey || headerApiKey === apiKey) {
-    return null;
-  }
-
-  return 'Unauthorized';
+  const headerApiKey = request.headers.get('x-api-key') ?? undefined;
+  return bearer === apiKey || headerApiKey === apiKey;
 }
 
 export async function GET(request: NextRequest) {
   try {
+    const runningInGCP = Boolean(
+      process.env.K_SERVICE ||
+        process.env.FUNCTION_TARGET ||
+        process.env.GAE_SERVICE ||
+        process.env.CLOUD_RUN_JOB,
+    );
+
     // --- Auth (optional) ---
-    const authError = verifyApiKey(request);
-    if (authError) {
-      return NextResponse.json({ error: authError }, { status: 401 });
+    const resolvedKey = await resolveDashboardApiKey({ required: false });
+    if (resolvedKey.apiKey && !isAuthorized(request, resolvedKey.apiKey)) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { searchParams } = new URL(request.url);
@@ -93,7 +92,7 @@ export async function GET(request: NextRequest) {
 
     // Resolve GCP credentials
     const credentialResult = await resolveGCPCredentials();
-    if (!credentialResult.success) {
+    if (!credentialResult.success && !runningInGCP) {
       return NextResponse.json(
         {
           error: 'Failed to resolve GCP credentials',
@@ -104,21 +103,29 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const projectId = credentialResult.projectId || getFirstSetEnv(PROJECT_ID_ENV_NAMES) || PROJECT_ID;
+    if (!credentialResult.success && runningInGCP) {
+      console.warn(
+        '[BigQuery API] Explicit credential resolution failed, but running in GCP; continuing with ADC:',
+        credentialResult.error?.message || credentialResult.error,
+      );
+    }
+
+    const projectId =
+      credentialResult.projectId ||
+      getFirstSetEnv(PROJECT_ID_ENV_NAMES) ||
+      PROJECT_ID;
     const datasetId = DEFAULT_DATASET_ID;
 
     console.log(
       `[BigQuery API] Fetching data from ${projectId}.${datasetId}.${table} (limit=${limit})`,
     );
 
-    // Initialize BigQuery client with credentials if available
     const bigqueryOptions: any = { projectId };
     if (credentialResult.credentials) {
       bigqueryOptions.credentials = credentialResult.credentials;
     }
     const bigquery = new BigQuery(bigqueryOptions);
 
-    // Auto-detect dataset location for the query job
     const location = await getDatasetLocation(bigquery, datasetId);
 
     const query = `
@@ -131,7 +138,6 @@ export async function GET(request: NextRequest) {
     const [job] = await bigquery.createQueryJob({
       query,
       params: { limit },
-      // Only set location if we know it; otherwise let BigQuery decide.
       ...(location ? { location } : {}),
     });
 
@@ -152,21 +158,14 @@ export async function GET(request: NextRequest) {
   } catch (err: any) {
     const message = err?.message || String(err);
 
-    // 404-style: dataset or table missing
-    if (
-      message.includes('Not found: Dataset') ||
-      message.includes('Not found: Table') ||
-      message.includes('Not found: Dataset') ||
-      (message.includes('Not found:') && message.includes('amazon_ppc_data'))
-    ) {
+    if (message.includes('Not found: Dataset') || message.includes('Not found: Table')) {
       return NextResponse.json(
         {
           error: 'Dataset or table not found in BigQuery',
-          message:
-            'The dataset/table you requested does not exist in this project.',
+          message: 'The dataset/table you requested does not exist in this project.',
           details: message,
           hint:
-            'Confirm that the dataset "amazon_ppc_data" and the requested table exist in project "amazon-ppc-474902". ' +
+            'Confirm that the dataset "amazon_ppc_data" and the requested table exist in the configured project. ' +
             'You do NOT need to run any setup script; just ensure the dataset and table names match.',
         },
         { status: 404 },
@@ -174,7 +173,6 @@ export async function GET(request: NextRequest) {
     }
 
     console.error('[BigQuery API] Unexpected error:', err);
-
     return NextResponse.json(
       {
         error: 'Failed to query BigQuery',

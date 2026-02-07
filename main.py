@@ -819,6 +819,25 @@ def validate_credentials(config: Dict[str, Any]) -> None:
   if missing:
     raise ValueError(f"Missing API credentials: {', '.join(missing)}")
 
+  # Shape validation to catch placeholders early in Cloud environments
+  client_id = (amazon_api.get('client_id') or '').strip()
+  client_secret = (amazon_api.get('client_secret') or '').strip()
+  refresh_token = (amazon_api.get('refresh_token') or '').strip()
+  invalid = []
+  try:
+    if IS_CLOUD_FUNCTION and not client_id.startswith('amzn1.application-oa2-client'):
+      invalid.append('client_id')
+    if IS_CLOUD_FUNCTION and not (client_secret.startswith('amzn1.oa2-cs') or len(client_secret) >= 20):
+      invalid.append('client_secret')
+    if IS_CLOUD_FUNCTION and not ('Atzr|' in refresh_token or len(refresh_token) >= 50):
+      invalid.append('refresh_token')
+  except Exception:
+    pass
+  if invalid:
+    raise ValueError(
+      f"Invalid credential values detected ({', '.join(invalid)}). Ensure real LWA values are configured via Secret Manager or env vars."
+    )
+
 
 def format_results_summary(results: Dict[str, Any], duration: float, dry_run: bool) -> str:
   summary = [f"Duration: {duration:.2f}s", f"Mode: {'Dry Run' if dry_run else 'Live'}"]

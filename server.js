@@ -13,13 +13,17 @@ function runPythonOptimizer(requestData) {
     const pythonCommand = process.env.PYTHON_PATH || 'python3';
     
     // Build query parameters from request
-    const queryParams = [];
-    if (requestData.dry_run) queryParams.push('dry_run=true');
-    if (requestData.force) queryParams.push('force=true');
-    if (requestData.health) queryParams.push('health=true');
-    if (requestData.verify_connection) queryParams.push('verify_connection=true');
-    if (requestData.list_profiles) queryParams.push('list_profiles=true');
-    if (requestData.permission_health) queryParams.push('permission_health=true');
+    const queryParams = Array.isArray(requestData.query_params)
+      ? requestData.query_params
+      : [];
+    if (!Array.isArray(requestData.query_params)) {
+      if (requestData.dry_run) queryParams.push('dry_run=true');
+      if (requestData.force) queryParams.push('force=true');
+      if (requestData.health) queryParams.push('health=true');
+      if (requestData.verify_connection) queryParams.push('verify_connection=true');
+      if (requestData.list_profiles) queryParams.push('list_profiles=true');
+      if (requestData.permission_health) queryParams.push('permission_health=true');
+    }
     
     // Set environment variables
     const env = { ...process.env };
@@ -31,10 +35,14 @@ function runPythonOptimizer(requestData) {
     });
     
     // Send request data via stdin
-    python.stdin.write(JSON.stringify({
-      request_data: requestData,
-      query_params: queryParams
-    }));
+    python.stdin.write(
+      JSON.stringify({
+        request_data: requestData,
+        query_params: queryParams,
+        method: requestData.__method || 'POST',
+        headers: requestData.__headers || {},
+      }),
+    );
     python.stdin.end();
     
     let stdout = '';
@@ -126,15 +134,17 @@ function runPythonOptimizer(requestData) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+
   // Handle GET requests to health  
-  if (req.url === '/health' && req.method === 'GET') {
+  if (parsedUrl.pathname === '/health' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'healthy', service: 'amazon-ppc-optimizer' }));
     return;
   }
   
   // Handle GET requests to root - return service info
-  if (req.url === '/' && req.method === 'GET') {
+  if (parsedUrl.pathname === '/' && req.method === 'GET' && !parsedUrl.search) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ 
       status: 'healthy', 
@@ -147,9 +157,45 @@ const server = http.createServer(async (req, res) => {
     }));
     return;
   }
+
+  // Handle GET requests to root with query params - allow live endpoints (Cloud Run)
+  if (parsedUrl.pathname === '/' && req.method === 'GET' && (parsedUrl.searchParams.get('live') || parsedUrl.searchParams.get('section'))) {
+    try {
+      const requestData = {
+        __method: 'GET',
+        __headers: {
+          // Forward auth + profile routing headers
+          Authorization: req.headers['authorization'] || '',
+          'X-API-Key': req.headers['x-api-key'] || '',
+          Origin: req.headers['origin'] || '',
+          'X-Profile-ID': req.headers['x-profile-id'] || '',
+        },
+      };
+
+      const queryParams = [];
+      for (const [key, value] of parsedUrl.searchParams.entries()) {
+        queryParams.push(`${key}=${value}`);
+      }
+      requestData.query_params = queryParams;
+
+      const result = await runPythonOptimizer(requestData);
+      res.writeHead(result.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result.data));
+    } catch (error) {
+      console.error('Live endpoint failed:', error);
+      const status = error.status || 500;
+      const data = error.data || {
+        status: 'error',
+        error: error.message || 'Live endpoint failed. Check logs for details.',
+      };
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+    }
+    return;
+  }
   
   // Handle POST requests to root - run Python optimizer
-  if (req.url === '/' && req.method === 'POST') {
+  if (parsedUrl.pathname === '/' && req.method === 'POST') {
     let body = '';
     
     req.on('data', chunk => {
@@ -174,7 +220,16 @@ const server = http.createServer(async (req, res) => {
         
         console.log('Invoking Python optimizer with request:', JSON.stringify(requestData));
         
-        const result = await runPythonOptimizer(requestData);
+        const result = await runPythonOptimizer({
+          ...requestData,
+          __method: 'POST',
+          __headers: {
+            Authorization: req.headers['authorization'] || '',
+            'X-API-Key': req.headers['x-api-key'] || '',
+            Origin: req.headers['origin'] || '',
+            'X-Profile-ID': req.headers['x-profile-id'] || '',
+          },
+        });
         res.writeHead(result.status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result.data));
         
@@ -192,7 +247,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.url === '/sync' && req.method === 'POST') {
+  if (parsedUrl.pathname === '/sync' && req.method === 'POST') {
     try {
       console.log('Starting Amazon PPC data sync...');
       const data = await syncAmazonData();

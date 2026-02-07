@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
 
 export async function POST(request: NextRequest) {
   try {
     // Verify API key
     const authHeader = request.headers.get('authorization');
-    const apiKey = process.env.DASHBOARD_API_KEY;
+    const { apiKey } = await resolveDashboardApiKey({ required: false });
     
     if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== apiKey) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

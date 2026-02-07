@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, TYPE_CHECKING
 import requests
 from functools import wraps
+from urllib.parse import urlparse
 
 # Use TYPE_CHECKING to avoid circular imports
 if TYPE_CHECKING:
@@ -242,13 +243,10 @@ class DashboardClient:
         Returns:
             True if successful, False otherwise
         """
-        if not self.enabled:
-            logger.info("Dashboard updates disabled")
-            return False
-        
         try:
             # Build enhanced payload
             payload = self.build_results_payload(results, config, duration_seconds, dry_run)
+            bq_success = None
             
             # Write to BigQuery if configured
             if self.bigquery_client:
@@ -261,6 +259,12 @@ class DashboardClient:
                         logger.warning("⚠️ BigQuery write returned False")
                 except Exception as bq_err:
                     logger.error(f"Failed to write to BigQuery: {str(bq_err)}")
+                    bq_success = False
+
+            if not self.enabled:
+                logger.info("Dashboard updates disabled; skipping HTTP send")
+                # If BigQuery is configured, treat a successful write as success.
+                return bool(bq_success)
             
             # Send to dashboard
             response = self._make_request('/api/optimization-results', payload)
@@ -413,13 +417,73 @@ class DashboardClient:
         """
         if not self.enabled:
             return False
-        
-        try:
-            response = self._make_request('/api/health', {}, method='GET')
-            return response is not None
-        except Exception as e:
-            logger.error(f"Dashboard health check failed: {str(e)}")
+
+        def _is_healthy(payload: Any) -> bool:
+            if not isinstance(payload, dict):
+                return False
+            status = str(payload.get('status', '')).strip().lower()
+            if status in {'ok', 'healthy', 'success'}:
+                return True
+            # Some services return a structured root response without a strict status.
+            if payload.get('endpoints') and status != 'error':
+                return True
             return False
+
+        base = (self.url or '').rstrip('/')
+        # Prefer the Next.js convention first, then common service health paths.
+        candidates = ['/api/health', '/health', '/']
+
+        for endpoint in candidates:
+            url = f"{base}{endpoint}"
+            try:
+                resp = self.session.request(
+                    method='GET',
+                    url=url,
+                    headers=self._get_headers(),
+                    timeout=self.timeout,
+                )
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"Dashboard health probe failed for {url}: {exc}")
+                continue
+
+            if resp.status_code != 200:
+                body_preview = (resp.text or '')[:300].replace('\n', ' ')
+                logger.debug(f"Dashboard health probe {url} returned HTTP {resp.status_code}: {body_preview}")
+                continue
+
+            try:
+                payload = resp.json() if resp.content else {}
+            except ValueError:
+                payload = None
+
+            if _is_healthy(payload):
+                return True
+
+            # If we got a helpful error payload, surface it for troubleshooting.
+            if isinstance(payload, dict) and str(payload.get('status', '')).strip().lower() == 'error':
+                available = payload.get('available_endpoints')
+                if available:
+                    logger.warning(
+                        "Dashboard URL responded, but endpoint '%s' was not found. Available endpoints: %s",
+                        endpoint,
+                        available,
+                    )
+                else:
+                    logger.warning(
+                        "Dashboard URL responded with an error payload at '%s': %s",
+                        endpoint,
+                        str(payload)[:500],
+                    )
+
+        # Extra hint if the URL looks like it points at an optimizer service.
+        try:
+            host = urlparse(base).netloc
+            if host and ('optimizer' in host or 'dashboard' in host):
+                logger.debug("Dashboard health check exhausted candidates for host: %s", host)
+        except Exception:
+            pass
+
+        return False
     
     def build_results_payload(self, results: Dict, config: Dict, 
                                duration_seconds: float, dry_run: bool) -> Dict:

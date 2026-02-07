@@ -15,11 +15,12 @@ Version: 1.0.0
 """
 
 import base64
+import decimal
 import logging
 import json
 import os
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Dict, List, Optional, Any
 
 from google.cloud import bigquery
@@ -104,8 +105,49 @@ class BigQueryClient:
 
         self.dataset_ref = f"{project_id}.{self.dataset_id}"
 
+        # Cache table schemas to make read helpers tolerant to schema drift.
+        self._table_columns_cache: Dict[str, set] = {}
+
         # Ensure dataset exists
         self._ensure_dataset_exists()
+
+    def _get_table_columns(self, table_id: str) -> set:
+        """Return a cached set of column names for the given table."""
+
+        cached = self._table_columns_cache.get(table_id)
+        if cached is not None:
+            return cached
+
+        table_ref = f"{self.dataset_ref}.{table_id}"
+        try:
+            table = self.client.get_table(table_ref)
+            cols = {field.name for field in table.schema}
+            self._table_columns_cache[table_id] = cols
+            return cols
+        except Exception as exc:
+            logger.warning("Failed to read schema for %s: %s", table_ref, exc)
+            self._table_columns_cache[table_id] = set()
+            return set()
+
+    def _select_existing_fields(self, table_id: str, desired_fields: List[str]) -> List[str]:
+        """Filter desired fields down to those that exist in BigQuery.
+
+        This prevents query failures when the production schema is missing newer
+        columns.
+        """
+
+        available = self._get_table_columns(table_id)
+        selected = [field for field in desired_fields if field in available]
+        if selected:
+            return selected
+
+        # Fallback to a minimal set if possible.
+        fallback = [
+            field
+            for field in ("timestamp", "run_id", "status", "profile_id")
+            if field in available
+        ]
+        return fallback or ["*"]
 
     def _resolve_credentials(self) -> Optional[service_account.Credentials]:
         """
@@ -254,6 +296,46 @@ class BigQueryClient:
             self.client.create_table(table, timeout=30)
             logger.info("Created table %s", table_ref)
 
+    def _ensure_table_schema(self, table_id: str, desired_schema: List[bigquery.SchemaField]) -> None:
+        """Ensure an existing table contains (at least) the desired fields.
+
+        BigQuery allows adding new nullable/repeated columns. This enables safe
+        schema evolution so historical tables created with an older schema don't
+        break newer writers/readers.
+        """
+
+        table_ref = f"{self.dataset_ref}.{table_id}"
+        try:
+            table = self.client.get_table(table_ref)
+        except NotFound:
+            return
+        except Exception as exc:
+            logger.warning("Failed to fetch table for schema check %s: %s", table_ref, exc)
+            return
+
+        existing = {field.name: field for field in (table.schema or [])}
+        to_add: List[bigquery.SchemaField] = []
+        for field in desired_schema:
+            if field.name not in existing:
+                to_add.append(field)
+
+        if not to_add:
+            return
+
+        logger.info(
+            "Updating BigQuery schema for %s; adding fields: %s",
+            table_ref,
+            ", ".join(f.name for f in to_add),
+        )
+
+        table.schema = list(table.schema or []) + to_add
+        try:
+            self.client.update_table(table, ["schema"], timeout=30)
+            # Invalidate schema cache.
+            self._table_columns_cache.pop(table_id, None)
+        except Exception as exc:
+            logger.warning("Failed to update schema for %s: %s", table_ref, exc)
+
     def write_optimization_results(self, results_data: Dict) -> bool:
         """
         Write optimization results to BigQuery
@@ -295,6 +377,7 @@ class BigQueryClient:
             ]
 
             self._ensure_table_exists("optimization_results", schema)
+            self._ensure_table_schema("optimization_results", schema)
 
             # Flatten the data for BigQuery
             summary = results_data.get("summary", {})
@@ -338,13 +421,11 @@ class BigQueryClient:
                 "enabled_features": enabled_features,
                 "errors": errors,
                 "warnings": warnings,
-                # Enhanced fields - store as JSON strings for BigQuery JSON type
-                "campaigns": json.dumps(results_data.get("campaigns", [])),
-                "top_performers": json.dumps(results_data.get("top_performers", [])),
-                "features": json.dumps(results_data.get("features", {})),
-                "config_snapshot": json.dumps(
-                    results_data.get("config_snapshot", {})
-                ),
+                # Enhanced fields - write as native JSON values.
+                "campaigns": results_data.get("campaigns", []),
+                "top_performers": results_data.get("top_performers", []),
+                "features": results_data.get("features", {}),
+                "config_snapshot": results_data.get("config_snapshot", {}),
             }
 
             # Insert row
@@ -694,3 +775,605 @@ class BigQueryClient:
             query += " WHERE status IN UNNEST(@statuses)"
 
         return self._execute_single_timestamp_query(query, job_config)
+
+    def _safe_json_loads(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                return json.loads(text)
+            except Exception:
+                return value
+        return value
+
+    def _row_to_dict(self, row: Any) -> Dict[str, Any]:
+        """Convert a BigQuery Row into a JSON-serializable dict."""
+
+        def _jsonify(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, datetime):
+                return value.isoformat()
+            if isinstance(value, date):
+                return value.isoformat()
+            if isinstance(value, decimal.Decimal):
+                try:
+                    return float(value)
+                except Exception:
+                    return str(value)
+            if isinstance(value, (bytes, bytearray)):
+                return base64.b64encode(value).decode("utf-8")
+            if isinstance(value, dict):
+                return {k: _jsonify(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [_jsonify(v) for v in value]
+            return value
+
+        result: Dict[str, Any] = {}
+        for key in row.keys():
+            result[key] = _jsonify(row.get(key))
+        return result
+
+    def fetch_latest_optimization_result(
+        self,
+        profile_id: Optional[str] = None,
+        include_payload_json: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Return the most recent optimization result row (optionally filtered)."""
+
+        table_id = "optimization_results"
+        table_ref = f"`{self.dataset_ref}.{table_id}`"
+        desired_fields = [
+            "timestamp",
+            "run_id",
+            "status",
+            "profile_id",
+            "dry_run",
+            "duration_seconds",
+            "campaigns_analyzed",
+            "keywords_optimized",
+            "bids_increased",
+            "bids_decreased",
+            "negative_keywords_added",
+            "budget_changes",
+            "total_spend",
+            "total_sales",
+            "average_acos",
+            "target_acos",
+            "lookback_days",
+            "enabled_features",
+            "errors",
+            "warnings",
+        ]
+
+        payload_field = None
+        if include_payload_json:
+            desired_fields += ["campaigns", "top_performers", "features", "config_snapshot"]
+
+            # Back-compat: older tables may store a single JSON/string payload.
+            available = self._get_table_columns(table_id)
+            for candidate in (
+                "payload",
+                "payload_json",
+                "results",
+                "results_json",
+                "result_json",
+                "raw_results",
+            ):
+                if candidate in available:
+                    payload_field = candidate
+                    desired_fields.append(candidate)
+                    break
+
+        select_fields = self._select_existing_fields(table_id, desired_fields)
+
+        query = (
+            f"SELECT {', '.join(select_fields)} "
+            f"FROM {table_ref} "
+            "WHERE (@profile_id IS NULL OR profile_id = @profile_id) "
+            "ORDER BY (profile_id IS NULL OR profile_id = '') ASC, timestamp DESC "
+            "LIMIT 1"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("profile_id", "STRING", profile_id)
+            ]
+        )
+
+        try:
+            job = self.client.query(query, job_config=job_config)
+            rows = list(job.result(timeout=30))
+            if not rows:
+                return None
+            data = self._row_to_dict(rows[0])
+
+            if include_payload_json:
+                for key in ("campaigns", "top_performers", "features", "config_snapshot"):
+                    if key in data:
+                        data[key] = self._safe_json_loads(data[key])
+
+                if payload_field and payload_field in data:
+                    payload = self._safe_json_loads(data.get(payload_field))
+                    if isinstance(payload, dict):
+                        for key in ("campaigns", "top_performers", "features", "config_snapshot"):
+                            if data.get(key) is None and key in payload:
+                                data[key] = payload.get(key)
+            return data
+        except Exception as exc:
+            logger.warning("Failed to fetch latest optimization result: %s", exc)
+            return None
+
+    def fetch_daily_overview(
+        self,
+        days: int = 14,
+        profile_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return day-level metrics for the dashboard.
+
+        Runs/keyword counts come from optimization_results.
+        Spend/sales/ACOS come from sp_search_term_metrics when available.
+        """
+
+        import datetime
+
+        days = max(1, min(int(days), 365))
+        # Last N calendar days including today (UTC), e.g. days=7 -> today..today-6.
+        start_date = datetime.datetime.utcnow().date() - datetime.timedelta(days=days - 1)
+        results_ref = f"`{self.dataset_ref}.optimization_results`"
+
+        perf_table_id = "sp_search_term_metrics"
+        perf_ref = f"`{self.dataset_ref}.{perf_table_id}`"
+
+        keyword_table_id = "keyword_performance"
+        keyword_ref = f"`{self.dataset_ref}.{keyword_table_id}`"
+
+        keyword_columns = self._get_table_columns(keyword_table_id)
+        keyword_has_profile = "profile_id" in keyword_columns
+        keyword_profile_filter = (
+            "AND (@profile_id IS NULL OR profile_id = @profile_id)" if keyword_has_profile else ""
+        )
+
+        # Prefer sp_search_term_metrics if it has data, but fall back to keyword_performance
+        # (cost/conversion_value) for days where the search term metrics table is sparse.
+        perf_query = f"""
+        WITH runs AS (
+            SELECT
+                DATE(timestamp) AS day,
+                COUNT(1) AS runs,
+                SUM(COALESCE(campaigns_analyzed, 0)) AS campaigns_analyzed,
+                SUM(COALESCE(keywords_optimized, 0)) AS keywords_optimized,
+                SUM(COALESCE(budget_changes, 0)) AS budget_changes
+            FROM {results_ref}
+            WHERE DATE(timestamp) >= @start_date
+                AND (@profile_id IS NULL OR profile_id = @profile_id)
+            GROUP BY day
+        ),
+        perf_stm AS (
+            SELECT
+                date AS day,
+                SUM(COALESCE(cost, 0)) AS total_spend,
+                SUM(COALESCE(sales, 0)) AS total_sales
+            FROM {perf_ref}
+            WHERE date >= @start_date
+                AND (@profile_id IS NULL OR profile_id = @profile_id)
+            GROUP BY day
+        ),
+        perf_kw AS (
+            SELECT
+                day,
+                SUM(COALESCE(cost, 0)) AS total_spend,
+                SUM(COALESCE(conversion_value, 0)) AS total_sales
+            FROM (
+                SELECT
+                    date AS day,
+                    keyword_id,
+                    cost,
+                    conversion_value,
+                    created_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY date, keyword_id
+                        ORDER BY created_at DESC
+                    ) AS rn
+                FROM {keyword_ref}
+                WHERE date >= @start_date
+                    {keyword_profile_filter}
+            )
+            WHERE rn = 1
+            GROUP BY day
+        ),
+        perf AS (
+            SELECT
+                COALESCE(s.day, k.day) AS day,
+                COALESCE(s.total_spend, k.total_spend, 0) AS total_spend,
+                COALESCE(s.total_sales, k.total_sales, 0) AS total_sales
+            FROM perf_stm s
+            FULL OUTER JOIN perf_kw k
+                ON s.day = k.day
+        )
+        SELECT
+            COALESCE(r.day, p.day) AS day,
+            COALESCE(r.runs, 0) AS runs,
+            COALESCE(p.total_spend, 0) AS total_spend,
+            COALESCE(p.total_sales, 0) AS total_sales,
+            SAFE_DIVIDE(COALESCE(p.total_spend, 0), NULLIF(COALESCE(p.total_sales, 0), 0)) AS blended_acos,
+            COALESCE(r.campaigns_analyzed, 0) AS campaigns_analyzed,
+            COALESCE(r.keywords_optimized, 0) AS keywords_optimized,
+            COALESCE(r.budget_changes, 0) AS budget_changes
+        FROM runs r
+        FULL OUTER JOIN perf p
+            ON r.day = p.day
+        ORDER BY day DESC
+        """
+
+        fallback_query = f"""
+        SELECT
+            DATE(timestamp) AS day,
+            COUNT(1) AS runs,
+            SUM(COALESCE(total_spend, 0)) AS total_spend,
+            SUM(COALESCE(total_sales, 0)) AS total_sales,
+            SAFE_DIVIDE(SUM(COALESCE(total_spend, 0)), NULLIF(SUM(COALESCE(total_sales, 0)), 0)) AS blended_acos,
+            SUM(COALESCE(campaigns_analyzed, 0)) AS campaigns_analyzed,
+            SUM(COALESCE(keywords_optimized, 0)) AS keywords_optimized,
+            SUM(COALESCE(budget_changes, 0)) AS budget_changes
+        FROM {results_ref}
+        WHERE DATE(timestamp) >= @start_date
+            AND (@profile_id IS NULL OR profile_id = @profile_id)
+        GROUP BY day
+        ORDER BY day DESC
+        """
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("start_date", "DATE", start_date),
+                bigquery.ScalarQueryParameter("profile_id", "STRING", profile_id),
+            ]
+        )
+
+        try:
+            try:
+                job = self.client.query(perf_query, job_config=job_config)
+                rows_iter = job.result(timeout=30)
+            except Exception as exc:
+                logger.warning(
+                    "Daily perf query failed; falling back to optimization_results-only aggregation: %s",
+                    exc,
+                )
+                job = self.client.query(fallback_query, job_config=job_config)
+                rows_iter = job.result(timeout=30)
+            result: List[Dict[str, Any]] = []
+            for row in rows_iter:
+                data = self._row_to_dict(row)
+                day_val = data.get("day")
+                if day_val is not None:
+                    data["day"] = str(day_val)
+                result.append(data)
+            return result
+        except Exception as exc:
+            logger.warning("Failed to fetch daily overview: %s", exc)
+            return []
+
+    def fetch_top_performing_keywords(
+        self,
+        days: int = 30,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Return top-performing keywords for the dashboard.
+
+        Uses keyword_performance (deduped by latest created_at per date+keyword_id)
+        joined to keywords for keyword_text.
+        """
+
+        import datetime
+
+        days = max(1, min(int(days), 365))
+        limit = max(1, min(int(limit), 200))
+        start_date = datetime.datetime.utcnow().date() - datetime.timedelta(days=days - 1)
+
+        kw_perf_ref = f"`{self.dataset_ref}.keyword_performance`"
+        kw_meta_ref = f"`{self.dataset_ref}.keywords`"
+
+        query = f"""
+        WITH base AS (
+          SELECT
+            date,
+            keyword_id,
+            clicks,
+            cost,
+            conversion_value,
+            created_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY date, keyword_id
+              ORDER BY created_at DESC
+            ) AS rn
+          FROM {kw_perf_ref}
+          WHERE date >= @start_date
+        )
+        SELECT
+          COALESCE(m.keyword_text, CAST(b.keyword_id AS STRING)) AS keyword_text,
+          SUM(COALESCE(b.clicks, 0)) AS clicks,
+          SUM(COALESCE(b.conversion_value, 0)) AS sales,
+          SAFE_DIVIDE(
+            SUM(COALESCE(b.cost, 0)),
+            NULLIF(SUM(COALESCE(b.conversion_value, 0)), 0)
+          ) AS acos
+        FROM base b
+        LEFT JOIN {kw_meta_ref} m
+          ON b.keyword_id = m.keyword_id
+        WHERE b.rn = 1
+        GROUP BY keyword_text
+        ORDER BY sales DESC
+        LIMIT @limit
+        """
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("start_date", "DATE", start_date),
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+            ]
+        )
+
+        try:
+            job = self.client.query(query, job_config=job_config)
+            result: List[Dict[str, Any]] = []
+            for row in job.result(timeout=30):
+                data = self._row_to_dict(row)
+                # Keep payload shape compatible with the Next.js dashboard.
+                data.setdefault("bid_change", None)
+                result.append(data)
+            return result
+        except Exception as exc:
+            logger.warning("Failed to fetch top performing keywords: %s", exc)
+            return []
+
+    def fetch_keyword_discovery_summary(
+        self,
+        days: int = 30,
+    ) -> Dict[str, Any]:
+        """Return keyword discovery summary for the dashboard.
+
+        Derived from keyword_harvest_log when present.
+        """
+
+        import datetime
+
+        days = max(1, min(int(days), 365))
+        start_ts = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+
+        harvest_ref = f"`{self.dataset_ref}.keyword_harvest_log`"
+        query = f"""
+        SELECT
+          COUNT(DISTINCT search_term) AS keywords_discovered,
+          SUM(CASE WHEN LOWER(action) IN ('created','added') AND NOT COALESCE(dry_run, FALSE) THEN 1 ELSE 0 END) AS keywords_added
+        FROM {harvest_ref}
+        WHERE harvested_at >= @start_ts
+        """
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("start_ts", "TIMESTAMP", start_ts),
+            ]
+        )
+
+        try:
+            job = self.client.query(query, job_config=job_config)
+            rows = list(job.result(timeout=30))
+            if not rows:
+                return {"keywords_discovered": 0, "keywords_added": 0}
+            data = self._row_to_dict(rows[0])
+            return {
+                "keywords_discovered": int(data.get("keywords_discovered") or 0),
+                "keywords_added": int(data.get("keywords_added") or 0),
+            }
+        except Exception as exc:
+            logger.warning("Failed to fetch keyword discovery summary: %s", exc)
+            return {"keywords_discovered": 0, "keywords_added": 0}
+
+    def fetch_campaigns_summary(
+        self,
+        days: int = 14,
+        limit: int = 200,
+        profile_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return campaign aggregates by joining campaign_details to optimization_results."""
+
+        days = max(1, min(int(days), 365))
+        limit = max(1, min(int(limit), 500))
+
+        results_ref = f"`{self.dataset_ref}.optimization_results`"
+        campaigns_ref = f"`{self.dataset_ref}.campaign_details`"
+
+        query = f"""
+        WITH runs AS (
+          SELECT run_id
+          FROM {results_ref}
+          WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+            AND (@profile_id IS NULL OR profile_id = @profile_id)
+        )
+        SELECT
+          c.campaign_id AS campaign_id,
+          ANY_VALUE(c.campaign_name) AS campaign_name,
+          SUM(COALESCE(c.spend, 0)) AS spend,
+          SUM(COALESCE(c.sales, 0)) AS sales,
+          SAFE_DIVIDE(SUM(COALESCE(c.spend, 0)), NULLIF(SUM(COALESCE(c.sales, 0)), 0)) AS acos,
+          SUM(COALESCE(c.impressions, 0)) AS impressions,
+          SUM(COALESCE(c.clicks, 0)) AS clicks,
+          SUM(COALESCE(c.conversions, 0)) AS conversions,
+          MAX(c.timestamp) AS last_seen
+        FROM {campaigns_ref} c
+        JOIN runs r ON c.run_id = r.run_id
+        GROUP BY campaign_id
+        ORDER BY spend DESC
+        LIMIT @limit
+        """
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+                bigquery.ScalarQueryParameter("profile_id", "STRING", profile_id),
+            ]
+        )
+
+        try:
+            job = self.client.query(query, job_config=job_config)
+            result = []
+            for row in job.result(timeout=30):
+                result.append(self._row_to_dict(row))
+            return result
+        except Exception as exc:
+            logger.warning("Failed to fetch campaigns summary: %s", exc)
+            return []
+
+    def fetch_run_events(
+        self,
+        limit: int = 200,
+        profile_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return recent run lifecycle events, optionally filtered by profile via join."""
+
+        limit = max(1, min(int(limit), 500))
+
+        events_ref = f"`{self.dataset_ref}.{RUN_EVENTS_TABLE}`"
+        results_ref = f"`{self.dataset_ref}.optimization_results`"
+
+        query = f"""
+        SELECT
+          e.timestamp AS timestamp,
+          e.run_id AS run_id,
+          e.status AS status,
+          e.details AS details,
+          r.profile_id AS profile_id
+        FROM {events_ref} e
+        LEFT JOIN {results_ref} r
+          ON e.run_id = r.run_id
+        WHERE (@profile_id IS NULL OR r.profile_id = @profile_id)
+        ORDER BY e.timestamp DESC
+        LIMIT @limit
+        """
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+                bigquery.ScalarQueryParameter("profile_id", "STRING", profile_id),
+            ]
+        )
+
+        try:
+            job = self.client.query(query, job_config=job_config)
+            result = []
+            for row in job.result(timeout=30):
+                data = self._row_to_dict(row)
+                if "details" in data:
+                    data["details"] = self._safe_json_loads(data["details"])
+                result.append(data)
+            return result
+        except Exception as exc:
+            logger.warning("Failed to fetch run events: %s", exc)
+            return []
+
+    def fetch_recent_optimization_results(
+        self,
+        days: int = 30,
+        limit: int = 50,
+        profile_id: Optional[str] = None,
+        include_payload_json: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Return recent optimization_results rows for dashboard tables."""
+
+        days = max(1, min(int(days), 365))
+        limit = max(1, min(int(limit), 500))
+
+        table_id = "optimization_results"
+        table_ref = f"`{self.dataset_ref}.{table_id}`"
+        desired_fields = [
+            "timestamp",
+            "run_id",
+            "status",
+            "profile_id",
+            "dry_run",
+            "duration_seconds",
+            "campaigns_analyzed",
+            "keywords_optimized",
+            "bids_increased",
+            "bids_decreased",
+            "negative_keywords_added",
+            "budget_changes",
+            "total_spend",
+            "total_sales",
+            "average_acos",
+            "target_acos",
+            "lookback_days",
+            "enabled_features",
+            "errors",
+            "warnings",
+        ]
+
+        payload_field = None
+        if include_payload_json:
+            desired_fields += ["campaigns", "top_performers", "features", "config_snapshot"]
+
+            available = self._get_table_columns(table_id)
+            for candidate in (
+                "payload",
+                "payload_json",
+                "results",
+                "results_json",
+                "result_json",
+                "raw_results",
+            ):
+                if candidate in available:
+                    payload_field = candidate
+                    desired_fields.append(candidate)
+                    break
+
+        select_fields = self._select_existing_fields(table_id, desired_fields)
+
+        query = (
+            f"SELECT {', '.join(select_fields)} "
+            f"FROM {table_ref} "
+            "WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY) "
+            "AND (@profile_id IS NULL OR profile_id = @profile_id) "
+            "ORDER BY (profile_id IS NULL OR profile_id = '') ASC, timestamp DESC "
+            "LIMIT @limit"
+        )
+
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("days", "INT64", days),
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
+                bigquery.ScalarQueryParameter("profile_id", "STRING", profile_id),
+            ]
+        )
+
+        try:
+            job = self.client.query(query, job_config=job_config)
+            rows = []
+            for row in job.result(timeout=30):
+                data = self._row_to_dict(row)
+                if include_payload_json:
+                    for key in ("campaigns", "top_performers", "features", "config_snapshot"):
+                        if key in data:
+                            data[key] = self._safe_json_loads(data[key])
+
+                    if payload_field and payload_field in data:
+                        payload = self._safe_json_loads(data.get(payload_field))
+                        if isinstance(payload, dict):
+                            for key in (
+                                "campaigns",
+                                "top_performers",
+                                "features",
+                                "config_snapshot",
+                            ):
+                                if data.get(key) is None and key in payload:
+                                    data[key] = payload.get(key)
+                rows.append(data)
+            return rows
+        except Exception as exc:
+            logger.warning("Failed to fetch recent optimization results: %s", exc)
+            return []

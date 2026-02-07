@@ -503,6 +503,32 @@ class AmazonAdsAPI:
                 "AMAZON_CLIENT_SECRET, or AMAZON_REFRESH_TOKEN"
             )
 
+        # Basic credential shape validation to catch placeholder/secret-name issues early
+        invalid_shapes = []
+        try:
+            if not client_id.startswith("amzn1.application-oa2-client"):
+                invalid_shapes.append("client_id")
+            # Amazon client secrets typically start with amzn1.oa2-cs.v1 but length check is more flexible
+            if not (client_secret.startswith("amzn1.oa2-cs") or len(client_secret) >= 20):
+                invalid_shapes.append("client_secret")
+            # Refresh tokens usually contain "Atzr|" and are long
+            if not ("Atzr|" in refresh_token or len(refresh_token) >= 50):
+                invalid_shapes.append("refresh_token")
+        except Exception:
+            pass
+
+        if invalid_shapes:
+            masked_id = (client_id[:12] + "..." if client_id else "MISSING")
+            logger.error(
+                "Credential validation failed: %s. Values look like placeholders or secret names.",
+                ", ".join(invalid_shapes)
+            )
+            logger.error("client_id preview: %s", masked_id)
+            raise AuthenticationError(
+                "Amazon Ads credentials appear invalid. Ensure AMAZON_CLIENT_ID/SECRET/REFRESH_TOKEN"
+                " contain actual LWA values (not secret names or placeholders)."
+            )
+
         # Log credential status (masked)
         logger.debug(f"Auth attempt - client_id: {client_id[:8] if client_id else 'MISSING'}..., "
                     f"client_secret: {'SET' if client_secret else 'MISSING'}, "
@@ -901,69 +927,39 @@ class AmazonAdsAPI:
     # ========================================================================
     
     def get_campaigns(self, state_filter: str = None, use_cache: bool = True) -> List[Campaign]:
-        """Get all campaigns with caching support"""
+        """Get all campaigns with caching support.
+
+        Prefer the v3 list-style endpoint for reliability; fall back to legacy v2.
+        """
         # Use cache if available and no state filter
         if use_cache and self._campaigns_cache is not None and state_filter is None:
             logger.debug(f"Using cached campaigns ({len(self._campaigns_cache)} items)")
             return self._campaigns_cache
-        
+
+        # Clear previous error before new attempt
+        self._last_campaigns_error = None
+
+        # First attempt: v3 list-style endpoint with pagination
         try:
-            # Clear previous error before new attempt
-            self._last_campaigns_error = None
-            params = {}
-            if state_filter:
-                params['stateFilter'] = state_filter
-            
-            response = self._request('GET', '/v2/sp/campaigns', params=params)
-            campaigns_data = response.json()
-            
-            if not isinstance(campaigns_data, list):
-                logger.warning(f"Unexpected campaigns response format: {type(campaigns_data)}")
-                return []
-            
-            campaigns = []
-            for c in campaigns_data:
-                if not isinstance(c, dict):
-                    continue
-                    
-                campaign = Campaign(
-                    campaign_id=str(c.get('campaignId', '')),
-                    name=c.get('name', ''),
-                    state=c.get('state', ''),
-                    daily_budget=float(c.get('dailyBudget', 0.0)),
-                    targeting_type=c.get('targetingType', ''),
-                    campaign_type='sponsoredProducts'
-                )
-                campaigns.append(campaign)
-            
-            logger.info(f"Retrieved {len(campaigns)} campaigns")
-            
-            # Cache if no state filter
-            if state_filter is None:
-                self._campaigns_cache = campaigns
-            
-            return campaigns
-        except Exception as e:
-            logger.error(f"Failed to get campaigns: {e}")
-            self._last_campaigns_error = e
+            logger.debug("Fetching campaigns via v3 list endpoint")
+            all_items: List[Dict[str, Any]] = []
+            start_index = 0
+            page_size = 100
+            max_pages = 50
 
-            # Fallback: try the list-style endpoint (often required for newer SP APIs)
-            try:
-                logger.info("Falling back to v3 list campaigns endpoint")
-                all_items: List[Dict[str, Any]] = []
-                start_index = 0
-                page_size = 100
-                max_pages = 50
+            for _ in range(max_pages):
+                page = self.list_campaigns_v3(count=page_size, start_index=start_index)
+                if not page:
+                    break
+                # Optional filter by state if provided
+                if state_filter:
+                    page = [p for p in page if isinstance(p, dict) and str(p.get('state', '')).upper() == str(state_filter).upper()]
+                all_items.extend([p for p in page if isinstance(p, dict)])
+                if len(page) < page_size:
+                    break
+                start_index += page_size
 
-                for _ in range(max_pages):
-                    page = self.list_campaigns_v3(count=page_size, start_index=start_index)
-                    if not page:
-                        break
-                    all_items.extend([p for p in page if isinstance(p, dict)])
-                    if len(page) < page_size:
-                        break
-                    start_index += page_size
-
+            if all_items:
                 campaigns: List[Campaign] = []
                 for c in all_items:
                     campaign = Campaign(
@@ -976,14 +972,48 @@ class AmazonAdsAPI:
                     )
                     campaigns.append(campaign)
 
-                logger.info(f"Retrieved {len(campaigns)} campaigns (v3 list fallback)")
-
+                logger.info(f"Retrieved {len(campaigns)} campaigns (v3 list)")
                 if state_filter is None:
                     self._campaigns_cache = campaigns
                 return campaigns
-            except Exception as fallback_exc:
-                logger.error(f"Fallback campaigns list also failed: {fallback_exc}")
+        except Exception as v3_exc:
+            logger.debug(f"v3 list campaigns attempt failed: {v3_exc}")
+
+        # Fallback: legacy v2 endpoint
+        try:
+            params = {}
+            if state_filter:
+                params['stateFilter'] = state_filter
+
+            response = self._request('GET', '/v2/sp/campaigns', params=params)
+            campaigns_data = response.json()
+
+            if not isinstance(campaigns_data, list):
+                logger.warning(f"Unexpected campaigns response format: {type(campaigns_data)}")
                 return []
+
+            campaigns: List[Campaign] = []
+            for c in campaigns_data:
+                if not isinstance(c, dict):
+                    continue
+                campaign = Campaign(
+                    campaign_id=str(c.get('campaignId', '')),
+                    name=c.get('name', ''),
+                    state=c.get('state', ''),
+                    daily_budget=float(c.get('dailyBudget', 0.0)),
+                    targeting_type=c.get('targetingType', ''),
+                    campaign_type='sponsoredProducts'
+                )
+                campaigns.append(campaign)
+
+            logger.info(f"Retrieved {len(campaigns)} campaigns (v2)")
+            if state_filter is None:
+                self._campaigns_cache = campaigns
+            return campaigns
+        except Exception as e:
+            logger.error(f"Failed to get campaigns via v2: {e}")
+            self._last_campaigns_error = e
+            return []
     
     def invalidate_campaigns_cache(self):
         """Invalidate campaigns cache after updates"""
@@ -1157,6 +1187,15 @@ class AmazonAdsAPI:
             # Use standard v2 keywords endpoint with filters
             response = self._request('GET', '/v2/sp/keywords', params=params)
             keywords_data = response.json()
+
+            # If the standard endpoint returns unexpected shape or no data, try extended endpoint
+            if not isinstance(keywords_data, list) or len(keywords_data) == 0:
+                logger.info("Keywords v2 returned empty or unexpected format; trying extended endpoint")
+                try:
+                    response_ext = self._request('GET', '/v2/sp/keywords/extended', params=params)
+                    keywords_data = response_ext.json()
+                except Exception as ext_err:
+                    logger.debug(f"Extended keywords endpoint failed: {ext_err}")
             
             keywords = []
             for kw in keywords_data:

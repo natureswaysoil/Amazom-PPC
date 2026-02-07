@@ -60,12 +60,52 @@ interface SummaryData {
 
 type NavigationTab = 'overview' | 'campaigns' | 'automation' | 'discovery' | 'budget' | 'dayparting' | 'reports' | 'analytics' | 'performance' | 'hourly' | 'searchterms' | 'datatable' | 'settings';
 
+type LiveSection = 'campaigns' | 'automation' | 'discovery' | 'budget' | 'dayparting' | 'reports';
+
+type LiveSectionState = {
+  loading: boolean;
+  error: string | null;
+  data: any | null;
+  loadedAt?: number;
+};
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('overview');
   const [recentResults, setRecentResults] = useState<OptimizationResult[]>([]);
   const [summary, setSummary] = useState<SummaryData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [liveSections, setLiveSections] = useState<Record<LiveSection, LiveSectionState>>({
+    campaigns: { loading: false, error: null, data: null },
+    automation: { loading: false, error: null, data: null },
+    discovery: { loading: false, error: null, data: null },
+    budget: { loading: false, error: null, data: null },
+    dayparting: { loading: false, error: null, data: null },
+    reports: { loading: false, error: null, data: null },
+  });
+
+  const pickMostRecentMeaningfulResult = () => {
+    if (!Array.isArray(recentResults) || recentResults.length === 0) return undefined;
+    return (
+      recentResults.find(r => {
+        const keywordsOptimized = Number((r as any)?.keywords_optimized) || 0;
+        const bidsIncreased = Number((r as any)?.bids_increased) || 0;
+        const bidsDecreased = Number((r as any)?.bids_decreased) || 0;
+        const campaignsAnalyzed = Number((r as any)?.campaigns_analyzed) || 0;
+        const negativeKeywordsAdded = Number((r as any)?.negative_keywords_added) || 0;
+        const budgetChanges = Number((r as any)?.budget_changes) || 0;
+        return (
+          keywordsOptimized > 0 ||
+          bidsIncreased > 0 ||
+          bidsDecreased > 0 ||
+          campaignsAnalyzed > 0 ||
+          negativeKeywordsAdded > 0 ||
+          budgetChanges > 0
+        );
+      }) || recentResults[0]
+    );
+  };
 
   useEffect(() => {
     fetchDashboardData();
@@ -74,84 +114,142 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const sectionsNeedingFetch: LiveSection[] = ['campaigns', 'automation', 'discovery', 'budget', 'dayparting', 'reports'];
+    if (!sectionsNeedingFetch.includes(activeTab as LiveSection)) return;
+
+    const section = activeTab as LiveSection;
+    const state = liveSections[section];
+    if (state?.loading || state?.data) return;
+
+    void loadLiveSection(section);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  const fetchLiveSection = async (section: LiveSection, params?: { days?: number; limit?: number }) => {
+    const days = params?.days ?? 30;
+    const limit = params?.limit ?? 200;
+    const query = new URLSearchParams({ section, days: String(days), limit: String(limit) });
+
+    const resp = await fetch(`/api/optimizer-live?${query.toString()}`);
+
+    let proxyPayload: any;
+    try {
+      proxyPayload = await resp.json();
+    } catch (jsonErr) {
+      if (!resp.ok) {
+        throw new Error(`Failed to fetch ${section} live data: ${resp.status} ${resp.statusText}`);
+      }
+      throw jsonErr;
+    }
+
+    if (!resp.ok || !proxyPayload?.ok) {
+      const msg =
+        proxyPayload?.data?.message ||
+        proxyPayload?.data?.error ||
+        proxyPayload?.error ||
+        resp.statusText ||
+        'Unknown error';
+      throw new Error(`Failed to fetch ${section} live data: ${msg}`);
+    }
+
+    const liveData = proxyPayload.data;
+    if (liveData?.status !== 'success') {
+      throw new Error(liveData?.message || `Live ${section} endpoint returned an error`);
+    }
+
+    return liveData;
+  };
+
+  const loadLiveSection = async (section: LiveSection) => {
+    try {
+      setLiveSections(prev => ({
+        ...prev,
+        [section]: { ...prev[section], loading: true, error: null },
+      }));
+
+      const data = await fetchLiveSection(section, {
+        days: section === 'automation' ? 14 : 30,
+        limit: section === 'automation' ? 100 : 200,
+      });
+
+      setLiveSections(prev => ({
+        ...prev,
+        [section]: { loading: false, error: null, data, loadedAt: Date.now() },
+      }));
+    } catch (err: any) {
+      setLiveSections(prev => ({
+        ...prev,
+        [section]: {
+          loading: false,
+          error: err?.message || `Failed to load ${section} data`,
+          data: null,
+          loadedAt: Date.now(),
+        },
+      }));
+    }
+  };
+
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      // Fetch recent optimization results with increased limit and time range
-      const resultsResponse = await fetch('/api/bigquery-data?table=optimization_results&limit=50&days=30');
-      
-      // Try to parse response body for detailed error message
-      let resultsData;
+      // Overview cards are explicitly labeled "(7d)"; request 7 calendar days.
+      const liveResponse = await fetch('/api/optimizer-live?section=overview&limit=50&days=7');
+
+      let livePayload;
       try {
-        resultsData = await resultsResponse.json();
+        livePayload = await liveResponse.json();
       } catch (jsonErr) {
-        // If JSON parsing fails, throw error with status code
-        if (!resultsResponse.ok) {
-          throw new Error(`Failed to fetch optimization results: ${resultsResponse.status} ${resultsResponse.statusText}`);
+        if (!liveResponse.ok) {
+          throw new Error(`Failed to fetch live optimizer data: ${liveResponse.status} ${liveResponse.statusText}`);
         }
         throw jsonErr;
       }
-      
-      if (!resultsResponse.ok) {
-        // Extract detailed error message from the response body
-        const errorMsg = resultsData.message || resultsData.error || resultsResponse.statusText || 'Unknown error';
-        throw new Error(`Failed to fetch optimization results: ${errorMsg}`);
+
+      if (!liveResponse.ok || !livePayload?.ok) {
+        const msg =
+          livePayload?.data?.message ||
+          livePayload?.data?.error ||
+          livePayload?.error ||
+          liveResponse.statusText ||
+          'Unknown error';
+        throw new Error(`Failed to fetch live optimizer data: ${msg}`);
       }
 
-      // Fetch summary data with increased time range
-      const summaryResponse = await fetch('/api/bigquery-data?table=summary&days=30');
-      
-      // Try to parse response body for detailed error message
-      let summaryData;
-      try {
-        summaryData = await summaryResponse.json();
-      } catch (jsonErr) {
-        // If JSON parsing fails, throw error with status code
-        if (!summaryResponse.ok) {
-          throw new Error(`Failed to fetch summary data: ${summaryResponse.status} ${summaryResponse.statusText}`);
+      const liveData = livePayload.data;
+      if (liveData?.status !== 'success') {
+        throw new Error(liveData?.message || 'Live optimizer endpoint returned an error');
+      }
+
+      const results = liveData.recent_results || [];
+
+      if (results && results.length > 0) {
+        console.log('📊 Dashboard: Received optimizer live results');
+        console.log('First result keys:', Object.keys(results[0]));
+
+        const expectedFields = ['campaigns', 'top_performers', 'features', 'config_snapshot', 'errors', 'warnings'];
+        const missingFields = expectedFields.filter(field => !(field in results[0]));
+        if (missingFields.length > 0) {
+          console.warn('⚠️ Missing expected fields in results:', missingFields);
+          const warningMsg = `Some optimization data is incomplete. Missing fields: ${missingFields.join(', ')}. This may indicate the optimizer is not sending full payloads or the database schema needs updating.`;
+          setError(warningMsg);
         }
-        throw jsonErr;
-      }
-      
-      if (!summaryResponse.ok) {
-        // Extract detailed error message from the response body
-        const errorMsg = summaryData.message || summaryData.error || summaryResponse.statusText || 'Unknown error';
-        throw new Error(`Failed to fetch summary data: ${errorMsg}`);
       }
 
-      if (resultsData.success) {
-        const results = resultsData.data;
-        
-        // Log all keys in the first result object for debugging
-        if (results && results.length > 0) {
-          console.log('📊 Dashboard: Received optimization results');
-          console.log('First result keys:', Object.keys(results[0]));
-          console.log('First result sample:', results[0]);
-          
-          // Check for missing expected fields and warn
-          const expectedFields = ['campaigns', 'top_performers', 'features', 'config_snapshot', 'errors', 'warnings'];
-          const missingFields = expectedFields.filter(field => !(field in results[0]));
-          
-          if (missingFields.length > 0) {
-            console.warn('⚠️ Missing expected fields in results:', missingFields);
-            const warningMsg = `Some optimization data is incomplete. Missing fields: ${missingFields.join(', ')}. This may indicate the optimizer is not sending full payloads or the database schema needs updating.`;
-            setError(warningMsg);
-          }
-        }
-        
-        setRecentResults(results);
-      } else {
-        setError(resultsData.message || resultsData.error || 'Failed to fetch data');
-      }
+      setRecentResults(results);
 
-      if (summaryData.success) {
-        setSummary(summaryData.data);
-      } else if (!resultsData.success) {
-        // Only set error from summaryData if resultsData didn't already set an error
-        setError(summaryData.message || summaryData.error || 'Failed to fetch summary data');
-      }
+      const daily = liveData.daily || [];
+      const mappedSummary: SummaryData[] = daily.map((d: any) => ({
+        date: d.day,
+        optimization_runs: d.runs ?? 0,
+        total_keywords_optimized: d.keywords_optimized ?? 0,
+        avg_acos: d.blended_acos ?? 0,
+        total_spend: d.total_spend ?? 0,
+        total_sales: d.total_sales ?? 0,
+      }));
+      setSummary(mappedSummary);
 
       setLoading(false);
     } catch (err: any) {
@@ -384,12 +482,21 @@ export default function Home() {
   );
 
   const renderCampaignsTab = () => {
-    const latestResult = recentResults[0];
-    const campaigns = latestResult?.campaigns || [];
+    const latestResult = pickMostRecentMeaningfulResult() || recentResults[0];
+    const campaignsLive = liveSections.campaigns.data?.campaigns;
+    const campaigns = Array.isArray(campaignsLive) && campaignsLive.length > 0
+      ? campaignsLive
+      : (latestResult?.campaigns || []);
     
     return (
       <div style={styles.tableCard}>
         <h2 style={styles.tableTitle}>🎯 Campaign Performance</h2>
+        {liveSections.campaigns.loading && (
+          <p style={{ textAlign: 'center', color: '#666', padding: '10px' }}>Loading live campaign data...</p>
+        )}
+        {liveSections.campaigns.error && (
+          <p style={{ textAlign: 'center', color: '#b00020', padding: '10px' }}>{liveSections.campaigns.error}</p>
+        )}
         {campaigns.length === 0 ? (
           <p style={{ textAlign: 'center', color: '#666', padding: '20px' }}>
             No campaign data available. Run an optimization to see campaign details.
@@ -427,8 +534,9 @@ export default function Home() {
   };
 
   const renderAutomationTab = () => {
-    const latestResult = recentResults[0];
+    const latestResult = pickMostRecentMeaningfulResult() || recentResults[0];
     const features = latestResult?.features || {};
+    const events = Array.isArray(liveSections.automation.data?.events) ? liveSections.automation.data.events : [];
     
     return (
       <div style={styles.tableCard}>
@@ -478,21 +586,80 @@ export default function Home() {
               <div>Negative Keywords Added: {features.negative_keywords?.negative_keywords_added || 0}</div>
             </div>
           </div>
+
+          <div style={styles.featureSection}>
+            <h3 style={styles.featureTitle}>🧾 Recent Automation Events</h3>
+            {liveSections.automation.loading && (
+              <p style={{ color: '#666', margin: 0 }}>Loading live automation events...</p>
+            )}
+            {liveSections.automation.error && (
+              <p style={{ color: '#b00020', margin: 0 }}>{liveSections.automation.error}</p>
+            )}
+            {!liveSections.automation.loading && !liveSections.automation.error && events.length === 0 && (
+              <p style={{ color: '#666', margin: 0 }}>No recent run events found.</p>
+            )}
+            {events.length > 0 && (
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Timestamp</th>
+                    <th style={styles.th}>Run ID</th>
+                    <th style={styles.th}>Status</th>
+                    <th style={styles.th}>Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {events.slice(0, 25).map((ev: any, idx: number) => (
+                    <tr key={`${ev.run_id || 'run'}-${idx}`} style={idx % 2 === 0 ? styles.evenRow : styles.oddRow}>
+                      <td style={styles.td}>{ev.timestamp ? formatDate(ev.timestamp) : 'N/A'}</td>
+                      <td style={styles.td}>{ev.run_id || 'N/A'}</td>
+                      <td style={styles.td}>{ev.status || 'N/A'}</td>
+                      <td style={styles.td}>
+                        {ev.details ? (
+                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(ev.details, null, 2)}</pre>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
       </div>
     );
   };
 
   const renderDiscoveryTab = () => {
-    const latestResult = recentResults[0];
+    const latestResult = pickMostRecentMeaningfulResult() || recentResults[0];
     const topPerformers = latestResult?.top_performers || [];
+    const discoveryLive = liveSections.discovery.data?.data;
+    const discoveryFallback = latestResult?.features?.keyword_discovery || {};
+    const discoveryData = (discoveryLive && typeof discoveryLive === 'object') ? discoveryLive : discoveryFallback;
     
     return (
       <div style={styles.tableCard}>
         <h2 style={styles.tableTitle}>🔍 Top Performing Keywords</h2>
+        <div style={{ padding: '0 20px 10px' }}>
+          <div style={styles.featureSection}>
+            <h3 style={styles.featureTitle}>🧠 Discovery Summary</h3>
+            {liveSections.discovery.loading && (
+              <p style={{ color: '#666', margin: 0 }}>Loading live discovery data...</p>
+            )}
+            {liveSections.discovery.error && (
+              <p style={{ color: '#b00020', margin: 0 }}>{liveSections.discovery.error}</p>
+            )}
+            <div style={styles.featureStats}>
+              <div>Keywords Discovered: {discoveryData?.keywords_discovered || 0}</div>
+              <div>Keywords Added: {discoveryData?.keywords_added || 0}</div>
+            </div>
+          </div>
+        </div>
         {topPerformers.length === 0 ? (
           <p style={{ textAlign: 'center', color: '#666', padding: '20px' }}>
-            No top performer data available. Run an optimization to see keyword insights.
+            No top performer list available yet. Run a full optimization that writes keyword insights to BigQuery.
           </p>
         ) : (
           <table style={styles.table}>
@@ -531,23 +698,67 @@ export default function Home() {
   const renderBudgetTab = () => (
     <div style={styles.tableCard}>
       <h2 style={styles.tableTitle}>💰 Budget Manager</h2>
-      <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-        <p>Budget management features coming soon...</p>
-        <p style={{ fontSize: '14px', marginTop: '10px' }}>
-          Track campaign budgets, budget utilization, and get recommendations for budget optimization.
-        </p>
+      <div style={{ padding: '20px' }}>
+        {liveSections.budget.loading && (
+          <p style={{ textAlign: 'center', color: '#666', padding: '10px' }}>Loading live budget data...</p>
+        )}
+        {liveSections.budget.error && (
+          <p style={{ textAlign: 'center', color: '#b00020', padding: '10px' }}>{liveSections.budget.error}</p>
+        )}
+
+        {(() => {
+          const latestResult = pickMostRecentMeaningfulResult() || recentResults[0];
+          const budgetLive = liveSections.budget.data?.data;
+          const budgetFallback = latestResult?.features?.budget_optimization || {};
+          const budgetData = (budgetLive && typeof budgetLive === 'object') ? budgetLive : budgetFallback;
+          const budgetChanges = budgetData?.budget_changes ?? latestResult?.budget_changes ?? 0;
+
+          return (
+            <>
+              <div style={styles.statsGrid}>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Budget Changes</div>
+                  <div style={styles.statValue}>{budgetChanges}</div>
+                </div>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Spend (7d)</div>
+                  <div style={styles.statValue}>{formatCurrency(totalSpend)}</div>
+                </div>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Sales (7d)</div>
+                  <div style={styles.statValue}>{formatCurrency(totalSales)}</div>
+                </div>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Avg ACOS</div>
+                  <div style={styles.statValue}>{formatPercent(avgAcos)}</div>
+                </div>
+              </div>
+              <p style={{ textAlign: 'center', color: '#666', marginTop: '20px' }}>
+                Budget optimization uses spend and performance signals to recommend adjustments.
+              </p>
+            </>
+          );
+        })()}
       </div>
     </div>
   );
 
   const renderDaypartingTab = () => {
-    const latestResult = recentResults[0];
-    const daypartingData = latestResult?.features?.dayparting || {};
+    const latestResult = pickMostRecentMeaningfulResult() || recentResults[0];
+    const daypartingLive = liveSections.dayparting.data?.data;
+    const daypartingFallback = latestResult?.features?.dayparting || {};
+    const daypartingData = (daypartingLive && typeof daypartingLive === 'object') ? daypartingLive : daypartingFallback;
     
     return (
       <div style={styles.tableCard}>
         <h2 style={styles.tableTitle}>🕐 Dayparting Analysis</h2>
         <div style={{ padding: '20px' }}>
+          {liveSections.dayparting.loading && (
+            <p style={{ textAlign: 'center', color: '#666', padding: '10px' }}>Loading live dayparting data...</p>
+          )}
+          {liveSections.dayparting.error && (
+            <p style={{ textAlign: 'center', color: '#b00020', padding: '10px' }}>{liveSections.dayparting.error}</p>
+          )}
           <div style={styles.statsGrid}>
             <div style={styles.statCard}>
               <div style={styles.statLabel}>Current Day</div>
@@ -578,32 +789,45 @@ export default function Home() {
     <div style={styles.tableCard}>
       <h2 style={styles.tableTitle}>📈 Reports</h2>
       <div style={{ padding: '20px' }}>
-        <div style={styles.statsGrid}>
-          <div style={styles.statCard}>
-            <div style={styles.statLabel}>Total Runs</div>
-            <div style={styles.statValue}>{recentResults.length}</div>
-          </div>
-          <div style={styles.statCard}>
-            <div style={styles.statLabel}>Success Rate</div>
-            <div style={styles.statValue}>
-              {recentResults.length > 0
-                ? ((recentResults.filter(r => r.status === 'success').length / recentResults.length) * 100).toFixed(1) + '%'
-                : 'N/A'}
+        {liveSections.reports.loading && (
+          <p style={{ textAlign: 'center', color: '#666', padding: '10px' }}>Loading live reports data...</p>
+        )}
+        {liveSections.reports.error && (
+          <p style={{ textAlign: 'center', color: '#b00020', padding: '10px' }}>{liveSections.reports.error}</p>
+        )}
+
+        {(() => {
+          const reportsRecent = Array.isArray(liveSections.reports.data?.recent_results)
+            ? liveSections.reports.data.recent_results
+            : recentResults;
+          const runs = reportsRecent.length;
+          const successCount = reportsRecent.filter((r: any) => r.status === 'success').length;
+          const successRate = runs > 0 ? ((successCount / runs) * 100).toFixed(1) + '%' : 'N/A';
+          const avgDuration = runs > 0
+            ? (reportsRecent.reduce((sum: number, r: any) => sum + (Number(r.duration_seconds) || 0), 0) / runs).toFixed(1) + 's'
+            : 'N/A';
+
+          return (
+            <div style={styles.statsGrid}>
+              <div style={styles.statCard}>
+                <div style={styles.statLabel}>Total Runs</div>
+                <div style={styles.statValue}>{runs}</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={styles.statLabel}>Success Rate</div>
+                <div style={styles.statValue}>{successRate}</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={styles.statLabel}>Avg Duration</div>
+                <div style={styles.statValue}>{avgDuration}</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={styles.statLabel}>Total Keywords</div>
+                <div style={styles.statValue}>{totalKeywordsOptimized}</div>
+              </div>
             </div>
-          </div>
-          <div style={styles.statCard}>
-            <div style={styles.statLabel}>Avg Duration</div>
-            <div style={styles.statValue}>
-              {recentResults.length > 0
-                ? (recentResults.reduce((sum, r) => sum + r.duration_seconds, 0) / recentResults.length).toFixed(1) + 's'
-                : 'N/A'}
-            </div>
-          </div>
-          <div style={styles.statCard}>
-            <div style={styles.statLabel}>Total Keywords</div>
-            <div style={styles.statValue}>{totalKeywordsOptimized}</div>
-          </div>
-        </div>
+          );
+        })()}
       </div>
     </div>
   );

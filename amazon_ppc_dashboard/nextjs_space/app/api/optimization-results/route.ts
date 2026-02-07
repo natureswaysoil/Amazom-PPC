@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
+import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
 
 type OptimizationResultPayload = {
   run_id?: string;
@@ -12,7 +13,7 @@ type OptimizationResultPayload = {
 export async function POST(request: NextRequest) {
   try {
     // Verify API key (Authorization: Bearer or x-api-key header)
-    const apiKey = process.env.DASHBOARD_API_KEY;
+    const { apiKey } = await resolveDashboardApiKey({ required: false });
     const authHeader = request.headers.get('authorization');
     const bearerToken = authHeader?.startsWith('Bearer ')
       ? authHeader.slice(7)

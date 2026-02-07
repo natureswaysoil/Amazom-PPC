@@ -71,7 +71,10 @@ export async function GET(request: NextRequest) {
         })(),
       },
       dashboard_api_key: {
-        set: !!process.env.DASHBOARD_API_KEY,
+        set:
+          !!process.env.DASHBOARD_API_KEY ||
+          !!process.env.DASHBOARD_API_SECRET_RESOURCE ||
+          !!process.env.DASHBOARD_API_SECRET_NAME,
       },
     },
     diagnosis: [] as string[],
