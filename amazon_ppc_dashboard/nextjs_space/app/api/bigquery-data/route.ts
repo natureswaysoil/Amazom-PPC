@@ -131,7 +131,7 @@ export async function GET(request: NextRequest) {
     const query = `
       SELECT *
       FROM \`${projectId}.${datasetId}.${table}\`
-      ORDER BY timestamp DESC
+      ORDER BY run_date DESC
       LIMIT @limit
     `;
 
