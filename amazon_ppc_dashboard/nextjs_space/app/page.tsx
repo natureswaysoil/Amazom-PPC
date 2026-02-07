@@ -76,6 +76,10 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const isRunIntervalSkipMessage =
+    typeof error === 'string' &&
+    error.toLowerCase().includes('run interval not met');
+
   const [liveSections, setLiveSections] = useState<Record<LiveSection, LiveSectionState>>({
     campaigns: { loading: false, error: null, data: null },
     automation: { loading: false, error: null, data: null },
@@ -150,11 +154,26 @@ export default function Home() {
         proxyPayload?.error ||
         resp.statusText ||
         'Unknown error';
+
+      // "Run interval not met" is an expected optimizer behavior and should not be
+      // treated as a fatal dashboard error (even if it is returned non-OK).
+      if (String(msg).toLowerCase().includes('run interval not met')) {
+        return {
+          status: 'skipped',
+          message: msg,
+          recent_results: [],
+          daily: [],
+        };
+      }
+
       throw new Error(`Failed to fetch ${section} live data: ${msg}`);
     }
 
     const liveData = proxyPayload.data;
-    if (liveData?.status !== 'success') {
+    // The optimizer may return status=skipped when the min run interval
+    // has not elapsed. This is not a dashboard error; the dashboard should
+    // still render whatever recent/aggregated data is returned.
+    if (liveData?.status !== 'success' && liveData?.status !== 'skipped') {
       throw new Error(liveData?.message || `Live ${section} endpoint returned an error`);
     }
 
@@ -215,11 +234,20 @@ export default function Home() {
           livePayload?.error ||
           liveResponse.statusText ||
           'Unknown error';
+
+        // "Run interval not met" should not show as a fatal page-level error.
+        if (String(msg).toLowerCase().includes('run interval not met')) {
+          setLoading(false);
+          // Keep showing whatever data we already have.
+          return;
+        }
+
         throw new Error(`Failed to fetch live optimizer data: ${msg}`);
       }
 
       const liveData = livePayload.data;
-      if (liveData?.status !== 'success') {
+      // status=skipped ("Run interval not met") should not block the dashboard.
+      if (liveData?.status !== 'success' && liveData?.status !== 'skipped') {
         throw new Error(liveData?.message || 'Live optimizer endpoint returned an error');
       }
 
@@ -238,7 +266,11 @@ export default function Home() {
         }
       }
 
-      setRecentResults(results);
+      // If the optimizer skipped due to min-interval and returned no rows,
+      // preserve the last known data instead of wiping the UI.
+      if (!(liveData?.status === 'skipped' && (!results || results.length === 0))) {
+        setRecentResults(results);
+      }
 
       const daily = liveData.daily || [];
       const mappedSummary: SummaryData[] = daily.map((d: any) => ({
@@ -249,11 +281,18 @@ export default function Home() {
         total_spend: d.total_spend ?? 0,
         total_sales: d.total_sales ?? 0,
       }));
-      setSummary(mappedSummary);
+      if (!(liveData?.status === 'skipped' && (!mappedSummary || mappedSummary.length === 0))) {
+        setSummary(mappedSummary);
+      }
 
       setLoading(false);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch dashboard data');
+      const msg = err?.message || 'Failed to fetch dashboard data';
+      if (String(msg).toLowerCase().includes('run interval not met')) {
+        setLoading(false);
+        return;
+      }
+      setError(msg);
       setLoading(false);
     }
   };
@@ -284,7 +323,7 @@ export default function Home() {
     );
   }
 
-  if (error && recentResults.length === 0) {
+  if (error && recentResults.length === 0 && !isRunIntervalSkipMessage) {
     return (
       <div style={styles.container}>
         <div style={styles.errorCard}>

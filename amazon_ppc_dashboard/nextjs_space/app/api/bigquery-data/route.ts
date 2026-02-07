@@ -18,6 +18,105 @@ const PROJECT_ID =
   'amazon-ppc-474902';
 
 let cachedDatasetLocation: string | null = null;
+const cachedOrderColumnByTable = new Map<
+  string,
+  { column: string | null; sqlDateExpr: string | null }
+>();
+
+const PREFERRED_DATE_COLUMNS_BY_TABLE: Record<string, string[]> = {
+  optimization_results: ['timestamp', 'run_timestamp', 'created_at'],
+  optimization_progress: ['timestamp', 'created_at'],
+  optimization_errors: ['timestamp', 'created_at'],
+  optimizer_run_events: ['timestamp', 'created_at'],
+  campaign_details: ['segments_date', 'date'],
+  campaign_performance: ['segments_date', 'date'],
+  keyword_performance: ['segments_date', 'date'],
+  search_term_reports: ['segments_date', 'date'],
+  sp_campaigns_v3: ['segments_date', 'date'],
+  sp_campaign_metrics: ['startDate', 'segments_date', 'date'],
+};
+
+function normalizeBqFieldType(field: any): string {
+  const raw =
+    (field?.type as string | undefined) ||
+    (field?.fieldType as string | undefined) ||
+    (field?.dataType?.typeKind as string | undefined) ||
+    '';
+  return String(raw).toUpperCase();
+}
+
+function computeSqlDateExpr(column: string, fieldType: string): string | null {
+  // Use a safe, schema-derived column name only.
+  const col = `\`${column}\``;
+  if (fieldType === 'DATE') return col;
+  if (fieldType === 'TIMESTAMP') return `DATE(${col})`;
+  if (fieldType === 'DATETIME') return `DATE(${col})`;
+  return null;
+}
+
+async function getOrderColumnAndDateExpr(
+  bigquery: BigQuery,
+  projectId: string,
+  datasetId: string,
+  tableId: string,
+) {
+  const cacheKey = `${projectId}.${datasetId}.${tableId}`;
+  const cached = cachedOrderColumnByTable.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const [metadata] = await bigquery
+      .dataset(datasetId)
+      .table(tableId)
+      .getMetadata();
+
+    const fields: any[] = metadata?.schema?.fields || [];
+    const fieldByName = new Map<string, { name: string; type: string }>();
+    for (const f of fields) {
+      if (f?.name) fieldByName.set(String(f.name), { name: String(f.name), type: normalizeBqFieldType(f) });
+    }
+
+    const preferred = PREFERRED_DATE_COLUMNS_BY_TABLE[tableId] || [];
+    const fallbackPreferred = [
+      'timestamp',
+      'run_timestamp',
+      'created_at',
+      'updated_at',
+      'fetch_timestamp',
+      'segments_date',
+      'startDate',
+      'date',
+    ];
+    const candidates = [...preferred, ...fallbackPreferred];
+
+    for (const name of candidates) {
+      const field = fieldByName.get(name);
+      if (!field) continue;
+      const sqlDateExpr = computeSqlDateExpr(field.name, field.type);
+      const resolved = { column: field.name, sqlDateExpr };
+      cachedOrderColumnByTable.set(cacheKey, resolved);
+      return resolved;
+    }
+
+    // Otherwise: pick the first date-ish field.
+    for (const field of Array.from(fieldByName.values())) {
+      const sqlDateExpr = computeSqlDateExpr(field.name, field.type);
+      if (!sqlDateExpr) continue;
+      const resolved = { column: field.name, sqlDateExpr };
+      cachedOrderColumnByTable.set(cacheKey, resolved);
+      return resolved;
+    }
+  } catch (err: any) {
+    console.warn(
+      `[BigQuery] Could not fetch table metadata for ${projectId}.${datasetId}.${tableId}:`,
+      err?.message || err,
+    );
+  }
+
+  const resolved = { column: null, sqlDateExpr: null };
+  cachedOrderColumnByTable.set(cacheKey, resolved);
+  return resolved;
+}
 
 /**
  * Auto-detect the dataset location from BigQuery metadata.
@@ -68,7 +167,14 @@ function isAuthorized(request: NextRequest, apiKey: string): boolean {
       ? authHeader.slice(7)
       : undefined;
   const headerApiKey = request.headers.get('x-api-key') ?? undefined;
-  return bearer === apiKey || headerApiKey === apiKey;
+
+  // If an upstream proxy/IAP injects an identity JWT in Authorization: Bearer,
+  // treat it as NOT being an API key.
+  const bearerLooksLikeJwt =
+    typeof bearer === 'string' && bearer.split('.').length === 3;
+  const effectiveBearer = bearerLooksLikeJwt ? undefined : bearer;
+
+  return effectiveBearer === apiKey || headerApiKey === apiKey;
 }
 
 export async function GET(request: NextRequest) {
@@ -81,14 +187,49 @@ export async function GET(request: NextRequest) {
     );
 
     // --- Auth (optional) ---
+    // This is a read-only endpoint used by the dashboard UI. The shared
+    // DASHBOARD_API_KEY is intended for server-to-server calls (optimizer -> dashboard
+    // writes, dashboard -> optimizer reads). Browsers should not need (or see) it.
+    //
+    // If a caller *does* present a key and it's wrong, reject.
     const resolvedKey = await resolveDashboardApiKey({ required: false });
-    if (resolvedKey.apiKey && !isAuthorized(request, resolvedKey.apiKey)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const authHeader = request.headers.get('authorization');
+    const bearerToken =
+      authHeader && authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7)
+        : null;
+    const bearerLooksLikeJwt = Boolean(
+      bearerToken && bearerToken.split('.').length === 3,
+    );
+    const hasBearer = Boolean(bearerToken && !bearerLooksLikeJwt);
+    const hasXApiKey = Boolean(request.headers.get('x-api-key'));
+
+    // Only enforce the shared key when the caller is *attempting* to use it.
+    // This avoids false 401s when an upstream proxy injects a non-Bearer
+    // Authorization header (e.g., Basic/SSO).
+    if (resolvedKey.apiKey && (hasBearer || hasXApiKey) && !isAuthorized(request, resolvedKey.apiKey)) {
+      return NextResponse.json(
+        {
+          error: 'Unauthorized',
+          message: 'Invalid dashboard API key presented',
+          hint: 'If calling via curl, pass Authorization: Bearer <DASHBOARD_API_KEY> or X-API-Key: <DASHBOARD_API_KEY>. Browsers should not send this key.',
+          diagnostics: {
+            keyConfigured: true,
+            keySource: resolvedKey.source,
+            hasBearer,
+            hasXApiKey,
+            bearerLooksLikeJwt,
+            authScheme: authHeader ? (authHeader.split(' ', 1)[0] || 'unknown') : null,
+          },
+        },
+        { status: 401 },
+      );
     }
 
     const { searchParams } = new URL(request.url);
     const table = searchParams.get('table') || 'optimization_results';
     const limit = Number.parseInt(searchParams.get('limit') ?? '100', 10) || 100;
+    const days = Number.parseInt(searchParams.get('days') ?? '0', 10) || 0;
 
     // Resolve GCP credentials
     const credentialResult = await resolveGCPCredentials();
@@ -128,16 +269,27 @@ export async function GET(request: NextRequest) {
 
     const location = await getDatasetLocation(bigquery, datasetId);
 
+    const { column: orderByColumn, sqlDateExpr } =
+      await getOrderColumnAndDateExpr(bigquery, projectId, datasetId, table);
+
+    const whereClause =
+      days > 0 && sqlDateExpr
+        ? `WHERE ${sqlDateExpr} >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)`
+        : '';
+
+    const orderClause = orderByColumn ? `ORDER BY \`${orderByColumn}\` DESC` : '';
+
     const query = `
       SELECT *
       FROM \`${projectId}.${datasetId}.${table}\`
-      ORDER BY timestamp DESC
+      ${whereClause}
+      ${orderClause}
       LIMIT @limit
     `;
 
     const [job] = await bigquery.createQueryJob({
       query,
-      params: { limit },
+      params: { limit, days },
       ...(location ? { location } : {}),
     });
 

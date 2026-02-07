@@ -17,6 +17,23 @@ const CACHE_TTL_MS = Number.parseInt(
 
 const liveCache = new Map<string, CachedResponse>();
 
+function includesRunIntervalNotMet(payload: any, rawText: string): boolean {
+  const textCandidates: Array<string> = [];
+
+  if (typeof rawText === 'string' && rawText.trim()) textCandidates.push(rawText);
+  if (typeof payload === 'string' && payload.trim()) textCandidates.push(payload);
+  if (payload && typeof payload === 'object') {
+    const message = payload?.message;
+    const error = payload?.error;
+    const detail = payload?.details;
+    if (typeof message === 'string') textCandidates.push(message);
+    if (typeof error === 'string') textCandidates.push(error);
+    if (typeof detail === 'string') textCandidates.push(detail);
+  }
+
+  return textCandidates.some((t) => t.toLowerCase().includes('run interval not met'));
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -95,6 +112,33 @@ export async function GET(request: NextRequest) {
       payload = JSON.parse(text);
     } catch {
       payload = { raw: text };
+    }
+
+    // The optimizer sometimes returns a non-200 status for "Run interval not met",
+    // but the dashboard UX should treat that as a normal skipped state.
+    if (!resp.ok && includesRunIntervalNotMet(payload, text)) {
+      const skipped = {
+        ok: true,
+        optimizerBaseUrl: baseUrl,
+        section,
+        status: 200,
+        data: {
+          status: 'skipped',
+          message:
+            payload?.message || payload?.error || 'Run interval not met. Skipping run.',
+          upstreamStatus: resp.status,
+        },
+      };
+
+      if (CACHE_TTL_MS > 0) {
+        liveCache.set(cacheKey, {
+          expiresAt: now + CACHE_TTL_MS,
+          status: 200,
+          body: skipped,
+        });
+      }
+
+      return NextResponse.json(skipped, { status: 200 });
     }
 
     const body = {

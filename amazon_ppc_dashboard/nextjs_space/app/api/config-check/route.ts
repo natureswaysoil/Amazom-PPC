@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
+
+export const dynamic = 'force-dynamic';
+
 /**
  * Configuration check endpoint
  * Helps diagnose BigQuery and dashboard configuration issues
@@ -9,6 +13,10 @@ export async function GET(request: NextRequest) {
   // Default project ID from config.json (same as bigquery-data route)
   const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
   
+  const resolvedDashboardKey = await resolveDashboardApiKey({ required: false }).catch((err) => {
+    return { apiKey: null, source: 'unset' as const, error: (err as any)?.message || String(err) };
+  });
+
   const checks = {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'unknown',
@@ -71,10 +79,9 @@ export async function GET(request: NextRequest) {
         })(),
       },
       dashboard_api_key: {
-        set:
-          !!process.env.DASHBOARD_API_KEY ||
-          !!process.env.DASHBOARD_API_SECRET_RESOURCE ||
-          !!process.env.DASHBOARD_API_SECRET_NAME,
+        set: Boolean((resolvedDashboardKey as any)?.apiKey?.trim?.() || ''),
+        source: (resolvedDashboardKey as any)?.source || 'unset',
+        resolution_error: (resolvedDashboardKey as any)?.error || null,
       },
     },
     diagnosis: [] as string[],
@@ -135,8 +142,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (!checks.configuration.dashboard_api_key.set) {
-    checks.diagnosis.push('⚠️  DASHBOARD_API_KEY is not set (required for optimizer integration)');
-    checks.recommendations.push('Set DASHBOARD_API_KEY to match the key in your Cloud Function Secret Manager');
+    checks.diagnosis.push('⚠️  Dashboard API key not resolved (required for optimizer integration)');
+    checks.recommendations.push('Set DASHBOARD_API_KEY (recommended for Vercel)');
+    checks.recommendations.push('Or configure Secret Manager access: set DASHBOARD_API_SECRET_RESOURCE or DASHBOARD_API_SECRET_NAME (+ GOOGLE_CLOUD_PROJECT)');
+  } else {
+    checks.diagnosis.push(`✅ Dashboard API key resolved (${checks.configuration.dashboard_api_key.source})`);
   }
 
   const allChecksPassed = checks.diagnosis.filter(d => d.startsWith('❌')).length === 0;

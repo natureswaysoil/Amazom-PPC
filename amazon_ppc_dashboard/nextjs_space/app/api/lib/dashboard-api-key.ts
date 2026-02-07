@@ -72,6 +72,14 @@ export async function resolveDashboardApiKey(options?: {
   const secretName = (process.env.DASHBOARD_API_SECRET_NAME || '').trim();
   const secretVersion = (process.env.DASHBOARD_API_SECRET_VERSION || 'latest').trim();
 
+  const runningInGCP = Boolean(
+    process.env.K_SERVICE ||
+      process.env.FUNCTION_TARGET ||
+      process.env.GAE_SERVICE ||
+      process.env.CLOUD_RUN_JOB,
+  );
+  const allowFallback = (process.env.DASHBOARD_API_SECRET_FALLBACK || 'true').trim().toLowerCase() !== 'false';
+
   const hasSecretConfig = !!(secretResource || secretName);
   if (hasSecretConfig) {
     let resourceName = secretResource;
@@ -95,6 +103,24 @@ export async function resolveDashboardApiKey(options?: {
 
     cached = { apiKey: value, source: 'secret-manager' };
     return cached;
+  }
+
+  // Convenience fallback: if running on GCP with ADC available, attempt to read the
+  // conventional secret name used by this repo: "dashboard-api-key".
+  if (runningInGCP && allowFallback) {
+    const projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES) || (await getProjectIdViaADC());
+    if (projectId) {
+      const resourceName = `projects/${projectId}/secrets/dashboard-api-key/versions/latest`;
+      try {
+        const value = (await accessSecretVersion(resourceName)).trim();
+        if (value) {
+          cached = { apiKey: value, source: 'secret-manager' };
+          return cached;
+        }
+      } catch {
+        // Ignore and fall through to unset.
+      }
+    }
   }
 
   cached = { apiKey: null, source: 'unset' };
