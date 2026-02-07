@@ -32,6 +32,7 @@ LICENSE
 # Frontend/dashboard sources are large and not needed by the Cloud Function
 amazon_ppc_dashboard/
 pages/
+dashboard/
 
 # Node dependencies are only required for the dashboard/CLI builds  
 node_modules/
