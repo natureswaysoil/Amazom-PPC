@@ -15,6 +15,7 @@ from email.mime.multipart import MIMEMultipart
 import functions_framework
 import requests
 import yaml
+import pytz
 
 # Local application imports
 from optimizer_core import PPCAutomation
@@ -180,6 +181,48 @@ def _get_min_run_interval_minutes(config: Dict[str, Any]) -> int:
     if config_value is not None:
       return config_value
   return DEFAULT_MIN_RUN_INTERVAL_MINUTES
+
+
+def _is_in_dayparting_window(config: Dict[str, Any], now_utc: Optional[datetime] = None) -> bool:
+  """Return True if current local time is within configured dayparting window.
+
+  Defaults: if dayparting is disabled or misconfigured, allow runs (True).
+  Uses `dayparting.timezone` and `dayparting.peak_hours` from config.
+  """
+  try:
+    dp = config.get('dayparting', {}) if isinstance(config, dict) else {}
+    if not isinstance(dp, dict) or not dp.get('enabled', False):
+      return True
+
+    tz_name = str(dp.get('timezone', 'UTC')) or 'UTC'
+    try:
+      tz = pytz.timezone(tz_name)
+    except Exception:
+      tz = pytz.UTC
+
+    now_utc = now_utc or datetime.now(timezone.utc)
+    local_dt = now_utc.astimezone(tz)
+    local_hour = local_dt.hour
+
+    peak_hours = dp.get('peak_hours', [])
+    if isinstance(peak_hours, list) and local_hour in peak_hours:
+      return True
+
+    # Optional: consider day multipliers >= 1.0 as allowed
+    day_key = local_dt.strftime('%A').upper()
+    day_mults = dp.get('day_multipliers', {})
+    try:
+      mult = float(day_mults.get(day_key, 1.0))
+      if mult >= 1.0:
+        return True
+    except Exception:
+      pass
+
+    # Otherwise, outside configured peak window
+    return False
+  except Exception:
+    # On any error, do not block runs
+    return True
 
 
 @contextmanager
@@ -678,28 +721,35 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     now_utc = _normalise_timestamp(datetime.now(timezone.utc))
     min_interval_minutes = _get_min_run_interval_minutes(config)
     force_run = request.args.get('force', '').lower() == 'true' or bool(request_json.get('force'))
+    within_dayparting = _is_in_dayparting_window(config, now_utc)
 
     if not force_run and min_interval_minutes > 0:
-      # Check if enough time has passed since last run
-      last_run_memory = _get_last_run_memory()
-      last_run_cache = _read_last_run_from_cache()
-      last_run = _select_latest_timestamp(last_run_memory, last_run_cache)
-      
-      if last_run:
-        time_since_last_run = (now_utc - last_run).total_seconds() / 60  # minutes
-        if time_since_last_run < min_interval_minutes:
-          wait_minutes = min_interval_minutes - time_since_last_run
-          logger.info(f"Skipping run - only {time_since_last_run:.1f} minutes since last run. Need {min_interval_minutes} minutes. Wait {wait_minutes:.1f} more minutes.")
-          return {
-            'status': 'skipped',
-            'message': f'Run interval not met. Wait {wait_minutes:.1f} more minutes.',
-            'last_run': last_run.isoformat(),
-            'min_interval_minutes': min_interval_minutes
-          }, 200
-      
-      # Update last run time
-      _update_last_run_memory(now_utc)
-      _write_last_run_to_cache(now_utc)
+      if within_dayparting:
+        logger.info("Within dayparting window; bypassing run-interval gate")
+      else:
+        # Check if enough time has passed since last run
+        last_run_memory = _get_last_run_memory()
+        last_run_cache = _read_last_run_from_cache()
+        last_run = _select_latest_timestamp(last_run_memory, last_run_cache)
+
+        if last_run:
+          time_since_last_run = (now_utc - last_run).total_seconds() / 60  # minutes
+          if time_since_last_run < min_interval_minutes:
+            wait_minutes = min_interval_minutes - time_since_last_run
+            logger.info(
+              f"Skipping run - only {time_since_last_run:.1f} minutes since last run. Need {min_interval_minutes} minutes. Wait {wait_minutes:.1f} more minutes."
+            )
+            return {
+              'status': 'skipped',
+              'message': f'Run interval not met. Wait {wait_minutes:.1f} more minutes.',
+              'last_run': last_run.isoformat(),
+              'min_interval_minutes': min_interval_minutes,
+              'dayparting_window': False
+            }, 200
+
+        # Update last run time only when interval gate applies
+        _update_last_run_memory(now_utc)
+        _write_last_run_to_cache(now_utc)
 
     # Start Run
     run_id = dashboard_client.start_run(dry_run=dry_run)
