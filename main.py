@@ -723,33 +723,41 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     force_run = request.args.get('force', '').lower() == 'true' or bool(request_json.get('force'))
     within_dayparting = _is_in_dayparting_window(config, now_utc)
 
+    # Outside dayparting window, always skip unless forced
+    if not force_run and not within_dayparting:
+      logger.info("Skipping run - outside configured dayparting window")
+      return {
+        'status': 'skipped',
+        'message': 'Outside dayparting window; use force=true to override',
+        'dayparting_window': False,
+        'timezone': config.get('dayparting', {}).get('timezone', 'UTC'),
+        'peak_hours': config.get('dayparting', {}).get('peak_hours', [])
+      }, 200
+
+    # Within dayparting window, respect the minimum interval gate
     if not force_run and min_interval_minutes > 0:
-      if within_dayparting:
-        logger.info("Within dayparting window; bypassing run-interval gate")
-      else:
-        # Check if enough time has passed since last run
-        last_run_memory = _get_last_run_memory()
-        last_run_cache = _read_last_run_from_cache()
-        last_run = _select_latest_timestamp(last_run_memory, last_run_cache)
+      last_run_memory = _get_last_run_memory()
+      last_run_cache = _read_last_run_from_cache()
+      last_run = _select_latest_timestamp(last_run_memory, last_run_cache)
 
-        if last_run:
-          time_since_last_run = (now_utc - last_run).total_seconds() / 60  # minutes
-          if time_since_last_run < min_interval_minutes:
-            wait_minutes = min_interval_minutes - time_since_last_run
-            logger.info(
-              f"Skipping run - only {time_since_last_run:.1f} minutes since last run. Need {min_interval_minutes} minutes. Wait {wait_minutes:.1f} more minutes."
-            )
-            return {
-              'status': 'skipped',
-              'message': f'Run interval not met. Wait {wait_minutes:.1f} more minutes.',
-              'last_run': last_run.isoformat(),
-              'min_interval_minutes': min_interval_minutes,
-              'dayparting_window': False
-            }, 200
+      if last_run:
+        time_since_last_run = (now_utc - last_run).total_seconds() / 60  # minutes
+        if time_since_last_run < min_interval_minutes:
+          wait_minutes = min_interval_minutes - time_since_last_run
+          logger.info(
+            f"Skipping run - only {time_since_last_run:.1f} minutes since last run. Need {min_interval_minutes} minutes. Wait {wait_minutes:.1f} more minutes."
+          )
+          return {
+            'status': 'skipped',
+            'message': f'Run interval not met. Wait {wait_minutes:.1f} more minutes.',
+            'last_run': last_run.isoformat(),
+            'min_interval_minutes': min_interval_minutes,
+            'dayparting_window': True
+          }, 200
 
-        # Update last run time only when interval gate applies
-        _update_last_run_memory(now_utc)
-        _write_last_run_to_cache(now_utc)
+      # Update last run time when interval gate passes within the window
+      _update_last_run_memory(now_utc)
+      _write_last_run_to_cache(now_utc)
 
     # Start Run
     run_id = dashboard_client.start_run(dry_run=dry_run)
