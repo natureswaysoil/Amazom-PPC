@@ -1,0 +1,14 @@
+# Minimal image for Cloud Run Jobs (keyword-harvester / optimizer runs)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Core code needed by the job runner
+COPY job_runner.py main.py optimizer_core.py dashboard_client.py bigquery_client.py bq_utils.py gcp_credentials.py config.json ./
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "/app/job_runner.py"]

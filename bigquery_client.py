@@ -286,6 +286,9 @@ class BigQueryClient:
         try:
             self.client.get_table(table_ref)
             logger.debug("Table %s exists", table_ref)
+
+            # Ensure schema stays compatible as the writer evolves.
+            self._ensure_table_schema(table_id, schema)
         except NotFound:
             logger.info("Creating table %s", table_ref)
             table = bigquery.Table(table_ref, schema=schema)
@@ -315,9 +318,30 @@ class BigQueryClient:
 
         existing = {field.name: field for field in (table.schema or [])}
         to_add: List[bigquery.SchemaField] = []
+
+        def _as_additive_field(field: bigquery.SchemaField) -> bigquery.SchemaField:
+            """Return a SchemaField that is safe to ADD to an existing table.
+
+            BigQuery allows adding new columns only when they are NULLABLE or REPEATED.
+            If our desired schema marks a new field as REQUIRED, we must relax it to
+            NULLABLE during schema evolution.
+            """
+
+            mode = (getattr(field, "mode", None) or "NULLABLE").upper()
+            if mode == "REQUIRED":
+                mode = "NULLABLE"
+
+            return bigquery.SchemaField(
+                field.name,
+                field.field_type,
+                mode=mode,
+                description=getattr(field, "description", None),
+                fields=getattr(field, "fields", ()) or (),
+                policy_tags=getattr(field, "policy_tags", None),
+            )
         for field in desired_schema:
             if field.name not in existing:
-                to_add.append(field)
+                to_add.append(_as_additive_field(field))
 
         if not to_add:
             return
@@ -379,6 +403,36 @@ class BigQueryClient:
             self._ensure_table_exists("optimization_results", schema)
             self._ensure_table_schema("optimization_results", schema)
 
+            # Coerce JSON-ish fields based on the *actual* table schema.
+            # Some deployments created these columns as STRING; newer code uses JSON.
+            table_ref = f"{self.dataset_ref}.optimization_results"
+            try:
+                table = self.client.get_table(table_ref)
+                field_map = {f.name: f for f in (table.schema or [])}
+            except Exception:
+                field_map = {}
+
+            def _coerce_jsonish(field_name: str, value: Any) -> Any:
+                field = field_map.get(field_name)
+                if field is None:
+                    return value
+
+                ftype = (getattr(field, "field_type", None) or "").upper()
+                # Some deployments created these columns as STRING; newer code uses JSON.
+                if ftype == "STRING":
+                    try:
+                        return json.dumps(value, default=str)
+                    except Exception:
+                        return str(value)
+
+                # For native JSON columns, preserve structure.
+                if ftype == "JSON":
+                    try:
+                        return json.loads(json.dumps(value, default=str))
+                    except Exception:
+                        return str(value)
+                return value
+
             # Flatten the data for BigQuery
             summary = results_data.get("summary", {})
             config = results_data.get("config_snapshot", {})
@@ -422,14 +476,17 @@ class BigQueryClient:
                 "errors": errors,
                 "warnings": warnings,
                 # Enhanced fields - write as native JSON values.
-                "campaigns": results_data.get("campaigns", []),
-                "top_performers": results_data.get("top_performers", []),
-                "features": results_data.get("features", {}),
-                "config_snapshot": results_data.get("config_snapshot", {}),
+                "campaigns": _coerce_jsonish("campaigns", results_data.get("campaigns", [])),
+                "top_performers": _coerce_jsonish(
+                    "top_performers", results_data.get("top_performers", [])
+                ),
+                "features": _coerce_jsonish("features", results_data.get("features", {})),
+                "config_snapshot": _coerce_jsonish(
+                    "config_snapshot", results_data.get("config_snapshot", {})
+                ),
             }
 
             # Insert row
-            table_ref = f"{self.dataset_ref}.optimization_results"
             errors = self.client.insert_rows_json(table_ref, [row])
 
             if errors:
@@ -470,6 +527,7 @@ class BigQueryClient:
             ]
 
             self._ensure_table_exists("campaign_details", schema)
+            self._ensure_table_schema("campaign_details", schema)
 
             campaigns = results_data.get("campaigns", [])
             if not campaigns:
@@ -548,6 +606,7 @@ class BigQueryClient:
             ]
 
             self._ensure_table_exists("campaign_details", schema)
+            self._ensure_table_schema("campaign_details", schema)
 
             rows = []
             timestamp = datetime.now(timezone.utc).isoformat()
@@ -607,6 +666,7 @@ class BigQueryClient:
             ]
 
             self._ensure_table_exists("optimization_progress", schema)
+            self._ensure_table_schema("optimization_progress", schema)
 
             row = {
                 "timestamp": progress_data.get(
@@ -655,6 +715,7 @@ class BigQueryClient:
             ]
 
             self._ensure_table_exists("optimization_errors", schema)
+            self._ensure_table_schema("optimization_errors", schema)
 
             error_info = error_data.get("error", {})
 

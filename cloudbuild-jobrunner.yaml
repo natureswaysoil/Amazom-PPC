@@ -1,0 +1,7 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '$_IMAGE', '-f', 'Dockerfile.jobrunner', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '$_IMAGE']
+images:
+  - '$_IMAGE'

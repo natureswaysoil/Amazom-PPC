@@ -15,10 +15,9 @@ from email.mime.multipart import MIMEMultipart
 import functions_framework
 import requests
 import yaml
-import pytz
 
 # Local application imports
-from optimizer_core import PPCAutomation
+from optimizer_core import PPCAutomation, AmazonAdsAPI, AuthenticationError
 from dashboard_client import DashboardClient
 from bigquery_client import BigQueryClient
 from gcp_credentials import validate_credentials_early, GCPCredentialError
@@ -181,48 +180,6 @@ def _get_min_run_interval_minutes(config: Dict[str, Any]) -> int:
     if config_value is not None:
       return config_value
   return DEFAULT_MIN_RUN_INTERVAL_MINUTES
-
-
-def _is_in_dayparting_window(config: Dict[str, Any], now_utc: Optional[datetime] = None) -> bool:
-  """Return True if current local time is within configured dayparting window.
-
-  Defaults: if dayparting is disabled or misconfigured, allow runs (True).
-  Uses `dayparting.timezone` and `dayparting.peak_hours` from config.
-  """
-  try:
-    dp = config.get('dayparting', {}) if isinstance(config, dict) else {}
-    if not isinstance(dp, dict) or not dp.get('enabled', False):
-      return True
-
-    tz_name = str(dp.get('timezone', 'UTC')) or 'UTC'
-    try:
-      tz = pytz.timezone(tz_name)
-    except Exception:
-      tz = pytz.UTC
-
-    now_utc = now_utc or datetime.now(timezone.utc)
-    local_dt = now_utc.astimezone(tz)
-    local_hour = local_dt.hour
-
-    peak_hours = dp.get('peak_hours', [])
-    if isinstance(peak_hours, list) and local_hour in peak_hours:
-      return True
-
-    # Optional: consider day multipliers >= 1.0 as allowed
-    day_key = local_dt.strftime('%A').upper()
-    day_mults = dp.get('day_multipliers', {})
-    try:
-      mult = float(day_mults.get(day_key, 1.0))
-      if mult >= 1.0:
-        return True
-    except Exception:
-      pass
-
-    # Otherwise, outside configured peak window
-    return False
-  except Exception:
-    # On any error, do not block runs
-    return True
 
 
 @contextmanager
@@ -414,8 +371,12 @@ def run_health_check(request) -> Tuple[Dict[str, Any], int]:
       logger.warning(f"GCP credentials check failed: {e}")
       gcp_credentials_error = str(e)
     
-    # Load configuration
-    config = load_config()
+    # Load configuration (respect request overrides when provided)
+    try:
+      request_json = request.get_json(silent=True) or {}
+    except Exception:
+      request_json = {}
+    config = load_config(request_json)
     
     # Test dashboard connectivity
     dashboard_ok = False
@@ -459,7 +420,11 @@ def run_list_profiles(request) -> Tuple[Dict[str, Any], int]:
   logger.info("=== List Profiles Requested ===")
   
   try:
-    config = load_config()
+    try:
+      request_json = request.get_json(silent=True) or {}
+    except Exception:
+      request_json = {}
+    config = load_config(request_json)
     set_environment_variables(config)
     validate_credentials(config)
     
@@ -510,7 +475,7 @@ def run_list_profiles(request) -> Tuple[Dict[str, Any], int]:
         profile_ids = [p['profileId'] for p in profile_list]
         if configured_profile_id in profile_ids:
           try:
-            campaigns_url = "https://advertising-api.amazon.com/sp/campaigns?startIndex=0&count=5"
+            campaigns_url = "https://advertising-api.amazon.com/v2/sp/campaigns?startIndex=0&count=5"
             headers["Amazon-Advertising-API-Scope"] = configured_profile_id
             campaigns_response = requests.get(campaigns_url, headers=headers, timeout=30)
             
@@ -540,7 +505,11 @@ def run_verify_connection(request) -> Tuple[Dict[str, Any], int]:
   logger.info("=== Verify Connection Requested ===")
   
   try:
-    config = load_config()
+    try:
+      request_json = request.get_json(silent=True) or {}
+    except Exception:
+      request_json = {}
+    config = load_config(request_json)
     set_environment_variables(config)
     validate_credentials(config)
     
@@ -590,7 +559,11 @@ def run_permission_health(request) -> Tuple[Dict[str, Any], int]:
   """Permission / product access health endpoint."""
   logger.info("=== Permission Health Requested ===")
   try:
-    config = load_config()
+    try:
+      request_json = request.get_json(silent=True) or {}
+    except Exception:
+      request_json = {}
+    config = load_config(request_json)
     set_environment_variables(config)
     validate_credentials(config)
 
@@ -609,7 +582,17 @@ def run_permission_health(request) -> Tuple[Dict[str, Any], int]:
       timeout=30
     )
     if token_resp.status_code != 200:
-      return {'status': 'error', 'message': 'Failed to exchange refresh token'}, 500
+      body_preview = ''
+      try:
+        body_preview = json.dumps(token_resp.json())[:800]
+      except Exception:
+        body_preview = (token_resp.text or '')[:800]
+      return {
+        'status': 'error',
+        'message': 'Failed to exchange refresh token',
+        'status_code': token_resp.status_code,
+        'body_preview': body_preview,
+      }, 500
 
     access_token = token_resp.json().get('access_token', '')
 
@@ -638,7 +621,7 @@ def run_permission_health(request) -> Tuple[Dict[str, Any], int]:
 
     probes = [
       ('Profiles', '/v2/profiles'),
-      ('SP Campaigns legacy', '/sp/campaigns?startIndex=0&count=1'),
+      ('SP Campaigns legacy', '/v2/sp/campaigns?startIndex=0&count=1'),
       ('SP Campaigns v3', '/sp/v3/campaigns?startIndex=0&count=1'),
       ('SB Campaigns v4', '/sb/v4/campaigns?startIndex=0&count=1'),
       ('SD Campaigns', '/sd/campaigns?startIndex=0&count=1'),
@@ -677,6 +660,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
   bigquery_client = None
   dry_run = False
   run_id: Optional[str] = None
+  preflight_details: Optional[Dict[str, Any]] = None
   
   try:
     # Validate GCP credentials
@@ -690,8 +674,8 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     except Exception:
       request_json = {}
     
-    # Load Config
-    config = load_config()
+    # Load Config (respect request overrides when provided)
+    config = load_config(request_json)
     set_environment_variables(config)
     validate_credentials(config)
     
@@ -717,50 +701,76 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     # Initialize Dashboard Client with BigQuery integration
     dashboard_client = DashboardClient(config, bigquery_client=bigquery_client)
 
+    # Preflight: verify Amazon OAuth and basic connectivity before heavy work
+    try:
+      profile_id = os.environ.get('AMAZON_PROFILE_ID', '').strip() or config.get('amazon_api', {}).get('profile_id', '')
+      region = (config.get('amazon_api', {}) or {}).get('region', 'NA')
+      preflight_api = AmazonAdsAPI(profile_id, region)
+      preflight = preflight_api.verify_connection(sample_size=1)
+      if not preflight.get('success'):
+        # Report to dashboard (non-blocking) then abort early
+        try:
+          dashboard_client.send_error(Exception('Amazon Ads API preflight failed'), {
+            'stage': 'preflight',
+            'details': preflight,
+          })
+        except Exception:
+          pass
+        return {
+          'status': 'error',
+          'message': 'Amazon Ads API preflight failed',
+          'error': preflight.get('error') or 'connection_failed'
+        }, 500
+      else:
+        # Record succinct preflight summary for response/logging
+        preflight_details = {
+          'method': preflight.get('method'),
+          'campaign_count': preflight.get('campaign_count', 0)
+        }
+        logger.info(
+          "Preflight OK: %s (campaign_count=%s)",
+          preflight_details['method'], preflight_details['campaign_count']
+        )
+    except AuthenticationError as auth_err:
+      # Clear message on auth failure and abort
+      try:
+        dashboard_client.send_error(auth_err, {'stage': 'preflight'})
+      except Exception:
+        pass
+      return {'status': 'error', 'message': str(auth_err)}, 500
+    except Exception as pf_exc:
+      # Unexpected preflight issue: log and continue (do not hard-fail)
+      logger.warning(f"Preflight check encountered an issue but will continue: {pf_exc}")
+
     # Run Interval Logic
     now_utc = _normalise_timestamp(datetime.now(timezone.utc))
     min_interval_minutes = _get_min_run_interval_minutes(config)
     force_run = request.args.get('force', '').lower() == 'true' or bool(request_json.get('force'))
-    within_dayparting = _is_in_dayparting_window(config, now_utc)
 
-    # Outside dayparting window, always skip unless forced
-    if not force_run and not within_dayparting:
-      logger.info("Skipping run - outside configured dayparting window")
-      return {
-        'status': 'skipped',
-        'message': 'Outside dayparting window; use force=true to override',
-        'dayparting_window': False,
-        'timezone': config.get('dayparting', {}).get('timezone', 'UTC'),
-        'peak_hours': config.get('dayparting', {}).get('peak_hours', [])
-      }, 200
-
-    # Within dayparting window, respect the minimum interval gate
     if not force_run and min_interval_minutes > 0:
+      # Check if enough time has passed since last run
       last_run_memory = _get_last_run_memory()
       last_run_cache = _read_last_run_from_cache()
       last_run = _select_latest_timestamp(last_run_memory, last_run_cache)
-
+      
       if last_run:
         time_since_last_run = (now_utc - last_run).total_seconds() / 60  # minutes
         if time_since_last_run < min_interval_minutes:
           wait_minutes = min_interval_minutes - time_since_last_run
-          logger.info(
-            f"Skipping run - only {time_since_last_run:.1f} minutes since last run. Need {min_interval_minutes} minutes. Wait {wait_minutes:.1f} more minutes."
-          )
+          logger.info(f"Skipping run - only {time_since_last_run:.1f} minutes since last run. Need {min_interval_minutes} minutes. Wait {wait_minutes:.1f} more minutes.")
           return {
             'status': 'skipped',
             'message': f'Run interval not met. Wait {wait_minutes:.1f} more minutes.',
             'last_run': last_run.isoformat(),
-            'min_interval_minutes': min_interval_minutes,
-            'dayparting_window': True
+            'min_interval_minutes': min_interval_minutes
           }, 200
-
-      # Update last run time when interval gate passes within the window
+      
+      # Update last run time
       _update_last_run_memory(now_utc)
       _write_last_run_to_cache(now_utc)
 
-    # Start Run
-    run_id = dashboard_client.start_run(dry_run=dry_run)
+    # Start Run (include preflight summary in initial dashboard status)
+    run_id = dashboard_client.start_run(dry_run=dry_run, preflight=preflight_details)
     logger.info(f"Started optimization run: {run_id}")
 
     # Optimize
@@ -805,7 +815,8 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     return {
       'status': 'success', 
       'results': results,
-      'run_id': run_id
+      'run_id': run_id,
+      'preflight': preflight_details
     }, 200
 
   except Exception as e:
@@ -819,7 +830,7 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
       except Exception:
         pass
         
-    return {'status': 'error', 'message': error_msg}, 500
+    return {'status': 'error', 'message': error_msg, 'preflight': preflight_details}, 500
 
 
 # Create aliases for backward compatibility
@@ -837,30 +848,104 @@ def run_pipeline(request) -> Tuple[Dict[str, Any], int]:
   return run_optimizer(request)
 
 
-def load_config() -> Dict[str, Any]:
-  """Load configuration from environment or file"""
-  config_json = os.environ.get('PPC_CONFIG', None)
-  if config_json:
-    return json.loads(config_json)
-  
+def _load_config_from_path(path: str) -> Dict[str, Any]:
+  if not path or not os.path.exists(path):
+    raise ValueError(f"Config path not found: {path}")
+
+  with open(path, 'r', encoding='utf-8') as handle:
+    raw = handle.read()
+
+  # Determine parser by extension, but fall back to YAML for robustness.
+  ext = os.path.splitext(path)[1].lower()
+  try:
+    if ext in {'.json'}:
+      parsed = json.loads(raw)
+    else:
+      parsed = yaml.safe_load(raw)
+  except Exception as exc:
+    raise ValueError(f"Failed to parse config at {path}: {exc}") from exc
+
+  if not isinstance(parsed, dict):
+    raise ValueError(f"Invalid config format at {path}: expected object/dict")
+
+  return parsed
+
+
+def load_config(request_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+  """Load configuration using runtime priority order.
+
+  Priority:
+    1) request_data['config']
+    2) request_data['config_path'] (if exists)
+    3) PPC_CONFIG_PATH env var (file path)
+    4) PPC_CONFIG env var (JSON/YAML string)
+    5) bundled config.json
+  """
+
+  request_data = request_data or {}
+  if isinstance(request_data.get('config'), dict):
+    return request_data['config']
+
+  request_path = _resolve_config_path(request_data)
+  if request_path:
+    return _load_config_from_path(request_path)
+
+  env_path = (os.environ.get('PPC_CONFIG_PATH') or '').strip()
+  if env_path:
+    return _load_config_from_path(env_path)
+
+  raw_config = os.environ.get('PPC_CONFIG', None)
+  if raw_config:
+    # PPC_CONFIG may be JSON or YAML.
+    try:
+      parsed = json.loads(raw_config)
+    except Exception:
+      parsed = yaml.safe_load(raw_config)
+    if not isinstance(parsed, dict):
+      raise ValueError("Invalid PPC_CONFIG: expected object/dict")
+    return parsed
+
   config_file = os.path.join(os.path.dirname(__file__), 'config.json')
   if os.path.exists(config_file):
     with open(config_file, 'r', encoding='utf-8') as f:
-      return json.load(f)
-  
+      parsed = json.load(f)
+    if not isinstance(parsed, dict):
+      raise ValueError("Invalid bundled config.json: expected object/dict")
+    return parsed
+
   raise ValueError("No configuration found")
 
 
 def set_environment_variables(config: Dict[str, Any]) -> None:
   """Set env vars from config if not already present"""
   amazon_api = config.get('amazon_api', {})
+  # Guardrail: config sometimes carries Secret Manager secret *names* rather than
+  # actual credential values. Never propagate those into AMAZON_* env vars.
+  known_secret_names = {
+    'Amazon_Ads_Client_identifier',
+    'Amazon_Ads_Client_secret',
+    'Amazon_Ads_Refresh_Token',
+  }
   for key, val in [('AMAZON_CLIENT_ID', 'client_id'), 
                    ('AMAZON_CLIENT_SECRET', 'client_secret'),
                    ('AMAZON_REFRESH_TOKEN', 'refresh_token'),
                    ('AMAZON_PROFILE_ID', 'profile_id')]:
     if not os.environ.get(key):
-      if amazon_api.get(val):
-        os.environ[key] = amazon_api.get(val)
+      cfg_value = (amazon_api.get(val) or '').strip() if isinstance(amazon_api, dict) else ''
+      if not cfg_value:
+        continue
+      if cfg_value in known_secret_names:
+        logger.error(
+          "Refusing to set %s from config because it looks like a Secret Manager secret name (%s). "
+          "Ensure secrets are injected into environment variables (e.g. --set-secrets) or provide real values in PPC_CONFIG.",
+          key,
+          cfg_value,
+        )
+        continue
+      # Skip obvious placeholders.
+      if 'YOUR_' in cfg_value or 'XXXX' in cfg_value.upper():
+        continue
+      os.environ[key] = cfg_value
 
 
 def set_bigquery_env_vars(project_id: str) -> None:
@@ -871,30 +956,96 @@ def set_bigquery_env_vars(project_id: str) -> None:
 
 
 def validate_credentials(config: Dict[str, Any]) -> None:
-  required = ['client_id', 'client_secret', 'refresh_token', 'profile_id']
-  amazon_api = config.get('amazon_api', {})
-  missing = [f for f in required if not amazon_api.get(f, '').strip()]
-  if missing:
-    raise ValueError(f"Missing API credentials: {', '.join(missing)}")
+  """Validate Amazon credentials.
 
-  # Shape validation to catch placeholders early in Cloud environments
-  client_id = (amazon_api.get('client_id') or '').strip()
-  client_secret = (amazon_api.get('client_secret') or '').strip()
-  refresh_token = (amazon_api.get('refresh_token') or '').strip()
-  invalid = []
-  try:
-    if IS_CLOUD_FUNCTION and not client_id.startswith('amzn1.application-oa2-client'):
-      invalid.append('client_id')
-    if IS_CLOUD_FUNCTION and not (client_secret.startswith('amzn1.oa2-cs') or len(client_secret) >= 20):
-      invalid.append('client_secret')
-    if IS_CLOUD_FUNCTION and not ('Atzr|' in refresh_token or len(refresh_token) >= 50):
-      invalid.append('refresh_token')
-  except Exception:
-    pass
-  if invalid:
+  Credentials can come from env vars (typical for Secret Manager deployments)
+  or from config (common for local runs via PPC_CONFIG).
+  """
+
+  amazon_api = config.get('amazon_api', {}) if isinstance(config, dict) else {}
+
+  def _looks_like_secret_ref(value: str) -> bool:
+    if not value:
+      return False
+    lower = value.lower()
+    if lower.startswith('projects/') and '/secrets/' in lower:
+      return True
+    if '/secrets/' in lower and '/versions/' in lower:
+      return True
+    return False
+
+  def _looks_like_placeholder(value: str) -> bool:
+    if not value:
+      return False
+    upper = value.upper()
+    if 'YOUR_' in upper or upper in {'CHANGEME', 'REPLACE_ME'}:
+      return True
+    # Common repo sample placeholders.
+    if 'XXXXX' in value:
+      return True
+    return False
+
+  def _get_env_or_config(env_key: str, config_key: str) -> str:
+    env_val = (os.environ.get(env_key) or '').strip()
+    if env_val:
+      return env_val
+    if isinstance(amazon_api, dict):
+      return str(amazon_api.get(config_key) or '').strip()
+    return ''
+
+  client_id = _get_env_or_config('AMAZON_CLIENT_ID', 'client_id')
+  client_secret = _get_env_or_config('AMAZON_CLIENT_SECRET', 'client_secret')
+  refresh_token = _get_env_or_config('AMAZON_REFRESH_TOKEN', 'refresh_token')
+  profile_id = _get_env_or_config('AMAZON_PROFILE_ID', 'profile_id')
+
+  # Treat placeholders as missing to avoid falling through to OAuth calls.
+  for env_key, value in [
+    ('AMAZON_CLIENT_ID', client_id),
+    ('AMAZON_CLIENT_SECRET', client_secret),
+    ('AMAZON_REFRESH_TOKEN', refresh_token),
+    ('AMAZON_PROFILE_ID', profile_id),
+  ]:
+    if _looks_like_placeholder(value):
+      raise ValueError(
+        f"{env_key} appears to be a placeholder value. Provide real credentials via Secret Manager env injection or PPC_CONFIG."
+      )
+
+  missing = [
+    name for name, value in [
+      ('client_id', client_id),
+      ('client_secret', client_secret),
+      ('refresh_token', refresh_token),
+      ('profile_id', profile_id),
+    ]
+    if not value
+  ]
+  if missing:
     raise ValueError(
-      f"Invalid credential values detected ({', '.join(invalid)}). Ensure real LWA values are configured via Secret Manager or env vars."
+      "Missing API credentials: %s. Provide via env vars (AMAZON_CLIENT_ID/AMAZON_CLIENT_SECRET/AMAZON_REFRESH_TOKEN/AMAZON_PROFILE_ID) "
+      "or via PPC_CONFIG amazon_api.*"
+      % ", ".join(missing)
     )
+
+  known_secret_names = {
+    'Amazon_Ads_Client_identifier',
+    'Amazon_Ads_Client_secret',
+    'Amazon_Ads_Refresh_Token',
+  }
+  for field_name, value in [
+    ('client_id', client_id),
+    ('client_secret', client_secret),
+    ('refresh_token', refresh_token),
+  ]:
+    if value in known_secret_names or _looks_like_secret_ref(value):
+      raise ValueError(
+        f"{field_name} appears to be a Secret Manager secret reference/name ({value}), not the actual credential value. "
+        "This typically happens when secrets failed to load into env vars and config contains secret identifiers. "
+        "Fix by injecting Secret Manager secrets into AMAZON_* env vars (recommended) or putting actual values in PPC_CONFIG."
+      )
+
+  # Light sanity: catch accidental newlines/spaces in refresh token.
+  if any(ch in refresh_token for ch in ['\n', '\r']):
+    raise ValueError("refresh_token contains newlines; Secret Manager value likely has formatting issues")
 
 
 def format_results_summary(results: Dict[str, Any], duration: float, dry_run: bool) -> str:

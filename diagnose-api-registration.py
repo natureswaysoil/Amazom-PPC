@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 According to Amazon Advertising API docs (as of 2024-2025):
-Sponsored Products campaigns endpoint is STILL at /sp/campaigns
+Sponsored Products campaigns endpoint is commonly accessed at /v2/sp/campaigns
 BUT it requires specific API scope permissions.
 
 The "Invalid key=value pair" error is Amazon's way of saying:
@@ -90,8 +90,8 @@ headers = {
     "Accept": "application/vnd.spCampaign.v3+json"
 }
 
-# Try the correct endpoint per Amazon's docs
-url = "https://advertising-api.amazon.com/sp/campaigns"
+# Use the path-versioned endpoint to avoid unversioned gateway behavior.
+url = "https://advertising-api.amazon.com/v2/sp/campaigns"
 
 response = requests.get(url, headers=headers, timeout=10)
 

@@ -7,9 +7,9 @@
   "amazon_api": {
     "region": "NA",
     "profile_id": "1780498399290938",
-    "client_id": "amzn1.application-oa2-client.xxxxx",
-    "client_secret": "amzn1.oa2-cs.v1.xxxxx",
-    "refresh_token": "Atzr|IwEBIxxxxx",
+    "client_id": "",
+    "client_secret": "",
+    "refresh_token": "",
     "token_info": {
       "last_refreshed": "2024-01-01T00:00:00",
       "access_token_expires_in": 3600,

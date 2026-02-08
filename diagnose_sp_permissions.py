@@ -134,7 +134,7 @@ def classify(name: str, status: int, body: str) -> str:
 
 PROBES = [
     Probe("Profiles", "/v2/profiles", "Baseline profile access"),
-    Probe("SP Campaigns v2 legacy", "/sp/campaigns?startIndex=0&count=1"),
+    Probe("SP Campaigns v2", "/v2/sp/campaigns?startIndex=0&count=1"),
     Probe("SP Campaigns v3", "/sp/v3/campaigns?startIndex=0&count=1"),
     Probe("SB Campaigns v4", "/sb/v4/campaigns?startIndex=0&count=1"),
     Probe("SB Campaigns legacy", "/sb/campaigns?startIndex=0&count=1"),

@@ -70,14 +70,14 @@ endpoints = [
         "needs_scope": True
     },
     {
-        "name": "SP Campaigns (v2 - no version header)",
-        "url": "https://advertising-api.amazon.com/sp/campaigns",
+        "name": "SP Campaigns (v2 path)",
+        "url": "https://advertising-api.amazon.com/v2/sp/campaigns",
         "headers": {**base_headers, "Amazon-Advertising-API-Scope": profile_id},
         "needs_scope": True
     },
     {
-        "name": "SP Campaigns (WITH v2 version header)",
-        "url": "https://advertising-api.amazon.com/sp/campaigns",
+        "name": "SP Campaigns (v2 path + v2 version header)",
+        "url": "https://advertising-api.amazon.com/v2/sp/campaigns",
         "headers": {
             **base_headers, 
             "Amazon-Advertising-API-Scope": profile_id,
@@ -87,7 +87,7 @@ endpoints = [
     },
     {
         "name": "SP Campaigns (WITH v3 version header - WRONG)",
-        "url": "https://advertising-api.amazon.com/sp/campaigns",
+        "url": "https://advertising-api.amazon.com/v2/sp/campaigns",
         "headers": {
             **base_headers,
             "Amazon-Advertising-API-Scope": profile_id,

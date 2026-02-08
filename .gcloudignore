@@ -14,6 +14,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 *.egg-info/
 dist/
 build/
@@ -28,6 +29,13 @@ README.md
 DEPLOYMENT_GUIDE.md
 LICENSE
 .github/
+
+# This repo contains extensive operational documentation that is not required
+# for Cloud Build / Cloud Run artifact builds.
+*.md
+*.MD
+*.txt
+!requirements.txt
 
 # Frontend/dashboard sources are large and not needed by the Cloud Function
 amazon_ppc_dashboard/

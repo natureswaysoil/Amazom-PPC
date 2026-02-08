@@ -48,7 +48,7 @@ test_cases = [
     {
         "name": "Method 1: Standard GET with query params",
         "method": "GET",
-        "url": f"https://advertising-api.amazon.com/sp/campaigns?startIndex=0&count=10",
+        "url": f"https://advertising-api.amazon.com/v2/sp/campaigns?startIndex=0&count=10",
         "headers": {
             "Authorization": f"Bearer {access_token}",
             "Amazon-Advertising-API-ClientId": client_id,
@@ -59,7 +59,7 @@ test_cases = [
     {
         "name": "Method 2: GET without Content-Type",
         "method": "GET",
-        "url": f"https://advertising-api.amazon.com/sp/campaigns?startIndex=0&count=10",
+        "url": f"https://advertising-api.amazon.com/v2/sp/campaigns?startIndex=0&count=10",
         "headers": {
             "Authorization": f"Bearer {access_token}",
             "Amazon-Advertising-API-ClientId": client_id,
@@ -81,7 +81,7 @@ test_cases = [
     {
         "name": "Method 4: Extended GET (no pagination)",
         "method": "GET",
-        "url": f"https://advertising-api.amazon.com/sp/campaigns",
+        "url": f"https://advertising-api.amazon.com/v2/sp/campaigns",
         "headers": {
             "Authorization": f"Bearer {access_token}",
             "Amazon-Advertising-API-ClientId": client_id,
@@ -92,7 +92,7 @@ test_cases = [
     {
         "name": "Method 5: V3 campaigns endpoint",
         "method": "GET",
-        "url": f"https://advertising-api.amazon.com/sp/campaigns?startIndex=0&count=10",
+        "url": f"https://advertising-api.amazon.com/v2/sp/campaigns?startIndex=0&count=10",
         "headers": {
             "Authorization": f"Bearer {access_token}",
             "Amazon-Advertising-API-ClientId": client_id,

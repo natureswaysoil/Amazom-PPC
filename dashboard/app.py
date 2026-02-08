@@ -1,6 +1,4 @@
-"""
-"""
-Amazon PPC BigQuery Dashboard
+"""Amazon PPC BigQuery Dashboard
 =============================
 
 Clean Flask backend for browsing Amazon PPC BigQuery tables.
@@ -8,7 +6,7 @@ Clean Flask backend for browsing Amazon PPC BigQuery tables.
 Project: Amazon PPC
 Project ID: amazon-ppc-474902
 Service Account:
-  bigquery-data-reader@amazon-ppc-474902.iam.gserviceaccount.com
+    bigquery-data-reader@amazon-ppc-474902.iam.gserviceaccount.com
 """
 
 import os

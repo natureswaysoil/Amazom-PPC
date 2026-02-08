@@ -16,13 +16,13 @@ Version: 1.0.0
 """
 
 import logging
+import os
 import time
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any, TYPE_CHECKING
 import requests
 from functools import wraps
-from urllib.parse import urlparse
 
 # Use TYPE_CHECKING to avoid circular imports
 if TYPE_CHECKING:
@@ -86,9 +86,20 @@ class DashboardClient:
             bigquery_client: Optional BigQueryClient instance for direct BigQuery integration
         """
         dashboard_config = config.get('dashboard', {})
-        
-        self.url = dashboard_config.get('url', '')
-        self.api_key = dashboard_config.get('api_key', '')
+
+        # Prefer environment variables for deploys that inject secrets via
+        # Secret Manager (`--set-secrets`), but keep config defaults for local use.
+        env_url = (os.getenv('DASHBOARD_URL') or '').strip()
+        env_key = (os.getenv('DASHBOARD_API_KEY') or '').strip()
+
+        self.url = env_url or (dashboard_config.get('url', '') or '').strip()
+        self.api_key = env_key or (dashboard_config.get('api_key', '') or '').strip()
+
+        # Treat placeholders as missing.
+        placeholder_api_key = False
+        if self.api_key.upper().startswith('YOUR_') or self.api_key == 'YOUR_DASHBOARD_API_KEY':
+            placeholder_api_key = True
+            self.api_key = ''
         self.enabled = dashboard_config.get('enabled', True)
         self.send_real_time_updates = dashboard_config.get('send_real_time_updates', True)
         self.timeout = dashboard_config.get('timeout', 30)
@@ -103,7 +114,13 @@ class DashboardClient:
             self.enabled = False
         
         if self.enabled and not self.api_key:
-            logger.warning("Dashboard API key not configured - requests may be rejected")
+            if placeholder_api_key:
+                logger.warning(
+                    "Dashboard API key is still a placeholder (e.g., 'YOUR_DASHBOARD_API_KEY'). "
+                    "Update the Secret Manager value (env var 'DASHBOARD_API_KEY') to enable authenticated dashboard requests."
+                )
+            else:
+                logger.warning("Dashboard API key not configured - requests may be rejected")
         
         # Log BigQuery integration status
         if self.bigquery_client:
@@ -195,7 +212,7 @@ class DashboardClient:
             logger.debug(f"Exception details: {type(e).__name__}: {str(e)}")
             return None
     
-    def start_run(self, dry_run: bool = False) -> str:
+    def start_run(self, dry_run: bool = False, preflight: Optional[Dict] = None) -> str:
         """
         Start a new optimization run and generate unique run ID
         
@@ -215,6 +232,8 @@ class DashboardClient:
                 'profile_id': self.profile_id,
                 'dry_run': dry_run
             }
+            if preflight:
+                payload['preflight'] = preflight
             self._make_request('/api/optimization-status', payload)
         
         # Record start event in BigQuery if configured
@@ -243,10 +262,13 @@ class DashboardClient:
         Returns:
             True if successful, False otherwise
         """
+        if not self.enabled:
+            logger.info("Dashboard updates disabled")
+            return False
+        
         try:
             # Build enhanced payload
             payload = self.build_results_payload(results, config, duration_seconds, dry_run)
-            bq_success = None
             
             # Write to BigQuery if configured
             if self.bigquery_client:
@@ -259,12 +281,6 @@ class DashboardClient:
                         logger.warning("⚠️ BigQuery write returned False")
                 except Exception as bq_err:
                     logger.error(f"Failed to write to BigQuery: {str(bq_err)}")
-                    bq_success = False
-
-            if not self.enabled:
-                logger.info("Dashboard updates disabled; skipping HTTP send")
-                # If BigQuery is configured, treat a successful write as success.
-                return bool(bq_success)
             
             # Send to dashboard
             response = self._make_request('/api/optimization-results', payload)
@@ -418,19 +434,10 @@ class DashboardClient:
         if not self.enabled:
             return False
 
-        def _is_healthy(payload: Any) -> bool:
-            if not isinstance(payload, dict):
-                return False
-            status = str(payload.get('status', '')).strip().lower()
-            if status in {'ok', 'healthy', 'success'}:
-                return True
-            # Some services return a structured root response without a strict status.
-            if payload.get('endpoints') and status != 'error':
-                return True
+        base = (self.url or '').rstrip('/')
+        if not base:
             return False
 
-        base = (self.url or '').rstrip('/')
-        # Prefer the Next.js convention first, then common service health paths.
         candidates = ['/api/health', '/health', '/']
 
         for endpoint in candidates:
@@ -448,40 +455,27 @@ class DashboardClient:
 
             if resp.status_code != 200:
                 body_preview = (resp.text or '')[:300].replace('\n', ' ')
-                logger.debug(f"Dashboard health probe {url} returned HTTP {resp.status_code}: {body_preview}")
+                logger.debug(
+                    f"Dashboard health probe {url} returned HTTP {resp.status_code}: {body_preview}"
+                )
                 continue
 
+            # Consider any 200 response as reachable; prefer interpreting JSON when available.
             try:
                 payload = resp.json() if resp.content else {}
             except ValueError:
                 payload = None
 
-            if _is_healthy(payload):
+            if payload is None:
+                return True
+            if isinstance(payload, dict):
+                status = str(payload.get('status', '')).strip().lower()
+                if status in {'ok', 'healthy', 'success', ''}:
+                    return True
+                # If it is a structured response without strict status, treat it as healthy.
                 return True
 
-            # If we got a helpful error payload, surface it for troubleshooting.
-            if isinstance(payload, dict) and str(payload.get('status', '')).strip().lower() == 'error':
-                available = payload.get('available_endpoints')
-                if available:
-                    logger.warning(
-                        "Dashboard URL responded, but endpoint '%s' was not found. Available endpoints: %s",
-                        endpoint,
-                        available,
-                    )
-                else:
-                    logger.warning(
-                        "Dashboard URL responded with an error payload at '%s': %s",
-                        endpoint,
-                        str(payload)[:500],
-                    )
-
-        # Extra hint if the URL looks like it points at an optimizer service.
-        try:
-            host = urlparse(base).netloc
-            if host and ('optimizer' in host or 'dashboard' in host):
-                logger.debug("Dashboard health check exhausted candidates for host: %s", host)
-        except Exception:
-            pass
+            return True
 
         return False
     

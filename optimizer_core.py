@@ -79,9 +79,9 @@ TOKEN_URL = "https://api.amazon.com/auth/o2/token"
 USER_AGENT = "NWS-PPC-Automation/2.0"
 
 # Amazon Ads API versions for Amazon-Advertising-API-Version header
-# For Sponsored Products endpoints (campaigns, ad groups, keywords): use v2
-# For Reporting API: use v3
-SP_API_VERSION = "v3"
+# Sponsored Products (SP) endpoints expect version v2.
+# Reporting API uses version v3.
+SP_API_VERSION = "v2"
 REPORTS_API_VERSION = "v3"
 
 # Rate limiting - Amazon Advertising API supports 10 requests/second
@@ -440,6 +440,16 @@ class AmazonAdsAPI:
         self.region = region.upper()
         self.base_url = ENDPOINTS.get(self.region, ENDPOINTS["NA"])
 
+        # Avoid tight auth retry loops when credentials are invalid.
+        # If authentication fails, subsequent attempts within this window
+        # will re-raise the cached error instead of spamming token requests.
+        try:
+            self._auth_failure_backoff_seconds = int(os.getenv("AMAZON_AUTH_FAILURE_BACKOFF_SECONDS", "15"))
+        except Exception:
+            self._auth_failure_backoff_seconds = 15
+        self._last_auth_failure_at: Optional[float] = None
+        self._last_auth_failure_message: Optional[str] = None
+
         # Allow explicit credentials (primarily for tests).
         if client_id and not os.getenv("AMAZON_CLIENT_ID"):
             os.environ["AMAZON_CLIENT_ID"] = client_id
@@ -492,6 +502,34 @@ class AmazonAdsAPI:
     
     def _authenticate(self) -> Auth:
         """Authenticate and get access token"""
+        if self._last_auth_failure_at is not None and self._auth_failure_backoff_seconds > 0:
+            elapsed = time.time() - self._last_auth_failure_at
+            if elapsed < self._auth_failure_backoff_seconds:
+                cached = self._last_auth_failure_message or "Previous authentication attempt failed"
+                raise AuthenticationError(
+                    f"{cached} (backing off; retry in {int(self._auth_failure_backoff_seconds - elapsed)}s)"
+                )
+
+        def _looks_like_secret_ref(value: str) -> bool:
+            if not value:
+                return False
+            lower = value.lower()
+            if lower.startswith('projects/') and '/secrets/' in lower:
+                return True
+            if '/secrets/' in lower and '/versions/' in lower:
+                return True
+            return False
+
+        def _looks_like_placeholder(value: str) -> bool:
+            if not value:
+                return False
+            upper = value.upper()
+            if 'YOUR_' in upper or upper in {'CHANGEME', 'REPLACE_ME'}:
+                return True
+            if 'XXXXX' in value:
+                return True
+            return False
+
         client_id = os.getenv("AMAZON_CLIENT_ID", "").strip()
         client_secret = os.getenv("AMAZON_CLIENT_SECRET", "").strip()
         refresh_token = os.getenv("AMAZON_REFRESH_TOKEN", "").strip()
@@ -503,31 +541,21 @@ class AmazonAdsAPI:
                 "AMAZON_CLIENT_SECRET, or AMAZON_REFRESH_TOKEN"
             )
 
-        # Basic credential shape validation to catch placeholder/secret-name issues early
-        invalid_shapes = []
-        try:
-            if not client_id.startswith("amzn1.application-oa2-client"):
-                invalid_shapes.append("client_id")
-            # Amazon client secrets typically start with amzn1.oa2-cs.v1 but length check is more flexible
-            if not (client_secret.startswith("amzn1.oa2-cs") or len(client_secret) >= 20):
-                invalid_shapes.append("client_secret")
-            # Refresh tokens usually contain "Atzr|" and are long
-            if not ("Atzr|" in refresh_token or len(refresh_token) >= 50):
-                invalid_shapes.append("refresh_token")
-        except Exception:
-            pass
-
-        if invalid_shapes:
-            masked_id = (client_id[:12] + "..." if client_id else "MISSING")
-            logger.error(
-                "Credential validation failed: %s. Values look like placeholders or secret names.",
-                ", ".join(invalid_shapes)
-            )
-            logger.error("client_id preview: %s", masked_id)
-            raise AuthenticationError(
-                "Amazon Ads credentials appear invalid. Ensure AMAZON_CLIENT_ID/SECRET/REFRESH_TOKEN"
-                " contain actual LWA values (not secret names or placeholders)."
-            )
+        # Fast-fail common misconfigurations: secret references or placeholders.
+        for field_name, value in [
+            ('AMAZON_CLIENT_ID', client_id),
+            ('AMAZON_CLIENT_SECRET', client_secret),
+            ('AMAZON_REFRESH_TOKEN', refresh_token),
+        ]:
+            if _looks_like_secret_ref(value):
+                raise AuthenticationError(
+                    f"{field_name} appears to be a Secret Manager reference ({value}), not an actual credential value. "
+                    "Ensure Secret Manager is bound into environment variables (e.g., --set-secrets) or provide a real value."
+                )
+            if _looks_like_placeholder(value):
+                raise AuthenticationError(
+                    f"{field_name} appears to be a placeholder value. Provide real Amazon OAuth credentials."
+                )
 
         # Log credential status (masked)
         logger.debug(f"Auth attempt - client_id: {client_id[:8] if client_id else 'MISSING'}..., "
@@ -543,10 +571,29 @@ class AmazonAdsAPI:
             "client_id": client_id,
             "client_secret": client_secret,
         }
+
+        oauth_scope = os.getenv("AMAZON_OAUTH_SCOPE", "").strip()
+        if oauth_scope:
+            # Some accounts/app registrations require requesting an explicit advertising scope
+            # when exchanging refresh tokens for access tokens.
+            payload["scope"] = oauth_scope
+            logger.info("Using explicit OAuth scope for token refresh: %s", oauth_scope)
         
         try:
             logger.debug(f"POST {TOKEN_URL}")
-            response = requests.post(TOKEN_URL, data=payload, timeout=30)
+            # Use an isolated session to avoid global hooks/proxies interfering
+            auth_session = requests.Session()
+            try:
+                # Disable environment proxies for this critical call
+                auth_session.trust_env = False
+            except Exception:
+                pass
+            response = auth_session.post(
+                TOKEN_URL,
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=30,
+            )
             logger.debug(f"Response status: {response.status_code}")
             
             # Log response body for debugging (may contain error details)
@@ -554,6 +601,18 @@ class AmazonAdsAPI:
                 response_data = response.json()
                 if response.status_code != 200:
                     logger.error(f"Amazon auth error response: {response_data}")
+                    # Provide more actionable guidance for common auth failures
+                    err_code = (response_data or {}).get("error")
+                    err_desc = (response_data or {}).get("error_description")
+                    if str(err_code).lower() == "unauthorized_client":
+                        hint = (
+                            "Amazon returned 'unauthorized_client' during token refresh. "
+                            "Verify that AMAZON_CLIENT_ID, AMAZON_CLIENT_SECRET, and AMAZON_REFRESH_TOKEN "
+                            "belong to the same Amazon Ads application registration and profile. "
+                            "Refresh tokens are client-specific; re-authorize the Ads app to generate a new refresh token "
+                            "if credentials were rotated. Also check Secret Manager for disabled/corrupted versions and whitespace."
+                        )
+                        logger.error(hint)
             except (ValueError, KeyError, AttributeError):
                 logger.debug(f"Response body (first 200 chars): {response.text[:200]}")
             
@@ -570,13 +629,29 @@ class AmazonAdsAPI:
             )
             logger.info("Successfully authenticated with Amazon Ads API")
             logger.debug(f"Access token length: {len(access_token)}")
+            self._last_auth_failure_at = None
+            self._last_auth_failure_message = None
             return auth
         except requests.exceptions.RequestException as e:
-            logger.error(f"Authentication request failed: {e}")
-            raise AuthenticationError(f"Failed to authenticate with Amazon Ads API: {e}")
+            # Surface more specific error details when available
+            body = None
+            try:
+                body = response.json() if 'response' in locals() else None
+            except Exception:
+                body = None
+            msg = f"Failed to authenticate with Amazon Ads API: {e}"
+            if isinstance(body, dict) and body.get('error'):
+                msg += f" | error={body.get('error')} desc={body.get('error_description')}"
+            logger.error(msg)
+            self._last_auth_failure_at = time.time()
+            self._last_auth_failure_message = msg
+            raise AuthenticationError(msg)
         except (KeyError, ValueError) as e:
             logger.error(f"Invalid authentication response: {e}")
-            raise AuthenticationError(f"Invalid response from Amazon Ads API: {e}")
+            msg = f"Invalid response from Amazon Ads API: {e}"
+            self._last_auth_failure_at = time.time()
+            self._last_auth_failure_message = msg
+            raise AuthenticationError(msg)
     
     def _refresh_auth_if_needed(self):
         """Refresh authentication if token expired"""
@@ -608,37 +683,48 @@ class AmazonAdsAPI:
         return headers
 
     def _upgrade_endpoint(self, endpoint: str) -> tuple[str, str]:
+        """Resolve endpoint path and optional API version header.
+
+        Historically, many Amazon Ads endpoints are versioned via the URL path
+        (e.g., `/v2/sp/keywords`). Some environments/scripts in this repo also
+        attempted header-based versioning by rewriting `/v2/...` -> `/...` and
+        adding `Amazon-Advertising-API-Version`.
+
+        In practice, calling unversioned paths (e.g., `/sp/keywords`) can yield
+        confusing 403s like "Invalid key=value pair" even with a valid Bearer
+        token. To maximize compatibility, we default to *path-based* versioning
+        and only use the header-rewrite behavior when explicitly enabled.
+
+        Returns: (endpoint_path, api_version_header_or_none)
         """
-        Translate deprecated v2 endpoints to new format.
-        Returns: (endpoint_path, api_version)
-        API version should be sent as header, not in URL path.
-        """
 
-        if not endpoint.startswith("/v2/"):
-            # Already a new-style endpoint or doesn't need upgrading
-            return endpoint, None
+        ep = (endpoint or "").strip()
+        if not ep.startswith("/v2/"):
+            return ep, None
 
-        # Map of v2 endpoints to their new paths (without version in path)
-        replacements = {
-            "/v2/sp/campaigns": ("/sp/campaigns", SP_API_VERSION),
-            "/v2/sp/adGroups": ("/sp/adGroups", SP_API_VERSION),
-            "/v2/sp/keywords/extended": ("/sp/keywords/extended", SP_API_VERSION),
-            "/v2/sp/keywords": ("/sp/keywords", SP_API_VERSION),
-            "/v2/sp/negativeKeywords": ("/sp/negativeKeywords", SP_API_VERSION),
-            "/v2/sp/targets/keywords/recommendations": (
-                "/sp/targets/keywords/recommendations", SP_API_VERSION
-            ),
-            "/v2/reports": ("/reporting/reports", REPORTS_API_VERSION),
-        }
+        # Reports are a special case: legacy `/v2/reports` should be routed to
+        # the modern reporting service path.
+        if ep.startswith("/v2/reports"):
+            suffix = ep[len("/v2/reports"):]
+            return f"/reporting/reports{suffix}", REPORTS_API_VERSION
 
-        for old_prefix, (new_prefix, api_version) in replacements.items():
-            if endpoint.startswith(old_prefix):
-                suffix = endpoint[len(old_prefix):]
-                return f"{new_prefix}{suffix}", api_version
+        # Keywords/targets endpoints are sometimes exposed on unversioned `/sp/...`
+        # paths even when legacy callers use `/v2/sp/...`.
+        # Keep campaign endpoints untouched because this repo has a more reliable
+        # fallback via `/sp/campaigns/list`.
+        keyword_rewrites = (
+            ("/v2/sp/keywords/extended", "/sp/keywords/extended"),
+            ("/v2/sp/keywords", "/sp/keywords"),
+            ("/v2/sp/negativeKeywords", "/sp/negativeKeywords"),
+            ("/v2/sp/targets/keywords/recommendations", "/sp/targets/keywords/recommendations"),
+        )
 
-        # Unknown v2 endpoint, return as-is with warning
-        logger.warning(f"Unknown v2 endpoint format: {endpoint}")
-        return endpoint, None
+        for legacy, modern in keyword_rewrites:
+            if ep.startswith(legacy):
+                return f"{modern}{ep[len(legacy):]}", None
+
+        # Default: keep the original endpoint and do not force a version header.
+        return ep, None
 
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         """Make API request with retry logic and rate limiting using connection pooling"""
@@ -658,6 +744,30 @@ class AmazonAdsAPI:
         
         reauth_attempted = False
 
+        def _infer_media_type_version(hdrs: Dict[str, str]) -> str:
+            """Infer versioning signal from Accept/Content-Type media types.
+
+            This repo primarily uses path-based versioning for Amazon Ads endpoints.
+            Some endpoints additionally use vendor media types like
+            `application/vnd.spCampaign.v3+json`.
+            """
+            if not isinstance(hdrs, dict):
+                return "unknown"
+
+            def _pick(name: str) -> str:
+                val = hdrs.get(name) or hdrs.get(name.lower())
+                if not val or not isinstance(val, str):
+                    return ""
+                # Strip parameters like charset.
+                return val.split(";", 1)[0].strip()
+
+            accept = _pick("Accept")
+            ctype = _pick("Content-Type")
+            candidate = accept or ctype
+            return candidate or "application/json"
+
+        versioning_mode = os.getenv("AMAZON_ADS_VERSIONING_MODE", "path").strip().lower()
+
         for attempt in range(max_retries):
             try:
                 # Log request details (mask sensitive headers)
@@ -665,9 +775,20 @@ class AmazonAdsAPI:
                 if headers_extra:
                     headers.update(headers_extra)
                 safe_headers = {k: ('REDACTED' if 'auth' in k.lower() else v) for k, v in headers.items()}
-                logger.info(f"Amazon API {method} {url} (attempt {attempt + 1}/{max_retries})")
-                logger.info(f"Request headers: {safe_headers}")
-                logger.info(f"API version for this request: {api_version}")
+
+                # Add a compact hint for common pagination-style request bodies.
+                page_hint = ""
+                body = kwargs.get("json")
+                if isinstance(body, dict):
+                    if "startIndex" in body or "count" in body:
+                        page_hint = f" startIndex={body.get('startIndex')} count={body.get('count')}"
+
+                media_version = _infer_media_type_version(headers)
+                logger.info(
+                    f"Amazon API {method} {url} (attempt {attempt + 1}/{max_retries}){page_hint} "
+                    f"[versioning_mode={versioning_mode} version_header={'set' if api_version else 'none'} media={media_version}]"
+                )
+                logger.debug(f"Request headers: {safe_headers}")
                 if 'json' in kwargs:
                     logger.debug(f"Request body preview: {str(kwargs['json'])[:500]}")
                 
@@ -701,6 +822,18 @@ class AmazonAdsAPI:
                     body_preview = response.text[:1000] if response.text else 'Empty response'
                     logger.error(f"Amazon API error {response.status_code}: {body_preview}")
 
+                    # Special-case a common SP permission / API registration failure signature.
+                    # This is frequently NOT resolvable by re-authenticating; retrying just burns time.
+                    if response.status_code == 403 and "Invalid key=value pair" in body_preview:
+                        logger.error(
+                            "403 with 'Invalid key=value pair' is often caused by either (a) calling an unversioned path "
+                            "like '/sp/...' instead of '/v2/sp/...' (request gets routed to a gateway that expects a different "
+                            "Authorization format), or (b) missing Sponsored Products API permission / API registration for the "
+                            "LWA app+refresh token. Verify the request URL includes '/v2' for SP v2 endpoints, then verify API "
+                            "registration in Amazon Advertising Console (Account Settings → API) and re-authorize to generate a "
+                            "refresh token with the correct advertising scope. If needed, set AMAZON_OAUTH_SCOPE=advertising::campaign_management."
+                        )
+
                     # Extra diagnostics for auth-related 401/403 - BEFORE any exception raising
                     if response.status_code in (401, 403):
                         auth_header = headers.get("Authorization", "")
@@ -709,16 +842,21 @@ class AmazonAdsAPI:
                         # Detect suspicious whitespace characters
                         has_newline = any(ch in token_part for ch in ['\n', '\r', '\t'])
                         has_space = ' ' in token_part
-                        start_fragment = token_part[:20] if len(token_part) >= 20 else token_part
-                        end_fragment = token_part[-20:] if token_len >= 20 else ""
+                        # Avoid logging any token fragments; log only non-sensitive diagnostics.
+                        token_hash8 = None
+                        try:
+                            import hashlib
+                            token_hash8 = hashlib.sha256(token_part.encode('utf-8', errors='ignore')).hexdigest()[:8]
+                        except Exception:
+                            token_hash8 = None
                         
                         # Log full diagnostics
                         logger.error(
                             "AUTH DIAGNOSTIC - token_len=%d has_newline=%s has_space=%s", 
                             token_len, has_newline, has_space
                         )
-                        logger.error("AUTH DIAGNOSTIC - token_start='%s'", start_fragment)
-                        logger.error("AUTH DIAGNOSTIC - token_end='%s'", end_fragment)
+                        if token_hash8:
+                            logger.error("AUTH DIAGNOSTIC - token_sha256_8=%s", token_hash8)
                         logger.error("AUTH DIAGNOSTIC - profile_id=%s", self.profile_id)
                         logger.error("AUTH DIAGNOSTIC - client_id=%s", 
                                    (self.client_id[:12] + '...' if self.client_id and len(self.client_id) > 12 else self.client_id or 'MISSING'))
@@ -733,12 +871,12 @@ class AmazonAdsAPI:
                             logger.error(f"AUTH DIAGNOSTIC - Missing required headers: {missing_headers}")
                         else:
                             logger.info("AUTH DIAGNOSTIC - All required Amazon Ads headers present")
-                        
-                        # Log the actual Authorization header value (first 50 chars only for security)
-                        logger.error("AUTH DIAGNOSTIC - Full Authorization header (first 50 chars): '%s'", 
-                                   auth_header[:50] if len(auth_header) > 50 else auth_header)
 
-                    if response.status_code in (401, 403) and not reauth_attempted:
+                        # Do not log Authorization header contents.
+                        if auth_header:
+                            logger.error("AUTH DIAGNOSTIC - Authorization scheme=%s", auth_header.split(' ', 1)[0])
+
+                    if response.status_code == 401 and not reauth_attempted:
                         logger.info(
                             "Received %s from Amazon Ads API; refreshing credentials and retrying",
                             response.status_code,
@@ -809,37 +947,68 @@ class AmazonAdsAPI:
             {},
         ]
 
+        endpoint_candidates = [
+            # Prefer path-versioned endpoint first to avoid certain gateway/auth parsing issues.
+            '/v2/sp/campaigns/list',
+            '/sp/campaigns/list',
+        ]
+
+        def _should_abort_variants(exc: Exception) -> bool:
+            """Return True if further permutations are unlikely to succeed."""
+            resp = getattr(exc, 'response', None)
+            if resp is None:
+                return False
+            status = getattr(resp, 'status_code', None)
+            if status not in (401, 403):
+                return False
+            body_text = (getattr(resp, 'text', '') or '')
+            # This is the confusing gateway error we've been seeing when hitting unversioned paths.
+            if "Invalid key=value pair" in body_text:
+                return True
+            return False
+
         last_exc: Optional[Exception] = None
-        for headers_extra in header_candidates:
-            for body in body_candidates:
-                try:
-                    response = self._request(
-                        'POST',
-                        '/sp/campaigns/list',
-                        json=body,
-                        headers_extra=headers_extra,
-                    )
-                    payload = response.json() if response is not None else None
+        for endpoint in endpoint_candidates:
+            for headers_extra in header_candidates:
+                for body in body_candidates:
+                    try:
+                        response = self._request(
+                            'POST',
+                            endpoint,
+                            json=body,
+                            headers_extra=headers_extra,
+                        )
+                        payload = response.json() if response is not None else None
 
-                    # Some APIs return a plain list; others wrap it.
-                    if isinstance(payload, list):
-                        return payload
-                    if isinstance(payload, dict):
-                        for key in ('campaigns', 'items', 'results'):
-                            if isinstance(payload.get(key), list):
-                                return payload[key]
-                        # Fallback for nested "response" wrappers
-                        nested = payload.get('response') if isinstance(payload.get('response'), dict) else None
-                        if nested:
+                        # Some APIs return a plain list; others wrap it.
+                        if isinstance(payload, list):
+                            return payload
+                        if isinstance(payload, dict):
                             for key in ('campaigns', 'items', 'results'):
-                                if isinstance(nested.get(key), list):
-                                    return nested[key]
+                                if isinstance(payload.get(key), list):
+                                    return payload[key]
+                            # Fallback for nested "response" wrappers
+                            nested = payload.get('response') if isinstance(payload.get('response'), dict) else None
+                            if nested:
+                                for key in ('campaigns', 'items', 'results'):
+                                    if isinstance(nested.get(key), list):
+                                        return nested[key]
 
-                    # Unknown shape: treat as empty rather than hard-failing.
-                    return []
-                except Exception as exc:
-                    last_exc = exc
-                    continue
+                        # Unknown shape: treat as empty rather than hard-failing.
+                        return []
+                    except Exception as exc:
+                        last_exc = exc
+
+                        # If the path-versioned candidate doesn't exist, try the next endpoint.
+                        resp = getattr(exc, 'response', None)
+                        status = getattr(resp, 'status_code', None) if resp is not None else None
+                        if status == 404 and endpoint.startswith('/v2/'):
+                            break
+
+                        # Abort quickly on known gateway/auth-format error to allow verify_connection fallback.
+                        if _should_abort_variants(exc):
+                            raise
+                        continue
 
         raise last_exc or Exception('Failed to list campaigns via /sp/campaigns/list')
 
@@ -927,39 +1096,69 @@ class AmazonAdsAPI:
     # ========================================================================
     
     def get_campaigns(self, state_filter: str = None, use_cache: bool = True) -> List[Campaign]:
-        """Get all campaigns with caching support.
-
-        Prefer the v3 list-style endpoint for reliability; fall back to legacy v2.
-        """
+        """Get all campaigns with caching support"""
         # Use cache if available and no state filter
         if use_cache and self._campaigns_cache is not None and state_filter is None:
             logger.debug(f"Using cached campaigns ({len(self._campaigns_cache)} items)")
             return self._campaigns_cache
-
-        # Clear previous error before new attempt
-        self._last_campaigns_error = None
-
-        # First attempt: v3 list-style endpoint with pagination
+        
         try:
-            logger.debug("Fetching campaigns via v3 list endpoint")
-            all_items: List[Dict[str, Any]] = []
-            start_index = 0
-            page_size = 100
-            max_pages = 50
+            # Clear previous error before new attempt
+            self._last_campaigns_error = None
+            params = {}
+            if state_filter:
+                params['stateFilter'] = state_filter
+            
+            response = self._request('GET', '/v2/sp/campaigns', params=params)
+            campaigns_data = response.json()
+            
+            if not isinstance(campaigns_data, list):
+                logger.warning(f"Unexpected campaigns response format: {type(campaigns_data)}")
+                return []
+            
+            campaigns = []
+            for c in campaigns_data:
+                if not isinstance(c, dict):
+                    continue
+                    
+                campaign = Campaign(
+                    campaign_id=str(c.get('campaignId', '')),
+                    name=c.get('name', ''),
+                    state=c.get('state', ''),
+                    daily_budget=float(c.get('dailyBudget', 0.0)),
+                    targeting_type=c.get('targetingType', ''),
+                    campaign_type='sponsoredProducts'
+                )
+                campaigns.append(campaign)
+            
+            logger.info(f"Retrieved {len(campaigns)} campaigns")
+            
+            # Cache if no state filter
+            if state_filter is None:
+                self._campaigns_cache = campaigns
+            
+            return campaigns
+        except Exception as e:
+            logger.error(f"Failed to get campaigns: {e}")
+            self._last_campaigns_error = e
 
-            for _ in range(max_pages):
-                page = self.list_campaigns_v3(count=page_size, start_index=start_index)
-                if not page:
-                    break
-                # Optional filter by state if provided
-                if state_filter:
-                    page = [p for p in page if isinstance(p, dict) and str(p.get('state', '')).upper() == str(state_filter).upper()]
-                all_items.extend([p for p in page if isinstance(p, dict)])
-                if len(page) < page_size:
-                    break
-                start_index += page_size
+            # Fallback: try the list-style endpoint (often required for newer SP APIs)
+            try:
+                logger.info("Falling back to v3 list campaigns endpoint")
+                all_items: List[Dict[str, Any]] = []
+                start_index = 0
+                page_size = 100
+                max_pages = 50
 
-            if all_items:
+                for _ in range(max_pages):
+                    page = self.list_campaigns_v3(count=page_size, start_index=start_index)
+                    if not page:
+                        break
+                    all_items.extend([p for p in page if isinstance(p, dict)])
+                    if len(page) < page_size:
+                        break
+                    start_index += page_size
+
                 campaigns: List[Campaign] = []
                 for c in all_items:
                     campaign = Campaign(
@@ -972,48 +1171,14 @@ class AmazonAdsAPI:
                     )
                     campaigns.append(campaign)
 
-                logger.info(f"Retrieved {len(campaigns)} campaigns (v3 list)")
+                logger.info(f"Retrieved {len(campaigns)} campaigns (v3 list fallback)")
+
                 if state_filter is None:
                     self._campaigns_cache = campaigns
                 return campaigns
-        except Exception as v3_exc:
-            logger.debug(f"v3 list campaigns attempt failed: {v3_exc}")
-
-        # Fallback: legacy v2 endpoint
-        try:
-            params = {}
-            if state_filter:
-                params['stateFilter'] = state_filter
-
-            response = self._request('GET', '/v2/sp/campaigns', params=params)
-            campaigns_data = response.json()
-
-            if not isinstance(campaigns_data, list):
-                logger.warning(f"Unexpected campaigns response format: {type(campaigns_data)}")
+            except Exception as fallback_exc:
+                logger.error(f"Fallback campaigns list also failed: {fallback_exc}")
                 return []
-
-            campaigns: List[Campaign] = []
-            for c in campaigns_data:
-                if not isinstance(c, dict):
-                    continue
-                campaign = Campaign(
-                    campaign_id=str(c.get('campaignId', '')),
-                    name=c.get('name', ''),
-                    state=c.get('state', ''),
-                    daily_budget=float(c.get('dailyBudget', 0.0)),
-                    targeting_type=c.get('targetingType', ''),
-                    campaign_type='sponsoredProducts'
-                )
-                campaigns.append(campaign)
-
-            logger.info(f"Retrieved {len(campaigns)} campaigns (v2)")
-            if state_filter is None:
-                self._campaigns_cache = campaigns
-            return campaigns
-        except Exception as e:
-            logger.error(f"Failed to get campaigns via v2: {e}")
-            self._last_campaigns_error = e
-            return []
     
     def invalidate_campaigns_cache(self):
         """Invalidate campaigns cache after updates"""
@@ -1152,13 +1317,55 @@ class AmazonAdsAPI:
     
     def get_keywords(self, campaign_id: str = None, ad_group_id: str = None) -> List[Keyword]:
         """Get keywords using v2 endpoint with required filters"""
+        def _is_sp_permission_error(exc: Exception) -> bool:
+            """Detect the common 'Invalid key=value pair' 403 that indicates missing SP API permission."""
+            try:
+                # If we've already wrapped the failure, detect by message.
+                msg = str(exc) if exc is not None else ""
+                if "Sponsored Products API access denied" in msg or "Invalid key=value pair" in msg:
+                    return True
+
+                # Walk causal chain, if present.
+                cause = getattr(exc, "__cause__", None)
+                if cause is not None and cause is not exc:
+                    if _is_sp_permission_error(cause):
+                        return True
+
+                resp = getattr(exc, "response", None)
+                if resp is None:
+                    return False
+                body = (getattr(resp, "text", None) or "")
+                return int(getattr(resp, "status_code", 0) or 0) == 403 and "Invalid key=value pair" in body
+            except Exception:
+                return False
+
+        def _is_keywords_endpoint_not_found(exc: Exception) -> bool:
+            """Detect a permanent 404 indicating the keywords endpoint path is invalid.
+
+            If this triggers, continuing to iterate campaigns will never succeed and
+            will just burn the Cloud Run Job timeout.
+            """
+            try:
+                resp = getattr(exc, "response", None)
+                if resp is None:
+                    return False
+                status = int(getattr(resp, "status_code", 0) or 0)
+                if status != 404:
+                    return False
+                body = (getattr(resp, "text", None) or "")
+                return "Method Not Found" in body
+            except Exception:
+                return False
+
         try:
             # v2 keywords endpoint requires filtering by campaign or ad group
             # Cannot list all keywords without filters
             if not campaign_id and not ad_group_id:
                 logger.info("Keywords endpoint requires campaignIdFilter or adGroupIdFilter. Fetching by campaign...")
                 # Get all campaigns first
-                campaigns = self.get_campaigns()
+                # Limit to active campaigns by default; archived campaigns can be numerous and
+                # dramatically slow down enumeration.
+                campaigns = self.get_campaigns(state_filter="enabled,paused", use_cache=False)
                 all_keywords = []
                 total_campaigns = len(campaigns)
                 
@@ -1173,6 +1380,18 @@ class AmazonAdsAPI:
                         if i % 10 == 0:
                             logger.info(f"Progress: {i}/{total_campaigns} campaigns processed, {len(all_keywords)} keywords found")
                     except Exception as e:
+                        if _is_sp_permission_error(e):
+                            # This will never succeed for any campaign under the current credentials;
+                            # fail fast to avoid burning the entire Cloud Run Job timeout.
+                            raise RuntimeError(
+                                "Sponsored Products API access denied (403 with 'Invalid key=value pair'). "
+                                "This indicates missing SP API permission / API registration for the LWA app+refresh token."
+                            ) from e
+                        if _is_keywords_endpoint_not_found(e):
+                            raise RuntimeError(
+                                "Sponsored Products keywords endpoint returned 404 'Method Not Found'. "
+                                "This indicates an endpoint version/path mismatch; check SP endpoint versioning."
+                            ) from e
                         logger.error(f"Failed to get keywords for campaign {camp.campaign_id}: {e}")
                 
                 logger.info(f"Completed: Retrieved {len(all_keywords)} keywords from {total_campaigns} campaigns")
@@ -1187,15 +1406,6 @@ class AmazonAdsAPI:
             # Use standard v2 keywords endpoint with filters
             response = self._request('GET', '/v2/sp/keywords', params=params)
             keywords_data = response.json()
-
-            # If the standard endpoint returns unexpected shape or no data, try extended endpoint
-            if not isinstance(keywords_data, list) or len(keywords_data) == 0:
-                logger.info("Keywords v2 returned empty or unexpected format; trying extended endpoint")
-                try:
-                    response_ext = self._request('GET', '/v2/sp/keywords/extended', params=params)
-                    keywords_data = response_ext.json()
-                except Exception as ext_err:
-                    logger.debug(f"Extended keywords endpoint failed: {ext_err}")
             
             keywords = []
             for kw in keywords_data:
@@ -1213,6 +1423,11 @@ class AmazonAdsAPI:
             logger.info(f"Retrieved {len(keywords)} keywords")
             return keywords
         except Exception as e:
+            if _is_sp_permission_error(e):
+                raise RuntimeError(
+                    "Sponsored Products API access denied (403 with 'Invalid key=value pair'). "
+                    "This indicates missing SP API permission / API registration for the LWA app+refresh token."
+                ) from e
             logger.error(f"Failed to get keywords: {e}")
             return []
     
@@ -1369,7 +1584,7 @@ class AmazonAdsAPI:
             },
             'keywords:query': {
                 'reportTypeId': 'spSearchTerm',
-                'groupBy': ['campaign', 'adGroup', 'searchTerm'],
+                'groupBy': ['searchTerm'],
             },
             'targets': {
                 'reportTypeId': 'spTargets',
@@ -1377,7 +1592,7 @@ class AmazonAdsAPI:
             },
             'targets:query': {
                 'reportTypeId': 'spSearchTerm',
-                'groupBy': ['campaign', 'adGroup', 'searchTerm'],
+                'groupBy': ['searchTerm'],
             },
         }
 
@@ -1403,18 +1618,20 @@ class AmazonAdsAPI:
 
         columns = metrics or []
 
+        # Reporting v3 requires format/timeUnit inside the configuration object.
         payload = {
             'name': f"{report_type}-report-{start_date.isoformat()}",
             'startDate': start_date.isoformat(),
             'endDate': end_date.isoformat(),
-            'format': 'GZIP_JSON',
-            'timeUnit': 'SUMMARY',
             'configuration': {
                 'adProduct': 'SPONSORED_PRODUCTS',
                 'reportTypeId': definition['reportTypeId'],
+                'timeUnit': 'SUMMARY',
+                'format': 'GZIP_JSON',
                 'columns': columns,
+                # Keep metrics for backward compatibility; some older flows used it.
                 'metrics': columns,
-            }
+            },
         }
 
         if definition.get('groupBy'):
@@ -1465,7 +1682,7 @@ class AmazonAdsAPI:
 
             return data
         except Exception as e:
-            logger.error(f"Failed to get report status: {e}")
+            logger.error(f"Failed to get report status for report_id={report_id}: {e}")
             return {}
     
     def download_report(self, report_url: str) -> List[Dict]:
@@ -1529,17 +1746,76 @@ class AmazonAdsAPI:
         return []
     
     def wait_for_report(self, report_id: str, timeout: int = 300) -> Optional[str]:
-        """Wait for report to be ready with adaptive polling (exponential backoff)"""
+        """Wait for report to be ready with adaptive polling (exponential backoff).
+
+        The default timeout is intentionally conservative for Cloud Function-style
+        runtimes. For Cloud Run Jobs (or slower accounts), override via
+        AMAZON_REPORT_TIMEOUT_SECONDS.
+        """
+        try:
+            env_timeout = int(os.getenv("AMAZON_REPORT_TIMEOUT_SECONDS", "0"))
+        except Exception:
+            env_timeout = 0
+        if env_timeout > 0 and timeout == 300:
+            timeout = env_timeout
         start_time = time.time()
-        poll_interval = 2  # Start with 2 seconds
-        max_poll_interval = 10  # Cap at 10 seconds
+        try:
+            poll_interval = float(os.getenv("AMAZON_REPORT_POLL_INITIAL_SECONDS", "2"))
+        except Exception:
+            poll_interval = 2.0
+        try:
+            max_poll_interval = float(os.getenv("AMAZON_REPORT_POLL_MAX_SECONDS", "10"))
+        except Exception:
+            max_poll_interval = 10.0
+        poll_interval = max(poll_interval, 0.5)
+        max_poll_interval = max(max_poll_interval, poll_interval)
+
+        try:
+            max_consecutive_status_failures = int(os.getenv("AMAZON_REPORT_MAX_STATUS_FAILURES", "8"))
+        except Exception:
+            max_consecutive_status_failures = 8
+        max_consecutive_status_failures = max(1, max_consecutive_status_failures)
+
+        poll_count = 0
+        consecutive_status_failures = 0
+        logger.info(
+            "Waiting for report %s (timeout=%ss, poll_initial=%ss, poll_max=%ss)",
+            report_id,
+            int(timeout),
+            poll_interval,
+            max_poll_interval,
+        )
         
         while time.time() - start_time < timeout:
             status_data = self.get_report_status(report_id)
             status = (status_data.get('status') or '').upper()
 
+            if not status_data:
+                consecutive_status_failures += 1
+            else:
+                consecutive_status_failures = 0
+
+            poll_count += 1
+            elapsed = time.time() - start_time
+            # Log progress occasionally so long-running reports aren't "silent".
+            if poll_count == 1 or poll_count % 6 == 0:
+                logger.info(
+                    "Report %s status=%s elapsed=%.1fs next_poll=%.1fs",
+                    report_id,
+                    status or "UNKNOWN",
+                    elapsed,
+                    poll_interval,
+                )
+
+            if consecutive_status_failures >= max_consecutive_status_failures:
+                logger.error(
+                    "Report %s status fetch failed %d times consecutively; aborting wait",
+                    report_id,
+                    consecutive_status_failures,
+                )
+                return None
+
             if status in {'SUCCESS', 'COMPLETED', 'DONE'}:
-                elapsed = time.time() - start_time
                 logger.info(f"Report {report_id} ready in {elapsed:.1f}s")
                 return status_data.get('location')
             elif status in {'FAILURE', 'FAILED', 'CANCELLED'}:
@@ -2334,25 +2610,33 @@ class KeywordDiscovery:
             return results
         
         report_data = self.api.download_report(report_url)
-        
-        # Get existing keywords to avoid duplicates
-        existing_keywords = self.api.get_keywords()
-        
-        # Use frozenset for immutable data (good for lookups)
-        existing_keyword_texts = frozenset(
-            (kw.ad_group_id, kw.keyword_text.lower(), kw.match_type) 
-            for kw in existing_keywords
-        )
-        
-        # Create keyword_id index for faster lookups
-        keyword_by_id = {kw.keyword_id: kw for kw in existing_keywords}
-        
-        # Create campaign_id index for faster filtering
-        keywords_by_campaign = defaultdict(list)
-        for kw in existing_keywords:
-            keywords_by_campaign[kw.campaign_id].append(kw)
-        
-        logger.debug(f"Indexed {len(existing_keywords)} keywords across {len(keywords_by_campaign)} campaigns")
+
+        # Avoid an expensive full-account keyword crawl.
+        # Instead, fetch existing keywords on-demand per ad group.
+        existing_by_ad_group: Dict[str, set] = {}
+
+        def _ensure_existing_loaded(ad_group_id_value: Any) -> None:
+            ad_group_key = str(ad_group_id_value or "").strip()
+            if not ad_group_key or ad_group_key in existing_by_ad_group:
+                return
+            try:
+                keywords = self.api.get_keywords(ad_group_id=ad_group_key)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch existing keywords for adGroupId=%s: %s",
+                    ad_group_key,
+                    exc,
+                )
+                existing_by_ad_group[ad_group_key] = set()
+                return
+
+            existing_by_ad_group[ad_group_key] = set(
+                (
+                    (kw.keyword_text or "").strip().lower(),
+                    (kw.match_type or "").strip().lower(),
+                )
+                for kw in (keywords or [])
+            )
         
         # Analyze search terms
         min_clicks = int(self.config.get('keyword_discovery.min_clicks', 5) or 0)
@@ -2394,7 +2678,8 @@ class KeywordDiscovery:
                     continue
             
             # Check if already exists
-            if (ad_group_id, query, 'exact') in existing_keyword_texts:
+            _ensure_existing_loaded(ad_group_id)
+            if (query, 'exact') in existing_by_ad_group.get(str(ad_group_id), set()):
                 continue
             
             results['keywords_discovered'] += 1

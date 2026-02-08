@@ -111,7 +111,7 @@ def check_profiles():
             # Try to fetch campaigns for this profile
             print()
             print("Step 3: Testing campaigns endpoint for configured profile...")
-            campaigns_url = f"https://advertising-api.amazon.com/sp/campaigns?startIndex=0&count=5"
+            campaigns_url = f"https://advertising-api.amazon.com/v2/sp/campaigns?startIndex=0&count=5"
             headers["Amazon-Advertising-API-Scope"] = configured_profile_id
             
             response = requests.get(campaigns_url, headers=headers, timeout=30)
