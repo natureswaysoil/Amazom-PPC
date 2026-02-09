@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { GoogleAuth } from 'google-auth-library';
 
 import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
 
@@ -16,6 +17,11 @@ const CACHE_TTL_MS = Number.parseInt(
 );
 
 const liveCache = new Map<string, CachedResponse>();
+
+type OptimizerFetchResult = {
+  resp: Response;
+  usedIdToken: boolean;
+};
 
 function includesRunIntervalNotMet(payload: any, rawText: string): boolean {
   const textCandidates: Array<string> = [];
@@ -53,6 +59,64 @@ function getOptimizerBaseUrl(): string {
   return 'https://amazon-ppc-optimizer-nucguq3dba-uc.a.run.app';
 }
 
+async function getIdTokenHeaders(audience: string): Promise<Record<string, string>> {
+  const auth = new GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+  });
+
+  // For Cloud Run, the audience should be the service base URL.
+  // google-auth-library will mint an ID token using ADC.
+  const client: any = await (auth as any).getIdTokenClient(audience);
+  const headers: any = await client.getRequestHeaders(audience);
+
+  const authHeader = headers?.Authorization || headers?.authorization;
+  if (!authHeader || typeof authHeader !== 'string') {
+    throw new Error('Failed to mint ID token headers for optimizer audience');
+  }
+
+  return { Authorization: authHeader };
+}
+
+async function fetchOptimizerWithRetry(options: {
+  url: string;
+  apiKey: string;
+  profileId?: string;
+  allowIdTokenRetry: boolean;
+}): Promise<OptimizerFetchResult> {
+  const { url, apiKey, profileId, allowIdTokenRetry } = options;
+
+  const baseHeaders: Record<string, string> = {
+    'X-API-Key': apiKey,
+    ...(profileId ? { 'X-Profile-ID': profileId } : {}),
+  };
+
+  // First attempt: API-key only. This works when the optimizer allows unauthenticated
+  // invocations (or is behind some other layer) and enforces app-level auth.
+  let resp = await fetch(url, {
+    method: 'GET',
+    headers: baseHeaders,
+    cache: 'no-store',
+  });
+  if (resp.status !== 403 || !allowIdTokenRetry) {
+    return { resp, usedIdToken: false };
+  }
+
+  // Second attempt: Cloud Run IAM auth via ID token + still pass X-API-Key for
+  // the optimizer app-level auth.
+  const audience = new URL(url).origin;
+  const idHeaders = await getIdTokenHeaders(audience);
+  resp = await fetch(url, {
+    method: 'GET',
+    headers: {
+      ...baseHeaders,
+      ...idHeaders,
+    },
+    cache: 'no-store',
+  });
+
+  return { resp, usedIdToken: true };
+}
+
 export async function GET(request: NextRequest) {
   try {
     const resolved = await resolveDashboardApiKey({ required: true });
@@ -88,17 +152,22 @@ export async function GET(request: NextRequest) {
     let resp: Response | undefined;
     let text = '';
 
+    const allowIdTokenRetry =
+      (process.env.OPTIMIZER_USE_ID_TOKEN || '').trim().toLowerCase() === 'true' ||
+      Boolean(process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.GAE_SERVICE || process.env.CLOUD_RUN_JOB);
+
     // Retry on rate limiting / transient backend errors.
+    // If the optimizer requires IAM auth (403), retry once with an ID token.
+    let usedIdToken = false;
     for (let attempt = 0; attempt < 3; attempt++) {
-      resp = await fetch(target.toString(), {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'X-API-Key': apiKey,
-          ...(profileId ? { 'X-Profile-ID': profileId } : {}),
-        },
-        cache: 'no-store',
+      const result = await fetchOptimizerWithRetry({
+        url: target.toString(),
+        apiKey,
+        profileId: profileId || undefined,
+        allowIdTokenRetry,
       });
+      resp = result.resp;
+      usedIdToken = result.usedIdToken;
 
       if (resp.status !== 429 && resp.status !== 503) break;
       await sleep(400 * (attempt + 1));
@@ -146,6 +215,7 @@ export async function GET(request: NextRequest) {
       optimizerBaseUrl: baseUrl,
       section,
       status: resp.status,
+      auth: usedIdToken ? 'id-token' : 'api-key',
       data: payload,
     };
     const statusCode = resp.ok ? 200 : resp.status;
