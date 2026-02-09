@@ -39,6 +39,9 @@ venv.bak/
 *.swo
 *~
 
+# Copilot / agent scratch files
+.copilot/
+
 # Logs
 logs/
 *.log

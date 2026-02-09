@@ -4,6 +4,37 @@ import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
 
 export const dynamic = 'force-dynamic';
 
+function getOptimizerBaseUrl(): { value: string; source: string; usingFallback: boolean } {
+  const envUrl =
+    process.env.PPC_OPTIMIZER_URL ||
+    process.env.OPTIMIZER_URL ||
+    process.env.PPC_OPTIMIZER_API_BASE ||
+    process.env.PPC_OPTIMIZER_BASE_URL ||
+    '';
+
+  const url = envUrl.trim();
+  if (url) {
+    return {
+      value: url.replace(/\/+$/, ''),
+      source:
+        process.env.PPC_OPTIMIZER_URL
+          ? 'PPC_OPTIMIZER_URL'
+          : process.env.OPTIMIZER_URL
+            ? 'OPTIMIZER_URL'
+            : process.env.PPC_OPTIMIZER_API_BASE
+              ? 'PPC_OPTIMIZER_API_BASE'
+              : 'PPC_OPTIMIZER_BASE_URL',
+      usingFallback: false,
+    };
+  }
+
+  return {
+    value: 'https://amazon-ppc-optimizer-nucguq3dba-uc.a.run.app',
+    source: 'fallback',
+    usingFallback: true,
+  };
+}
+
 /**
  * Configuration check endpoint
  * Helps diagnose BigQuery and dashboard configuration issues
@@ -12,6 +43,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
   // Default project ID from config.json (same as bigquery-data route)
   const DEFAULT_PROJECT_ID = 'amazon-ppc-474902';
+
+  const optimizerBaseUrl = getOptimizerBaseUrl();
   
   const resolvedDashboardKey = await resolveDashboardApiKey({ required: false }).catch((err) => {
     return { apiKey: null, source: 'unset' as const, error: (err as any)?.message || String(err) };
@@ -34,6 +67,16 @@ export async function GET(request: NextRequest) {
       bq_location: {
         set: !!process.env.BQ_LOCATION,
         value: process.env.BQ_LOCATION || 'us-east4 (default)',
+      },
+      bq_run_events_table_id: {
+        set: !!process.env.BQ_RUN_EVENTS_TABLE_ID,
+        value: process.env.BQ_RUN_EVENTS_TABLE_ID || 'optimizer_run_events (default)',
+      },
+      optimizer_url: {
+        set: optimizerBaseUrl.source !== 'fallback',
+        source: optimizerBaseUrl.source,
+        value: optimizerBaseUrl.value,
+        using_fallback: optimizerBaseUrl.usingFallback,
       },
       credentials: {
         gcp_service_account_key: {
@@ -147,6 +190,17 @@ export async function GET(request: NextRequest) {
     checks.recommendations.push('Or configure Secret Manager access: set DASHBOARD_API_SECRET_RESOURCE or DASHBOARD_API_SECRET_NAME (+ GOOGLE_CLOUD_PROJECT)');
   } else {
     checks.diagnosis.push(`✅ Dashboard API key resolved (${checks.configuration.dashboard_api_key.source})`);
+  }
+
+  if (checks.configuration.optimizer_url.using_fallback) {
+    checks.diagnosis.push('⚠️  Optimizer base URL is using the built-in fallback');
+    checks.recommendations.push('Set PPC_OPTIMIZER_URL in Vercel to your deployed optimizer service URL to avoid pointing at the wrong environment');
+  } else {
+    checks.diagnosis.push(`✅ Optimizer base URL configured via ${checks.configuration.optimizer_url.source}`);
+  }
+
+  if (checks.configuration.dashboard_api_key.set && !checks.configuration.optimizer_url.using_fallback) {
+    checks.recommendations.push('Ensure the optimizer service is configured with the same DASHBOARD_API_KEY so /?live=... calls are authorized');
   }
 
   const allChecksPassed = checks.diagnosis.filter(d => d.startsWith('❌')).length === 0;

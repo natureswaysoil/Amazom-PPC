@@ -708,22 +708,32 @@ class AmazonAdsAPI:
             suffix = ep[len("/v2/reports"):]
             return f"/reporting/reports{suffix}", REPORTS_API_VERSION
 
-        # Keywords/targets endpoints are sometimes exposed on unversioned `/sp/...`
-        # paths even when legacy callers use `/v2/sp/...`.
-        # Keep campaign endpoints untouched because this repo has a more reliable
-        # fallback via `/sp/campaigns/list`.
-        keyword_rewrites = (
-            ("/v2/sp/keywords/extended", "/sp/keywords/extended"),
-            ("/v2/sp/keywords", "/sp/keywords"),
-            ("/v2/sp/negativeKeywords", "/sp/negativeKeywords"),
-            ("/v2/sp/targets/keywords/recommendations", "/sp/targets/keywords/recommendations"),
-        )
+        versioning_mode = os.getenv("AMAZON_ADS_VERSIONING_MODE", "path").strip().lower()
+        # Modes:
+        # - "path" (default): keep `/v2/...` in the URL and do not set version header.
+        # - "header": rewrite `/v2/...` -> `/...` and set `Amazon-Advertising-API-Version`.
+        if versioning_mode != "header":
+            return ep, None
 
-        for legacy, modern in keyword_rewrites:
-            if ep.startswith(legacy):
-                return f"{modern}{ep[len(legacy):]}", None
+        # Header-based versioning (opt-in)
+        replacements = {
+            "/v2/sp/campaigns": ("/sp/campaigns", SP_API_VERSION),
+            "/v2/sp/adGroups": ("/sp/adGroups", SP_API_VERSION),
+            "/v2/sp/keywords/extended": ("/sp/keywords/extended", SP_API_VERSION),
+            "/v2/sp/keywords": ("/sp/keywords", SP_API_VERSION),
+            "/v2/sp/negativeKeywords": ("/sp/negativeKeywords", SP_API_VERSION),
+            "/v2/sp/targets/keywords/recommendations": (
+                "/sp/targets/keywords/recommendations", SP_API_VERSION
+            ),
+            "/v2/reports": ("/reporting/reports", REPORTS_API_VERSION),
+        }
 
-        # Default: keep the original endpoint and do not force a version header.
+        for old_prefix, (new_prefix, api_version) in replacements.items():
+            if ep.startswith(old_prefix):
+                suffix = ep[len(old_prefix):]
+                return f"{new_prefix}{suffix}", api_version
+
+        logger.warning(f"Unknown v2 endpoint format (header mode): {ep}")
         return ep, None
 
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
@@ -744,30 +754,6 @@ class AmazonAdsAPI:
         
         reauth_attempted = False
 
-        def _infer_media_type_version(hdrs: Dict[str, str]) -> str:
-            """Infer versioning signal from Accept/Content-Type media types.
-
-            This repo primarily uses path-based versioning for Amazon Ads endpoints.
-            Some endpoints additionally use vendor media types like
-            `application/vnd.spCampaign.v3+json`.
-            """
-            if not isinstance(hdrs, dict):
-                return "unknown"
-
-            def _pick(name: str) -> str:
-                val = hdrs.get(name) or hdrs.get(name.lower())
-                if not val or not isinstance(val, str):
-                    return ""
-                # Strip parameters like charset.
-                return val.split(";", 1)[0].strip()
-
-            accept = _pick("Accept")
-            ctype = _pick("Content-Type")
-            candidate = accept or ctype
-            return candidate or "application/json"
-
-        versioning_mode = os.getenv("AMAZON_ADS_VERSIONING_MODE", "path").strip().lower()
-
         for attempt in range(max_retries):
             try:
                 # Log request details (mask sensitive headers)
@@ -775,20 +761,9 @@ class AmazonAdsAPI:
                 if headers_extra:
                     headers.update(headers_extra)
                 safe_headers = {k: ('REDACTED' if 'auth' in k.lower() else v) for k, v in headers.items()}
-
-                # Add a compact hint for common pagination-style request bodies.
-                page_hint = ""
-                body = kwargs.get("json")
-                if isinstance(body, dict):
-                    if "startIndex" in body or "count" in body:
-                        page_hint = f" startIndex={body.get('startIndex')} count={body.get('count')}"
-
-                media_version = _infer_media_type_version(headers)
-                logger.info(
-                    f"Amazon API {method} {url} (attempt {attempt + 1}/{max_retries}){page_hint} "
-                    f"[versioning_mode={versioning_mode} version_header={'set' if api_version else 'none'} media={media_version}]"
-                )
-                logger.debug(f"Request headers: {safe_headers}")
+                logger.info(f"Amazon API {method} {url} (attempt {attempt + 1}/{max_retries})")
+                logger.info(f"Request headers: {safe_headers}")
+                logger.info(f"API version for this request: {api_version}")
                 if 'json' in kwargs:
                     logger.debug(f"Request body preview: {str(kwargs['json'])[:500]}")
                 
@@ -1339,24 +1314,6 @@ class AmazonAdsAPI:
             except Exception:
                 return False
 
-        def _is_keywords_endpoint_not_found(exc: Exception) -> bool:
-            """Detect a permanent 404 indicating the keywords endpoint path is invalid.
-
-            If this triggers, continuing to iterate campaigns will never succeed and
-            will just burn the Cloud Run Job timeout.
-            """
-            try:
-                resp = getattr(exc, "response", None)
-                if resp is None:
-                    return False
-                status = int(getattr(resp, "status_code", 0) or 0)
-                if status != 404:
-                    return False
-                body = (getattr(resp, "text", None) or "")
-                return "Method Not Found" in body
-            except Exception:
-                return False
-
         try:
             # v2 keywords endpoint requires filtering by campaign or ad group
             # Cannot list all keywords without filters
@@ -1386,11 +1343,6 @@ class AmazonAdsAPI:
                             raise RuntimeError(
                                 "Sponsored Products API access denied (403 with 'Invalid key=value pair'). "
                                 "This indicates missing SP API permission / API registration for the LWA app+refresh token."
-                            ) from e
-                        if _is_keywords_endpoint_not_found(e):
-                            raise RuntimeError(
-                                "Sponsored Products keywords endpoint returned 404 'Method Not Found'. "
-                                "This indicates an endpoint version/path mismatch; check SP endpoint versioning."
                             ) from e
                         logger.error(f"Failed to get keywords for campaign {camp.campaign_id}: {e}")
                 
@@ -2611,6 +2563,23 @@ class KeywordDiscovery:
         
         report_data = self.api.download_report(report_url)
 
+        try:
+            report_rows = len(report_data or [])
+        except Exception:
+            report_rows = 0
+        logger.info("Keyword discovery: report_rows=%s", report_rows)
+
+        # Track why candidates are skipped so all-zero runs are explainable.
+        skip_counts = {
+            'missing_query_or_ad_group': 0,
+            'below_min_clicks': 0,
+            'zero_sales_not_allowed': 0,
+            'zero_sales_below_clicks': 0,
+            'zero_sales_cost_above_limit': 0,
+            'acos_above_max': 0,
+            'already_exists': 0,
+        }
+
         # Avoid an expensive full-account keyword crawl.
         # Instead, fetch existing keywords on-demand per ad group.
         existing_by_ad_group: Dict[str, set] = {}
@@ -2619,6 +2588,7 @@ class KeywordDiscovery:
             ad_group_key = str(ad_group_id_value or "").strip()
             if not ad_group_key or ad_group_key in existing_by_ad_group:
                 return
+
             try:
                 keywords = self.api.get_keywords(ad_group_id=ad_group_key)
             except Exception as exc:
@@ -2654,6 +2624,7 @@ class KeywordDiscovery:
             campaign_id = row.get('campaignId')
             
             if not query or not ad_group_id:
+                skip_counts['missing_query_or_ad_group'] += 1
                 continue
             
             # Calculate metrics
@@ -2662,24 +2633,30 @@ class KeywordDiscovery:
             sales = float(row.get('sales14d', row.get('attributedSales14d', 0)) or 0)
             
             if clicks < min_clicks:
+                skip_counts['below_min_clicks'] += 1
                 continue
             
             if sales <= 0:
                 if not allow_zero_sales:
+                    skip_counts['zero_sales_not_allowed'] += 1
                     continue
                 if clicks < zero_sales_min_clicks:
+                    skip_counts['zero_sales_below_clicks'] += 1
                     continue
                 if zero_sales_max_cost > 0 and cost > zero_sales_max_cost:
+                    skip_counts['zero_sales_cost_above_limit'] += 1
                     continue
                 acos = float('inf')
             else:
                 acos = (cost / sales)
                 if acos > max_acos:
+                    skip_counts['acos_above_max'] += 1
                     continue
             
             # Check if already exists
             _ensure_existing_loaded(ad_group_id)
             if (query, 'exact') in existing_by_ad_group.get(str(ad_group_id), set()):
+                skip_counts['already_exists'] += 1
                 continue
             
             results['keywords_discovered'] += 1
@@ -2717,6 +2694,18 @@ class KeywordDiscovery:
             results['keywords_would_add'] = len(new_keywords_to_add)
         
         elapsed = time.time() - start_time
+        logger.info(
+            "Keyword discovery skip summary: %s",
+            {
+                **skip_counts,
+                'candidates': len(new_keywords_to_add),
+                'min_clicks': min_clicks,
+                'max_acos': max_acos,
+                'allow_zero_sales': allow_zero_sales,
+                'zero_sales_min_clicks': zero_sales_min_clicks,
+                'zero_sales_max_cost': zero_sales_max_cost,
+            },
+        )
         logger.info(f"Keyword discovery complete in {elapsed:.2f}s: {results}")
         results['execution_time_seconds'] = round(elapsed, 2)
         return results
@@ -2754,9 +2743,16 @@ class NegativeKeywordManager:
             return results
         
         report_data = self.api.download_report(report_url)
+
+        try:
+            report_rows = len(report_data or [])
+        except Exception:
+            report_rows = 0
+        logger.info("Negative keywords: report_rows=%s", report_rows)
         
         # Get existing negative keywords
         existing_negatives = self.api.get_negative_keywords()
+        logger.info("Negative keywords: existing_negatives=%s", len(existing_negatives or []))
         existing_negative_texts = {
             (nk.get('campaignId'), nk.get('keywordText', '').lower())
             for nk in existing_negatives
@@ -2765,6 +2761,13 @@ class NegativeKeywordManager:
         # Analyze search terms
         min_spend = self.config.get('negative_keywords.min_spend', 10.0)
         max_acos = self.config.get('negative_keywords.max_acos', 1.0)
+
+        skip_counts = {
+            'missing_query_or_campaign': 0,
+            'below_min_spend': 0,
+            'acos_below_threshold': 0,
+            'already_negative': 0,
+        }
         
         negatives_to_add = []
         
@@ -2773,21 +2776,25 @@ class NegativeKeywordManager:
             campaign_id = row.get('campaignId')
             
             if not query or not campaign_id:
+                skip_counts['missing_query_or_campaign'] += 1
                 continue
             
             cost = float(row.get('cost', 0) or 0)
             sales = float(row.get('attributedSales14d', 0) or 0)
             
             if cost < min_spend:
+                skip_counts['below_min_spend'] += 1
                 continue
             
             acos = (cost / sales) if sales > 0 else float('inf')
             
             if acos < max_acos:
+                skip_counts['acos_below_threshold'] += 1
                 continue
             
             # Check if already negative
             if (campaign_id, query) in existing_negative_texts:
+                skip_counts['already_negative'] += 1
                 continue
             
             negatives_to_add.append({
@@ -2817,6 +2824,15 @@ class NegativeKeywordManager:
         elif dry_run:
             results['negative_keywords_added'] = len(negatives_to_add)
         
+        logger.info(
+            "Negative keywords skip summary: %s",
+            {
+                **skip_counts,
+                'candidates': len(negatives_to_add),
+                'min_spend': min_spend,
+                'max_acos': max_acos,
+            },
+        )
         logger.info(f"Negative keyword management complete: {results}")
         return results
 

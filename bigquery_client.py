@@ -286,9 +286,6 @@ class BigQueryClient:
         try:
             self.client.get_table(table_ref)
             logger.debug("Table %s exists", table_ref)
-
-            # Ensure schema stays compatible as the writer evolves.
-            self._ensure_table_schema(table_id, schema)
         except NotFound:
             logger.info("Creating table %s", table_ref)
             table = bigquery.Table(table_ref, schema=schema)
@@ -323,8 +320,8 @@ class BigQueryClient:
             """Return a SchemaField that is safe to ADD to an existing table.
 
             BigQuery allows adding new columns only when they are NULLABLE or REPEATED.
-            If our desired schema marks a new field as REQUIRED, we must relax it to
-            NULLABLE during schema evolution.
+            If our desired schema marks a new field as REQUIRED, relax it to NULLABLE
+            during schema evolution.
             """
 
             mode = (getattr(field, "mode", None) or "NULLABLE").upper()
@@ -418,17 +415,18 @@ class BigQueryClient:
                     return value
 
                 ftype = (getattr(field, "field_type", None) or "").upper()
-                # Some deployments created these columns as STRING; newer code uses JSON.
                 if ftype == "STRING":
                     try:
                         return json.dumps(value, default=str)
                     except Exception:
                         return str(value)
 
-                # For native JSON columns, preserve structure.
                 if ftype == "JSON":
                     try:
-                        return json.loads(json.dumps(value, default=str))
+                        # Streaming inserts (`insert_rows_json`) treat dict/list values as RECORDs
+                        # and can reject them with errors like: "This field: features is not a record."
+                        # BigQuery accepts JSON values as JSON-serialized strings for JSON columns.
+                        return json.dumps(value, default=str)
                     except Exception:
                         return str(value)
                 return value

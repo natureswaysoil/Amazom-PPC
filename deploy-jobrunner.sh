@@ -16,6 +16,7 @@ set -euo pipefail
 #   SERVICE_ACCOUNT (for job update)
 #   JOB_TYPE (keyword_harvest | optimize | diagnose_permissions)
 #   PPC_DRY_RUN (true/false)
+#   AMAZON_REPORT_TIMEOUT_SECONDS (override Amazon report wait timeout)
 #   SET_SECRETS (custom --set-secrets string)
 
 : "${PROJECT_ID:=amazon-ppc-474902}"
@@ -68,10 +69,15 @@ fi
 
 : "${JOB_TYPE:=optimize}"
 : "${PPC_DRY_RUN:=false}"
+: "${AMAZON_REPORT_TIMEOUT_SECONDS:=900}"
 
 if [[ -z "${SET_SECRETS:-}" ]]; then
   # Defaults align with other deploy scripts in this repo.
-  SET_SECRETS="AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest,PPC_PROFILE_ID=ppc-profile-id:latest,DASHBOARD_API_KEY=dashboard-api-key:latest,DASHBOARD_URL=dashboard-url:latest"
+  # IMPORTANT: prefer the canonical SECRET names that actually contain real credentials.
+  # The `amazon-client-*` secrets in this project may be placeholder values.
+  # This project also maintains an "Amazon_Ads_*" trio which is known to work with the
+  # current refresh token.
+  SET_SECRETS="AMAZON_CLIENT_ID=Amazon_Ads_Client_identifier:latest,AMAZON_CLIENT_SECRET=Amazon_Ads_Client_secret:latest,AMAZON_REFRESH_TOKEN=Amazon_Ads_Refresh_Token:latest,PPC_PROFILE_ID=ppc-profile-id:latest,DASHBOARD_API_KEY=dashboard-api-key:latest,DASHBOARD_URL=dashboard-url:latest"
 fi
 
 echo ""
@@ -82,7 +88,7 @@ UPDATE_ARGS=(
   --image="${IMAGE}"
   --region="${REGION}"
   --project="${PROJECT_ID}"
-  --set-env-vars="JOB_TYPE=${JOB_TYPE},PPC_DRY_RUN=${PPC_DRY_RUN}"
+  --set-env-vars="JOB_TYPE=${JOB_TYPE},PPC_DRY_RUN=${PPC_DRY_RUN},AMAZON_REPORT_TIMEOUT_SECONDS=${AMAZON_REPORT_TIMEOUT_SECONDS}"
   --set-secrets="${SET_SECRETS}"
 )
 

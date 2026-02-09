@@ -433,51 +433,13 @@ class DashboardClient:
         """
         if not self.enabled:
             return False
-
-        base = (self.url or '').rstrip('/')
-        if not base:
+        
+        try:
+            response = self._make_request('/api/health', {}, method='GET')
+            return response is not None
+        except Exception as e:
+            logger.error(f"Dashboard health check failed: {str(e)}")
             return False
-
-        candidates = ['/api/health', '/health', '/']
-
-        for endpoint in candidates:
-            url = f"{base}{endpoint}"
-            try:
-                resp = self.session.request(
-                    method='GET',
-                    url=url,
-                    headers=self._get_headers(),
-                    timeout=self.timeout,
-                )
-            except requests.exceptions.RequestException as exc:
-                logger.debug(f"Dashboard health probe failed for {url}: {exc}")
-                continue
-
-            if resp.status_code != 200:
-                body_preview = (resp.text or '')[:300].replace('\n', ' ')
-                logger.debug(
-                    f"Dashboard health probe {url} returned HTTP {resp.status_code}: {body_preview}"
-                )
-                continue
-
-            # Consider any 200 response as reachable; prefer interpreting JSON when available.
-            try:
-                payload = resp.json() if resp.content else {}
-            except ValueError:
-                payload = None
-
-            if payload is None:
-                return True
-            if isinstance(payload, dict):
-                status = str(payload.get('status', '')).strip().lower()
-                if status in {'ok', 'healthy', 'success', ''}:
-                    return True
-                # If it is a structured response without strict status, treat it as healthy.
-                return True
-
-            return True
-
-        return False
     
     def build_results_payload(self, results: Dict, config: Dict, 
                                duration_seconds: float, dry_run: bool) -> Dict:

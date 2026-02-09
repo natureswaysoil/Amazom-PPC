@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     const timestamp = body.timestamp || new Date().toISOString();
 
     const bigquery = new BigQuery();
-    const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc';
+    const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
     const tableId = process.env.BQ_TABLE_ID || 'optimization_results';
 
     await bigquery.dataset(datasetId).table(tableId).insert([

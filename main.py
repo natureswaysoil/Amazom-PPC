@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import traceback
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -555,6 +556,298 @@ def run_verify_connection(request) -> Tuple[Dict[str, Any], int]:
     return {'status': 'error', 'message': str(e)}, 500
 
 
+def run_verify_candidates(request) -> Tuple[Dict[str, Any], int]:
+  """Verify whether there are keyword discovery / negative keyword candidates.
+
+  Runs the same candidate-generation logic as the optimizer, but always in
+  dry-run mode (no changes applied to Amazon).
+  """
+  logger.info("=== Verify Candidates Requested ===")
+
+  try:
+    try:
+      request_json = request.get_json(silent=True) or {}
+    except Exception:
+      request_json = {}
+
+    config = load_config(request_json)
+    set_environment_variables(config)
+    validate_credentials(config)
+
+    # Make audit output safe in serverless environments.
+    if isinstance(config.get('logging'), dict):
+      config['logging'].setdefault('output_dir', '/tmp')
+
+    with create_config_file(config) as config_file_path:
+      profile_id = os.environ.get('AMAZON_PROFILE_ID', '').strip()
+      if not profile_id:
+        profile_id = config.get('amazon_api', {}).get('profile_id', '')
+      if not profile_id:
+        raise ValueError("profile_id is required")
+
+      optimizer = PPCAutomation(
+        config_path=config_file_path,
+        profile_id=profile_id,
+        dry_run=True,
+      )
+
+      keyword_discovery = optimizer.keyword_discovery.discover_keywords(dry_run=True)
+      negative_keywords = optimizer.negative_keywords.add_negative_keywords(dry_run=True)
+
+      return {
+        'status': 'success',
+        'message': 'Candidate verification complete (dry-run only; no changes applied)',
+        'profile_id': profile_id,
+        'keyword_discovery': {
+          'keywords_discovered': keyword_discovery.get('keywords_discovered', 0),
+          'keywords_would_add': keyword_discovery.get('keywords_would_add', 0),
+        },
+        'negative_keywords': {
+          # In dry-run, this is the number of candidates that would be added.
+          'negative_keywords_would_add': negative_keywords.get('negative_keywords_added', 0),
+        },
+      }, 200
+
+  except Exception as e:
+    return {'status': 'error', 'message': str(e)}, 500
+
+
+def run_verify_dashboard(request) -> Tuple[Dict[str, Any], int]:
+  """Verify dashboard connectivity (and auth if configured).
+
+  This endpoint does not require Amazon Ads credentials.
+  """
+  logger.info("=== Verify Dashboard Requested ===")
+
+  try:
+    try:
+      request_json = request.get_json(silent=True) or {}
+    except Exception:
+      request_json = {}
+
+    config = load_config(request_json)
+
+    dashboard_client = DashboardClient(config)
+    details: Dict[str, Any] = {
+      'enabled': bool(getattr(dashboard_client, 'enabled', False)),
+      'url_configured': bool(getattr(dashboard_client, 'url', '')),
+      'api_key_configured': bool(getattr(dashboard_client, 'api_key', '')),
+    }
+
+    if not details['enabled']:
+      return {
+        'status': 'error',
+        'message': 'Dashboard client disabled (missing URL or disabled in config)',
+        'dashboard': details,
+      }, 400
+
+    # 1) Reachability: /api/health
+    health_resp = dashboard_client._make_request('/api/health', {}, method='GET')
+    details['health_ok'] = health_resp is not None
+    details['health_response_preview'] = (health_resp if isinstance(health_resp, dict) else None)
+
+    # 2) Auth + write access: /api/optimization-status
+    # This may create a harmless status log entry on the dashboard.
+    status_payload = {
+      'timestamp': datetime.now().isoformat(),
+      'run_id': str(uuid.uuid4()),
+      'status': 'running',
+      'stage': 'verify_dashboard',
+      'message': 'verify_dashboard ping',
+      'percent_complete': 0.0,
+      'profile_id': (config.get('amazon_api', {}) or {}).get('profile_id', ''),
+      'dry_run': True,
+    }
+    status_resp = dashboard_client._make_request('/api/optimization-status', status_payload, method='POST')
+    details['status_post_ok'] = status_resp is not None
+    details['status_response_preview'] = (status_resp if isinstance(status_resp, dict) else None)
+
+    ok = bool(details['health_ok'] and details['status_post_ok'])
+    return {
+      'status': 'success' if ok else 'error',
+      'message': 'Dashboard verification complete' if ok else 'Dashboard verification failed',
+      'dashboard': details,
+    }, 200 if ok else 502
+
+  except Exception as e:
+    return {'status': 'error', 'message': str(e)}, 500
+
+
+def _resolve_dashboard_api_key_from_config(config: Dict[str, Any]) -> str:
+  key = (os.getenv('DASHBOARD_API_KEY') or '').strip()
+  if not key and isinstance(config.get('dashboard'), dict):
+    key = (config.get('dashboard', {}).get('api_key') or '').strip()
+  if not key:
+    return ''
+  upper = key.upper()
+  if upper.startswith('YOUR_') or key == 'YOUR_DASHBOARD_API_KEY':
+    return ''
+  return key
+
+
+def _is_authorized_dashboard_request(request, api_key: str) -> bool:
+  if not api_key:
+    return True
+
+  auth_header = request.headers.get('Authorization') or request.headers.get('authorization') or ''
+  token = ''
+  if auth_header.startswith('Bearer '):
+    token = auth_header[len('Bearer '):].strip()
+  else:
+    token = auth_header.strip()
+
+  header_api_key = (
+    request.headers.get('X-API-Key') or
+    request.headers.get('x-api-key') or
+    ''
+  ).strip()
+  return token == api_key or header_api_key == api_key
+
+
+def run_live_data(request) -> Tuple[Dict[str, Any], int]:
+  """Serve read-only live dashboard data from BigQuery.
+
+  The Next.js dashboard calls the optimizer with query param `live=<section>`.
+  This endpoint returns normalized shapes per section.
+  """
+
+  section = (request.args.get('live', '') or request.args.get('section', '') or 'overview').strip().lower()
+  logger.info("=== Live Data Requested (section=%s) ===", section)
+
+  try:
+    # Validate GCP credentials early for clearer errors.
+    creds_valid, creds_error = validate_credentials_early()
+    if not creds_valid:
+      return {
+        'status': 'error',
+        'message': f'GCP credential error: {creds_error}',
+      }, 500
+
+    try:
+      request_json = request.get_json(silent=True) or {}
+    except Exception:
+      request_json = {}
+
+    config = load_config(request_json)
+
+    # Optional shared-key auth: enforce if configured.
+    api_key = _resolve_dashboard_api_key_from_config(config)
+    if api_key and not _is_authorized_dashboard_request(request, api_key):
+      return {
+        'status': 'error',
+        'message': 'Unauthorized',
+      }, 401
+
+    # Parse params
+    try:
+      days = int(request.args.get('days', '7'))
+    except Exception:
+      days = 7
+    days = max(1, min(days, 365))
+
+    try:
+      limit = int(request.args.get('limit', '50'))
+    except Exception:
+      limit = 50
+    limit = max(1, min(limit, 500))
+
+    profile_id = (request.args.get('profile_id', '') or request.headers.get('X-Profile-ID', '') or '').strip() or None
+
+    # Initialize BigQuery client
+    bigquery_client = None
+    bigquery_config = config.get('bigquery', {}) if isinstance(config, dict) else {}
+    if isinstance(bigquery_config, dict) and bigquery_config.get('enabled', False):
+      project_id = bigquery_config.get('project_id') or os.getenv('GCP_PROJECT') or os.getenv('GOOGLE_CLOUD_PROJECT')
+      dataset_id = bigquery_config.get('dataset_id', 'amazon_ppc_data')
+      location = bigquery_config.get('location', 'us-east4')
+      if project_id:
+        set_bigquery_env_vars(project_id)
+        bigquery_client = BigQueryClient(project_id, dataset_id, location)
+
+    if not bigquery_client:
+      # Keep the API contract stable even when BigQuery is disabled.
+      empty = {
+        'status': 'success',
+        'message': 'BigQuery disabled or not configured',
+      }
+      if section in ('overview', 'reports'):
+        empty.update({'recent_results': [], 'daily': []})
+      elif section == 'campaigns':
+        empty.update({'campaigns': []})
+      elif section == 'automation':
+        empty.update({'events': []})
+      else:
+        empty.update({'data': {}})
+      return empty, 200
+
+    # Fetch + shape per section.
+    if section in ('overview', ''):
+      recent_results = bigquery_client.fetch_recent_optimization_results(days=days, limit=limit, profile_id=profile_id)
+      daily = bigquery_client.fetch_daily_overview(days=days, profile_id=profile_id)
+      return {
+        'status': 'success',
+        'recent_results': recent_results,
+        'daily': daily,
+      }, 200
+
+    if section == 'campaigns':
+      campaigns = bigquery_client.fetch_campaigns_summary(days=days, limit=limit, profile_id=profile_id)
+      return {
+        'status': 'success',
+        'campaigns': campaigns,
+      }, 200
+
+    if section == 'automation':
+      events = bigquery_client.fetch_run_events(limit=limit, profile_id=profile_id)
+      return {
+        'status': 'success',
+        'events': events,
+      }, 200
+
+    if section == 'discovery':
+      data = bigquery_client.fetch_keyword_discovery_summary(days=days)
+      return {
+        'status': 'success',
+        'data': data,
+      }, 200
+
+    if section in ('budget', 'dayparting'):
+      latest = bigquery_client.fetch_latest_optimization_result(profile_id=profile_id, include_payload_json=True) or {}
+      features = latest.get('features') or {}
+      data = features.get(section) if isinstance(features, dict) else None
+      if not isinstance(data, dict):
+        data = {}
+      return {
+        'status': 'success',
+        'data': data,
+      }, 200
+
+    if section == 'reports':
+      recent_results = bigquery_client.fetch_recent_optimization_results(days=days, limit=limit, profile_id=profile_id)
+      daily = bigquery_client.fetch_daily_overview(days=days, profile_id=profile_id)
+      return {
+        'status': 'success',
+        'recent_results': recent_results,
+        'daily': daily,
+      }, 200
+
+    # Unknown section -> keep backward-compatible payload.
+    return {
+      'status': 'success',
+      'message': f"Unknown live section '{section}', returning overview payload",
+      'recent_results': bigquery_client.fetch_recent_optimization_results(days=days, limit=limit, profile_id=profile_id),
+      'daily': bigquery_client.fetch_daily_overview(days=days, profile_id=profile_id),
+    }, 200
+
+  except Exception as e:
+    logger.error("Live data failed: %s", e)
+    logger.error(traceback.format_exc())
+    return {
+      'status': 'error',
+      'message': str(e),
+    }, 500
+
+
 def run_permission_health(request) -> Tuple[Dict[str, Any], int]:
   """Permission / product access health endpoint."""
   logger.info("=== Permission Health Requested ===")
@@ -642,6 +935,10 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
   Cloud Function entry point - triggered by Cloud Scheduler
   """
   start_time = datetime.now()
+
+  # Live dashboard data endpoint (read-only)
+  if request.args.get('live', '').strip():
+    return run_live_data(request)
   
   # Handle special endpoints
   if request.args.get('health', '').lower() == 'true':
@@ -650,6 +947,10 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     return run_list_profiles(request)
   if request.args.get('verify_connection', '').lower() == 'true':
     return run_verify_connection(request)
+  if request.args.get('verify_candidates', '').lower() == 'true':
+    return run_verify_candidates(request)
+  if request.args.get('verify_dashboard', '').lower() == 'true':
+    return run_verify_dashboard(request)
   if request.args.get('permission_health', '').lower() == 'true':
     return run_permission_health(request)
   
@@ -758,6 +1059,25 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
         if time_since_last_run < min_interval_minutes:
           wait_minutes = min_interval_minutes - time_since_last_run
           logger.info(f"Skipping run - only {time_since_last_run:.1f} minutes since last run. Need {min_interval_minutes} minutes. Wait {wait_minutes:.1f} more minutes.")
+
+          # If this request is for dashboard live data, still serve the BigQuery-backed
+          # payload so the UI can render last-run/7d metrics even when runs are skipped.
+          if request.args.get('live', '').strip() or request.args.get('section', '').strip():
+            try:
+              live_payload, live_status = run_live_data(request)
+              if live_status == 200 and isinstance(live_payload, dict):
+                enriched = dict(live_payload)
+                enriched.update({
+                  'status': 'skipped',
+                  'message': f'Run interval not met. Wait {wait_minutes:.1f} more minutes.',
+                  'last_run': last_run.isoformat(),
+                  'min_interval_minutes': min_interval_minutes,
+                  'run_interval_skipped': True,
+                })
+                return enriched, 200
+            except Exception:
+              pass
+
           return {
             'status': 'skipped',
             'message': f'Run interval not met. Wait {wait_minutes:.1f} more minutes.',
