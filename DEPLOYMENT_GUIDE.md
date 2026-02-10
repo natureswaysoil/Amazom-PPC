@@ -137,6 +137,7 @@ gcloud functions deploy amazon-ppc-optimizer \
   --memory=512MB \
   --min-instances=0 \
   --max-instances=1 \
+  --set-env-vars="BQ_PERFORMANCE_DATASET_ID=amazon_ppc" \
   --set-secrets=AMAZON_CLIENT_ID=amazon-client-id:latest,AMAZON_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_REFRESH_TOKEN=amazon-refresh-token:latest
 ```
 
@@ -169,7 +170,7 @@ gcloud functions deploy amazon-ppc-optimizer \
   --memory=512MB \
   --min-instances=0 \
   --max-instances=1 \
-  --set-env-vars AMAZON_CLIENT_ID="YOUR_CLIENT_ID",AMAZON_CLIENT_SECRET="YOUR_CLIENT_SECRET",AMAZON_REFRESH_TOKEN="YOUR_REFRESH_TOKEN"
+  --set-env-vars AMAZON_CLIENT_ID="YOUR_CLIENT_ID",AMAZON_CLIENT_SECRET="YOUR_CLIENT_SECRET",AMAZON_REFRESH_TOKEN="YOUR_REFRESH_TOKEN",BQ_PERFORMANCE_DATASET_ID="amazon_ppc"
 ```
 
 **Note**: Even for development, use `--no-allow-unauthenticated` to avoid rate limiting issues.

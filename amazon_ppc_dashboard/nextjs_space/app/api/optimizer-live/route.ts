@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { GoogleAuth } from 'google-auth-library';
 
 import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
+import { resolveGCPCredentials } from '../lib/credentials';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,8 +61,11 @@ function getOptimizerBaseUrl(): string {
 }
 
 async function getIdTokenHeaders(audience: string): Promise<Record<string, string>> {
+  const resolved = await resolveGCPCredentials();
+
   const auth = new GoogleAuth({
     scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+    ...(resolved.success && resolved.credentials ? { credentials: resolved.credentials } : {}),
   });
 
   // For Cloud Run, the audience should be the service base URL.
@@ -97,7 +101,9 @@ async function fetchOptimizerWithRetry(options: {
     headers: baseHeaders,
     cache: 'no-store',
   });
-  if (resp.status !== 403 || !allowIdTokenRetry) {
+
+  // Cloud Run/Functions return 401 or 403 when IAM auth is required.
+  if ((resp.status !== 403 && resp.status !== 401) || !allowIdTokenRetry) {
     return { resp, usedIdToken: false };
   }
 
@@ -154,7 +160,12 @@ export async function GET(request: NextRequest) {
 
     const allowIdTokenRetry =
       (process.env.OPTIMIZER_USE_ID_TOKEN || '').trim().toLowerCase() === 'true' ||
-      Boolean(process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.GAE_SERVICE || process.env.CLOUD_RUN_JOB);
+      Boolean(process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.GAE_SERVICE || process.env.CLOUD_RUN_JOB) ||
+      Boolean(
+        (process.env.GCP_SERVICE_ACCOUNT_KEY || '').trim() ||
+          (process.env.GCP_SA_KEY || '').trim() ||
+          (process.env.GCP_SERVICE_ACCOUNT_KEY_JSON || '').trim(),
+      );
 
     // Retry on rate limiting / transient backend errors.
     // If the optimizer requires IAM auth (403), retry once with an ID token.

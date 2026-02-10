@@ -12,6 +12,14 @@ dashboard:
   send_real_time_updates: true
   timeout: 30
 
+# Optional BigQuery settings.
+# - dataset_id: where optimizer-owned tables live (optimization_results, etc)
+# - performance_dataset_id: where performance tables live (campaign_performance, keyword_performance, ...)
+#   If omitted, BigQueryClient assumes performance tables are in dataset_id.
+#   You can also set this via env var: BQ_PERFORMANCE_DATASET_ID.
+bigquery:
+  performance_dataset_id: YOUR_PERFORMANCE_DATASET_ID
+
 email_notifications:
   enabled: false
   smtp_host: smtp.gmail.com

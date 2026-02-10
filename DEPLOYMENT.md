@@ -152,7 +152,7 @@ gcloud functions deploy amazon-ppc-optimizer \
   --max-instances=3 \
   --timeout=540s \
   --memory=1024MB \
-  --set-env-vars="LOG_LEVEL=INFO,MIN_RUN_INTERVAL_MINUTES=120" \
+  --set-env-vars="LOG_LEVEL=INFO,MIN_RUN_INTERVAL_MINUTES=120,BQ_PERFORMANCE_DATASET_ID=amazon_ppc" \
   --set-secrets="AMAZON_CLIENT_ID=projects/YOUR_PROJECT_ID/secrets/AMAZON_CLIENT_ID:latest,AMAZON_CLIENT_SECRET=projects/YOUR_PROJECT_ID/secrets/AMAZON_CLIENT_SECRET:latest,AMAZON_REFRESH_TOKEN=projects/YOUR_PROJECT_ID/secrets/AMAZON_REFRESH_TOKEN:latest,DASHBOARD_API_KEY=projects/YOUR_PROJECT_ID/secrets/DASHBOARD_API_KEY:latest" \
   --ingress-settings=all
 ```

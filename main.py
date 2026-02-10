@@ -378,6 +378,9 @@ def run_health_check(request) -> Tuple[Dict[str, Any], int]:
     except Exception:
       request_json = {}
     config = load_config(request_json)
+    # Keep live-data behavior consistent with optimizer runs.
+    # This enables config-driven env values like BQ_PERFORMANCE_DATASET_ID.
+    set_environment_variables(config)
     
     # Test dashboard connectivity
     dashboard_ok = False
@@ -730,6 +733,10 @@ def run_live_data(request) -> Tuple[Dict[str, Any], int]:
 
     config = load_config(request_json)
 
+    # Keep behavior consistent with optimizer runs so config-driven env vars
+    # (e.g. BQ_PERFORMANCE_DATASET_ID) take effect for live-data requests.
+    set_environment_variables(config)
+
     # Optional shared-key auth: enforce if configured.
     api_key = _resolve_dashboard_api_key_from_config(config)
     if api_key and not _is_authorized_dashboard_request(request, api_key):
@@ -936,6 +943,17 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
   """
   start_time = datetime.now()
 
+  # Cloud Run / Cloud Functions Gen2 health probes and uptime checks often issue
+  # a plain GET / with no query params. Treat this as a lightweight health
+  # response instead of starting a full optimizer run, which can saturate
+  # instances (containerConcurrency=1) and cause "no available instance" errors.
+  if request.method == 'GET' and not request.args:
+    return {
+      'status': 'healthy',
+      'message': 'OK',
+      'timestamp': datetime.utcnow().isoformat(),
+    }, 200
+
   # Live dashboard data endpoint (read-only)
   if request.args.get('live', '').strip():
     return run_live_data(request)
@@ -1133,11 +1151,35 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
         pass
 
     return {
-      'status': 'success', 
+      'status': 'success',
       'results': results,
       'run_id': run_id,
       'preflight': preflight_details
     }, 200
+
+  except SystemExit as e:
+    # Some deep optimizer modules call sys.exit() for fatal config/auth errors.
+    # SystemExit does NOT inherit from Exception, so without this handler the
+    # run would appear as "started" with no terminal event in BigQuery.
+    code = getattr(e, 'code', None)
+    error_msg = f"Optimizer exited early (SystemExit): {code}"
+    logger.error(error_msg)
+    logger.error(traceback.format_exc())
+
+    if 'dashboard_client' in locals() and dashboard_client:
+      try:
+        dashboard_client.send_error(RuntimeError(error_msg), {'stage': 'system_exit', 'code': code})
+      except Exception:
+        pass
+
+    if 'bigquery_client' in locals() and bigquery_client and 'run_id' in locals() and run_id:
+      try:
+        bigquery_client.record_run_event(run_id, 'failed', {'error': error_msg, 'code': str(code)})
+      except Exception:
+        pass
+
+    preflight = locals().get('preflight_details', {})
+    return {'status': 'error', 'message': error_msg, 'preflight': preflight}, 500
 
   except Exception as e:
     error_msg = str(e)
@@ -1266,6 +1308,14 @@ def set_environment_variables(config: Dict[str, Any]) -> None:
       if 'YOUR_' in cfg_value or 'XXXX' in cfg_value.upper():
         continue
       os.environ[key] = cfg_value
+
+  # Optional: allow performance tables to live in a different dataset than optimizer tables.
+  # If configured, BigQueryClient will read this via env var.
+  bigquery_cfg = config.get('bigquery', {}) if isinstance(config, dict) else {}
+  if not os.environ.get('BQ_PERFORMANCE_DATASET_ID') and isinstance(bigquery_cfg, dict):
+    perf_dataset = (bigquery_cfg.get('performance_dataset_id') or bigquery_cfg.get('perf_dataset_id') or '').strip()
+    if perf_dataset and 'YOUR_' not in perf_dataset:
+      os.environ['BQ_PERFORMANCE_DATASET_ID'] = perf_dataset
 
 
 def set_bigquery_env_vars(project_id: str) -> None:

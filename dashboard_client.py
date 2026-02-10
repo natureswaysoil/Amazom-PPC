@@ -407,6 +407,23 @@ class DashboardClient:
                 'context': context or {}
             }
         }
+
+        # Record an explicit terminal lifecycle event for the dashboard events feed.
+        # Keep this payload small to avoid BigQuery row-size issues.
+        try:
+            status_payload = {
+                'timestamp': payload.get('timestamp'),
+                'run_id': self.current_run_id,
+                'status': 'failed',
+                'profile_id': self.profile_id,
+                'stage': 'error',
+                'error_type': type(error).__name__,
+                'error_message': str(error),
+                'context': context or {},
+            }
+            self._make_request('/api/optimization-status', status_payload)
+        except Exception:
+            pass
         
         # Write to BigQuery if configured
         if self.bigquery_client:
@@ -414,6 +431,15 @@ class DashboardClient:
                 self.bigquery_client.write_error(payload)
             except Exception as e:
                 logger.debug(f"Failed to write error event to BigQuery: {e}")
+
+            try:
+                self.bigquery_client.record_run_event(
+                    self.current_run_id,
+                    'failed',
+                    {'error': str(error), 'type': type(error).__name__}
+                )
+            except Exception as e:
+                logger.debug(f"Failed to record failed run event in BigQuery: {e}")
         
         response = self._make_request('/api/optimization-error', payload)
         

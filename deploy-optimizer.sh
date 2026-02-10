@@ -174,7 +174,7 @@ gcloud functions deploy "$FUNCTION_NAME" \
   --max-instances="$DEFAULT_MAX_INSTANCES" \
   --timeout="$DEFAULT_TIMEOUT" \
   --memory="$DEFAULT_MEMORY" \
-  --set-env-vars="LOG_LEVEL=INFO,MIN_RUN_INTERVAL_MINUTES=120" \
+  --set-env-vars="LOG_LEVEL=INFO,MIN_RUN_INTERVAL_MINUTES=120,BQ_PERFORMANCE_DATASET_ID=${BQ_PERFORMANCE_DATASET_ID:-amazon_ppc}" \
   --set-secrets="AMAZON_CLIENT_ID=projects/$PROJECT_ID/secrets/AMAZON_CLIENT_ID:latest,AMAZON_CLIENT_SECRET=projects/$PROJECT_ID/secrets/AMAZON_CLIENT_SECRET:latest,AMAZON_REFRESH_TOKEN=projects/$PROJECT_ID/secrets/AMAZON_REFRESH_TOKEN:latest,DASHBOARD_API_KEY=projects/$PROJECT_ID/secrets/DASHBOARD_API_KEY:latest${PROFILE_ID_SECRET}" \
   --ingress-settings=all \
   --project="$PROJECT_ID"

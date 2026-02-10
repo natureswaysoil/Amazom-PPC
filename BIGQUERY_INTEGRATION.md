@@ -38,6 +38,20 @@ Or use environment variables:
 export GOOGLE_CLOUD_PROJECT=amazon-ppc-474902
 export BQ_DATASET_ID=amazon_ppc
 export BQ_LOCATION=us-east4
+
+# Optional: if your Amazon Ads performance tables live in a different dataset
+# (e.g. campaign_performance / keyword_performance), set:
+export BQ_PERFORMANCE_DATASET_ID=amazon_ppc
+```
+
+If you prefer config-driven setup, you can also set:
+
+```json
+{
+  "bigquery": {
+    "performance_dataset_id": "amazon_ppc"
+  }
+}
 ```
 
 ### Step 2: Run the Setup Script

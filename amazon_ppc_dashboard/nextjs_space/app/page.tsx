@@ -476,7 +476,7 @@ export default function Home() {
 
       <div style={styles.tableCard}>
         <h2 style={styles.tableTitle}>📊 Recent Optimization Runs</h2>
-        {recentResults.length === 0 ? (
+        {recentResults.slice(0, 2).length === 0 ? (
           <p style={{ textAlign: 'center', color: '#666', padding: '20px' }}>
             No optimization runs found. Trigger an optimization to see data here.
           </p>
@@ -496,7 +496,7 @@ export default function Home() {
               </tr>
             </thead>
             <tbody>
-              {recentResults.map((result, index) => (
+              {recentResults.slice(0, 2).map((result, index) => (
                 <tr key={result.run_id} style={index % 2 === 0 ? styles.evenRow : styles.oddRow}>
                   <td style={styles.td}>{formatDate(result.timestamp)}</td>
                   <td style={styles.td}>
@@ -576,6 +576,21 @@ export default function Home() {
     const latestResult = pickMostRecentMeaningfulResult() || recentResults[0];
     const features = latestResult?.features || {};
     const events = Array.isArray(liveSections.automation.data?.events) ? liveSections.automation.data.events : [];
+
+    // Only show the last 2 unique runs (sessions) in the events table.
+    // Events come back in descending timestamp order from BigQuery.
+    const lastTwoRunIds: string[] = [];
+    for (const ev of events) {
+      const runId = (ev as any)?.run_id;
+      if (typeof runId !== 'string' || !runId.trim()) continue;
+      if (!lastTwoRunIds.includes(runId)) {
+        lastTwoRunIds.push(runId);
+      }
+      if (lastTwoRunIds.length >= 2) break;
+    }
+    const filteredEvents = lastTwoRunIds.length > 0
+      ? events.filter((ev: any) => lastTwoRunIds.includes(ev?.run_id))
+      : events;
     
     return (
       <div style={styles.tableCard}>
@@ -648,7 +663,7 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {events.slice(0, 25).map((ev: any, idx: number) => (
+                  {filteredEvents.slice(0, 50).map((ev: any, idx: number) => (
                     <tr key={`${ev.run_id || 'run'}-${idx}`} style={idx % 2 === 0 ? styles.evenRow : styles.oddRow}>
                       <td style={styles.td}>{ev.timestamp ? formatDate(ev.timestamp) : 'N/A'}</td>
                       <td style={styles.td}>{ev.run_id || 'N/A'}</td>
@@ -939,7 +954,7 @@ export default function Home() {
     <>
       <div style={styles.tableCard}>
         <h2 style={styles.tableTitle}>📋 Complete Data Table</h2>
-        {recentResults.length === 0 ? (
+        {recentResults.slice(0, 2).length === 0 ? (
           <p style={{ textAlign: 'center', color: '#666', padding: '20px' }}>
             No data available.
           </p>
@@ -962,7 +977,7 @@ export default function Home() {
               </tr>
             </thead>
             <tbody>
-              {recentResults.map((result, index) => (
+              {recentResults.slice(0, 2).map((result, index) => (
                 <tr key={result.run_id} style={index % 2 === 0 ? styles.evenRow : styles.oddRow}>
                   <td style={styles.td}>{formatDate(result.timestamp)}</td>
                   <td style={{ ...styles.td, fontSize: '11px' }}>{result.run_id.substring(0, 8)}...</td>

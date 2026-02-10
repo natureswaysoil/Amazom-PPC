@@ -98,7 +98,10 @@ class BigQueryClient:
         credentials = self._resolve_credentials()
         if credentials:
             logger.info("Using explicit service account credentials for BigQuery client")
-            self.client = bigquery.Client(project=project_id, credentials=credentials)
+            self.client = bigquery.Client(
+                project=project_id,
+                credentials=credentials,
+            )
         else:
             logger.debug("Using Application Default Credentials for BigQuery client")
             self.client = bigquery.Client(project=project_id)
@@ -108,26 +111,276 @@ class BigQueryClient:
         # Cache table schemas to make read helpers tolerant to schema drift.
         self._table_columns_cache: Dict[str, set] = {}
 
+        # Cache dataset locations so queries can run in the correct region.
+        self._dataset_location_cache: Dict[str, Optional[str]] = {}
+
+        # Cache discovered performance sources (keyed by dataset_ref + mode).
+        self._perf_source_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+
         # Ensure dataset exists
         self._ensure_dataset_exists()
 
-    def _get_table_columns(self, table_id: str) -> set:
-        """Return a cached set of column names for the given table."""
+    def _get_dataset_location(self, dataset_ref: str) -> Optional[str]:
+        """Return the dataset location for `project.dataset` (cached)."""
 
-        cached = self._table_columns_cache.get(table_id)
+        if not dataset_ref:
+            return None
+
+        cached = self._dataset_location_cache.get(dataset_ref)
         if cached is not None:
             return cached
 
-        table_ref = f"{self.dataset_ref}.{table_id}"
+        try:
+            dataset = self.client.get_dataset(dataset_ref)
+            location = getattr(dataset, "location", None)
+            self._dataset_location_cache[dataset_ref] = location
+            return location
+        except Exception as exc:
+            logger.debug("Failed to get dataset location for %s: %s", dataset_ref, exc)
+            self._dataset_location_cache[dataset_ref] = None
+            return None
+
+    def _query(
+        self,
+        query: str,
+        job_config: Optional[bigquery.QueryJobConfig] = None,
+        *,
+        dataset_ref: Optional[str] = None,
+        location: Optional[str] = None,
+    ):
+        """Execute a query with an explicit location when possible."""
+
+        effective_location = location
+        if not effective_location and dataset_ref:
+            effective_location = self._get_dataset_location(dataset_ref)
+        if not effective_location:
+            effective_location = self.location
+
+        if effective_location:
+            return self.client.query(query, job_config=job_config, location=effective_location)
+        return self.client.query(query, job_config=job_config)
+
+    def _get_table_columns(self, table_id: str, dataset_ref: Optional[str] = None) -> set:
+        """Return a cached set of column names for the given table.
+
+        dataset_ref may be provided to inspect tables outside of self.dataset_ref
+        (e.g. when performance tables live in a different dataset).
+        """
+
+        effective_dataset_ref = dataset_ref or self.dataset_ref
+        cache_key = f"{effective_dataset_ref}.{table_id}"
+
+        cached = self._table_columns_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        table_ref = f"{effective_dataset_ref}.{table_id}"
         try:
             table = self.client.get_table(table_ref)
             cols = {field.name for field in table.schema}
-            self._table_columns_cache[table_id] = cols
+            self._table_columns_cache[cache_key] = cols
             return cols
         except Exception as exc:
             logger.warning("Failed to read schema for %s: %s", table_ref, exc)
-            self._table_columns_cache[table_id] = set()
+            self._table_columns_cache[cache_key] = set()
             return set()
+
+    def _discover_performance_source(
+        self,
+        dataset_ref: str,
+        mode: str = "daily",
+    ) -> Optional[Dict[str, Any]]:
+        """Discover a suitable performance table in a dataset by inspecting INFORMATION_SCHEMA.
+
+        This is a fallback used when expected table names (e.g. campaign_performance) do not
+        exist. It searches for a table containing at least:
+        - a date-like column
+        - a spend/cost-like column
+        - a sales/revenue-like column
+
+        For mode='keywords', it also requires a keyword identifier column and clicks.
+        """
+
+        mode = (mode or "daily").strip().lower()
+        cache_key = f"{dataset_ref}:{mode}"
+        if cache_key in self._perf_source_cache:
+            return self._perf_source_cache[cache_key]
+
+        def _case_order(expr: str, candidates: List[str]) -> str:
+            parts = [
+                f"WHEN LOWER({expr}) = '{c.lower()}' THEN {idx}"
+                for idx, c in enumerate(candidates, start=1)
+            ]
+            return f"(CASE {' '.join(parts)} ELSE 999 END)"
+
+        date_candidates = [
+            "segments_date",
+            "segmentsDate",
+            "report_date",
+            "reportDate",
+            "startDate",
+            "date",
+            "day",
+            "reporting_date",
+            "reportingDate",
+            "timestamp",
+        ]
+
+        spend_candidates = [
+            "cost",
+            "spend",
+            "ad_spend",
+            "adSpend",
+            "spend_amount",
+            "spendAmount",
+            "cost_amount",
+            "costAmount",
+            "costInMicros",
+            "cost_in_micros",
+            "cost_micros",
+            "costMicros",
+            "spendInMicros",
+            "spend_in_micros",
+            "spend_micros",
+            "spendMicros",
+        ]
+
+        sales_candidates = [
+            "attributedSales7d",
+            "attributedSales14d",
+            "attributedSales30d",
+            "attributedSales7dSameSKU",
+            "attributedSales14dSameSKU",
+            "attributedSales30dSameSKU",
+            "attributed_sales_7d",
+            "attributed_sales_14d",
+            "attributed_sales_30d",
+            "attributed_sales_7d_same_sku",
+            "attributed_sales_14d_same_sku",
+            "attributed_sales_30d_same_sku",
+            "sales14d",
+            "sales_7d",
+            "sales_14d",
+            "sales_30d",
+            "sales",
+            "revenue",
+            "conversion_value",
+            "conversionValue",
+            "conversion_value_14d",
+            "conversionValue14d",
+            "ordered_product_sales",
+            "orderedProductSales",
+            "ordered_product_sales_14d",
+            "orderedProductSales14d",
+            "ordered_product_sales_7d",
+            "orderedProductSales7d",
+            "purchases",
+            "purchases_14d",
+            "purchases14d",
+        ]
+
+        keyword_candidates = [
+            "keyword_id",
+            "keywordId",
+            "keyword",
+            "keyword_text",
+            "keywordText",
+            "search_term",
+            "searchTerm",
+            "customer_search_term",
+            "customerSearchTerm",
+        ]
+
+        clicks_candidates = ["clicks"]
+
+        info_ref = f"`{dataset_ref}.INFORMATION_SCHEMA.COLUMNS`"
+
+        date_in = ", ".join([f"'{c.lower()}'" for c in date_candidates])
+        spend_in = ", ".join([f"'{c.lower()}'" for c in spend_candidates])
+        sales_in = ", ".join([f"'{c.lower()}'" for c in sales_candidates])
+        keyword_in = ", ".join([f"'{c.lower()}'" for c in keyword_candidates])
+        clicks_in = ", ".join([f"'{c.lower()}'" for c in clicks_candidates])
+
+        date_order = _case_order("column_name", date_candidates)
+        spend_order = _case_order("column_name", spend_candidates)
+        sales_order = _case_order("column_name", sales_candidates)
+        keyword_order = _case_order("column_name", keyword_candidates)
+        clicks_order = _case_order("column_name", clicks_candidates)
+
+        # Prefer likely table names by mode.
+        if mode == "keywords":
+            table_pref = "(CASE WHEN LOWER(table_name) LIKE '%keyword%' THEN 1 WHEN LOWER(table_name) LIKE '%search%' THEN 2 WHEN LOWER(table_name) LIKE '%term%' THEN 3 ELSE 99 END)"
+        else:
+            table_pref = "(CASE WHEN LOWER(table_name) LIKE '%campaign%' THEN 1 WHEN LOWER(table_name) LIKE '%performance%' THEN 2 WHEN LOWER(table_name) LIKE '%report%' THEN 3 WHEN LOWER(table_name) LIKE '%sp_%' THEN 4 ELSE 99 END)"
+
+        query = f"""
+        WITH picked AS (
+            SELECT
+                table_name,
+                (SELECT column_name FROM {info_ref} c2
+                    WHERE c2.table_name = c.table_name AND LOWER(c2.column_name) IN ({date_in})
+                    ORDER BY {date_order} LIMIT 1) AS date_col,
+                (SELECT column_name FROM {info_ref} c2
+                    WHERE c2.table_name = c.table_name AND LOWER(c2.column_name) IN ({spend_in})
+                    ORDER BY {spend_order} LIMIT 1) AS spend_col,
+                (SELECT column_name FROM {info_ref} c2
+                    WHERE c2.table_name = c.table_name AND LOWER(c2.column_name) IN ({sales_in})
+                    ORDER BY {sales_order} LIMIT 1) AS sales_col,
+                (SELECT column_name FROM {info_ref} c2
+                    WHERE c2.table_name = c.table_name AND LOWER(c2.column_name) IN ({keyword_in})
+                    ORDER BY {keyword_order} LIMIT 1) AS keyword_col,
+                (SELECT column_name FROM {info_ref} c2
+                    WHERE c2.table_name = c.table_name AND LOWER(c2.column_name) IN ({clicks_in})
+                    ORDER BY {clicks_order} LIMIT 1) AS clicks_col,
+                MAX(IF(LOWER(column_name) = 'profile_id', 1, 0)) AS has_profile
+            FROM {info_ref} c
+            GROUP BY table_name
+        )
+        SELECT
+            table_name,
+            date_col,
+            spend_col,
+            sales_col,
+            keyword_col,
+            clicks_col,
+            has_profile
+        FROM picked
+        WHERE date_col IS NOT NULL
+            AND spend_col IS NOT NULL
+            AND sales_col IS NOT NULL
+            {"AND keyword_col IS NOT NULL AND clicks_col IS NOT NULL" if mode == "keywords" else ""}
+        ORDER BY {table_pref}, table_name
+        LIMIT 1
+        """
+
+        try:
+            job = self._query(query, dataset_ref=dataset_ref)
+            rows = list(job.result(timeout=30))
+            if not rows:
+                self._perf_source_cache[cache_key] = None
+                return None
+
+            row = rows[0]
+            source = {
+                "table_id": row.get("table_name"),
+                "date_col": row.get("date_col"),
+                "spend_col": row.get("spend_col"),
+                "sales_col": row.get("sales_col"),
+                "keyword_col": row.get("keyword_col"),
+                "clicks_col": row.get("clicks_col"),
+                "has_profile": bool(row.get("has_profile")),
+            }
+            self._perf_source_cache[cache_key] = source
+            return source
+        except Exception as exc:
+            logger.warning(
+                "Failed to discover performance source in %s (mode=%s): %s",
+                dataset_ref,
+                mode,
+                exc,
+            )
+            self._perf_source_cache[cache_key] = None
+            return None
 
     def _select_existing_fields(self, table_id: str, desired_fields: List[str]) -> List[str]:
         """Filter desired fields down to those that exist in BigQuery.
@@ -353,7 +606,7 @@ class BigQueryClient:
         try:
             self.client.update_table(table, ["schema"], timeout=30)
             # Invalidate schema cache.
-            self._table_columns_cache.pop(table_id, None)
+            self._table_columns_cache.pop(f"{self.dataset_ref}.{table_id}", None)
         except Exception as exc:
             logger.warning("Failed to update schema for %s: %s", table_ref, exc)
 
@@ -775,11 +1028,12 @@ class BigQueryClient:
         self,
         query: str,
         job_config: Optional[bigquery.QueryJobConfig] = None,
+        dataset_ref: Optional[str] = None,
     ) -> Optional[datetime]:
         """Execute a query expected to return a single timestamp column."""
 
         try:
-            job = self.client.query(query, job_config=job_config)
+            job = self._query(query, job_config=job_config, dataset_ref=dataset_ref)
             result = job.result(timeout=30)
 
             for row in result:
@@ -814,7 +1068,11 @@ class BigQueryClient:
             )
             query += " WHERE status IN UNNEST(@statuses)"
 
-        return self._execute_single_timestamp_query(query, job_config)
+        return self._execute_single_timestamp_query(
+            query,
+            job_config,
+            dataset_ref=self.dataset_ref,
+        )
 
     def get_last_result_timestamp(
         self, statuses: Optional[List[str]] = None
@@ -833,7 +1091,11 @@ class BigQueryClient:
             )
             query += " WHERE status IN UNNEST(@statuses)"
 
-        return self._execute_single_timestamp_query(query, job_config)
+        return self._execute_single_timestamp_query(
+            query,
+            job_config,
+            dataset_ref=self.dataset_ref,
+        )
 
     def _safe_json_loads(self, value: Any) -> Any:
         if value is None:
@@ -945,7 +1207,7 @@ class BigQueryClient:
         )
 
         try:
-            job = self.client.query(query, job_config=job_config)
+            job = self._query(query, job_config=job_config, dataset_ref=self.dataset_ref)
             rows = list(job.result(timeout=30))
             if not rows:
                 return None
@@ -975,99 +1237,328 @@ class BigQueryClient:
         """Return day-level metrics for the dashboard.
 
         Runs/keyword counts come from optimization_results.
-        Spend/sales/ACOS come from sp_search_term_metrics when available.
+        Spend/sales/ACOS come from the best available performance table.
+
+        Preferred sources (first match wins):
+        - campaign_performance (segments_date)
+        - keyword_performance (segments_date)
+        - search_term_reports (segments_date)
+        - sp_campaign_metrics (startDate)
         """
 
         import datetime
 
         days = max(1, min(int(days), 365))
+        debug_bq = str(os.getenv("PPC_DEBUG_BIGQUERY", "")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        )
+
+        perf_dataset_id = (
+            os.getenv("BQ_PERFORMANCE_DATASET_ID")
+            or os.getenv("PPC_PERFORMANCE_DATASET_ID")
+            or os.getenv("BIGQUERY_PERFORMANCE_DATASET")
+            or os.getenv("BIGQUERY_PERF_DATASET")
+            or os.getenv("BQ_PERF_DATASET_ID")
+        )
+        perf_dataset_ref = (
+            f"{self.project_id}.{perf_dataset_id}" if perf_dataset_id else self.dataset_ref
+        )
         # Last N calendar days including today (UTC), e.g. days=7 -> today..today-6.
         start_date = datetime.datetime.utcnow().date() - datetime.timedelta(days=days - 1)
         results_ref = f"`{self.dataset_ref}.optimization_results`"
 
-        perf_table_id = "sp_search_term_metrics"
-        perf_ref = f"`{self.dataset_ref}.{perf_table_id}`"
+        def _pick_column(available: set, candidates: List[str]) -> Optional[str]:
+            lowered = {str(c).lower(): str(c) for c in available}
+            for cand in candidates:
+                key = str(cand).lower()
+                if key in lowered:
+                    return lowered[key]
+            return None
 
-        keyword_table_id = "keyword_performance"
-        keyword_ref = f"`{self.dataset_ref}.{keyword_table_id}`"
+        def _has_recent_rows(
+            table_id: str,
+            date_col: str,
+            has_profile: bool,
+        ) -> bool:
+            """Return True if the table has any rows since start_date.
 
-        keyword_columns = self._get_table_columns(keyword_table_id)
-        keyword_has_profile = "profile_id" in keyword_columns
-        keyword_profile_filter = (
-            "AND (@profile_id IS NULL OR profile_id = @profile_id)" if keyword_has_profile else ""
-        )
+            This avoids selecting an empty-but-present table (common cause of
+            'all zeros' dashboards).
+            """
 
-        # Prefer sp_search_term_metrics if it has data, but fall back to keyword_performance
-        # (cost/conversion_value) for days where the search term metrics table is sparse.
-        perf_query = f"""
-        WITH runs AS (
-            SELECT
-                DATE(timestamp) AS day,
-                COUNT(1) AS runs,
-                SUM(COALESCE(campaigns_analyzed, 0)) AS campaigns_analyzed,
-                SUM(COALESCE(keywords_optimized, 0)) AS keywords_optimized,
-                SUM(COALESCE(budget_changes, 0)) AS budget_changes
-            FROM {results_ref}
-            WHERE DATE(timestamp) >= @start_date
-                AND (@profile_id IS NULL OR profile_id = @profile_id)
-            GROUP BY day
-        ),
-        perf_stm AS (
-            SELECT
-                date AS day,
-                SUM(COALESCE(cost, 0)) AS total_spend,
-                SUM(COALESCE(sales, 0)) AS total_sales
-            FROM {perf_ref}
-            WHERE date >= @start_date
-                AND (@profile_id IS NULL OR profile_id = @profile_id)
-            GROUP BY day
-        ),
-        perf_kw AS (
-            SELECT
-                day,
-                SUM(COALESCE(cost, 0)) AS total_spend,
-                SUM(COALESCE(conversion_value, 0)) AS total_sales
-            FROM (
-                SELECT
-                    date AS day,
-                    keyword_id,
-                    cost,
-                    conversion_value,
-                    created_at,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY date, keyword_id
-                        ORDER BY created_at DESC
-                    ) AS rn
-                FROM {keyword_ref}
-                WHERE date >= @start_date
-                    {keyword_profile_filter}
+            table_ref = f"`{perf_dataset_ref}.{table_id}`"
+            profile_filter = (
+                "AND (@profile_id IS NULL OR profile_id = @profile_id)" if has_profile else ""
             )
-            WHERE rn = 1
-            GROUP BY day
-        ),
-        perf AS (
-            SELECT
-                COALESCE(s.day, k.day) AS day,
-                COALESCE(s.total_spend, k.total_spend, 0) AS total_spend,
-                COALESCE(s.total_sales, k.total_sales, 0) AS total_sales
-            FROM perf_stm s
-            FULL OUTER JOIN perf_kw k
-                ON s.day = k.day
-        )
+            probe = f"""
+            SELECT 1
+            FROM {table_ref}
+            WHERE SAFE_CAST(`{date_col}` AS DATE) >= @start_date
+              {profile_filter}
+            LIMIT 1
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("start_date", "DATE", start_date),
+                    bigquery.ScalarQueryParameter("profile_id", "STRING", profile_id),
+                ]
+            )
+            try:
+                rows = list(
+                    self._query(
+                        probe,
+                        job_config=job_config,
+                        dataset_ref=perf_dataset_ref,
+                    ).result(timeout=15)
+                )
+                return bool(rows)
+            except Exception as exc:
+                if debug_bq:
+                    logger.info(
+                        "Perf source probe failed for %s.%s: %s",
+                        perf_dataset_ref,
+                        table_id,
+                        exc,
+                    )
+                # If probing fails for any reason, don't block selection.
+                return True
+
+        def _resolve_perf_source() -> Optional[Dict[str, Any]]:
+            sources = [
+                {
+                    "table_id": "campaign_performance",
+                    "date": ["segments_date", "segmentsDate", "report_date", "reportDate", "date", "timestamp"],
+                    "spend": ["cost", "spend"],
+                    "sales": [
+                        "attributedSales7d",
+                        "attributedSales14d",
+                        "attributedSales30d",
+                        "attributedSales7dSameSKU",
+                        "attributedSales14dSameSKU",
+                        "attributedSales30dSameSKU",
+                        "attributed_sales_7d",
+                        "sales14d",
+                        "attributed_sales_14d",
+                        "attributed_sales_30d",
+                        "sales_7d",
+                        "sales_14d",
+                        "sales_30d",
+                        "sales",
+                        "conversion_value",
+                        "conversion_value_14d",
+                        "ordered_product_sales",
+                        "ordered_product_sales_14d",
+                    ],
+                },
+                {
+                    "table_id": "keyword_performance",
+                    "date": ["segments_date", "segmentsDate", "report_date", "reportDate", "date", "timestamp"],
+                    "spend": ["cost", "spend"],
+                    "sales": [
+                        "attributedSales7d",
+                        "attributedSales14d",
+                        "attributedSales30d",
+                        "attributedSales7dSameSKU",
+                        "attributedSales14dSameSKU",
+                        "attributedSales30dSameSKU",
+                        "attributed_sales_7d",
+                        "sales14d",
+                        "attributed_sales_14d",
+                        "attributed_sales_30d",
+                        "sales_7d",
+                        "sales_14d",
+                        "sales_30d",
+                        "sales",
+                        "conversion_value",
+                        "conversion_value_14d",
+                        "ordered_product_sales",
+                        "ordered_product_sales_14d",
+                    ],
+                },
+                {
+                    "table_id": "search_term_reports",
+                    "date": ["segments_date", "segmentsDate", "report_date", "reportDate", "date", "timestamp"],
+                    "spend": ["cost", "spend"],
+                    "sales": [
+                        "attributedSales7d",
+                        "attributedSales14d",
+                        "attributedSales30d",
+                        "attributedSales7dSameSKU",
+                        "attributedSales14dSameSKU",
+                        "attributedSales30dSameSKU",
+                        "attributed_sales_7d",
+                        "sales14d",
+                        "attributed_sales_14d",
+                        "attributed_sales_30d",
+                        "sales_7d",
+                        "sales_14d",
+                        "sales_30d",
+                        "sales",
+                        "conversion_value",
+                        "conversion_value_14d",
+                        "ordered_product_sales",
+                        "ordered_product_sales_14d",
+                    ],
+                },
+                {
+                    "table_id": "sp_campaign_metrics",
+                    "date": ["startDate", "segments_date", "segmentsDate", "report_date", "reportDate", "date"],
+                    "spend": ["cost", "spend"],
+                    "sales": [
+                        "attributedSales7d",
+                        "attributedSales14d",
+                        "attributedSales30d",
+                        "attributedSales7dSameSKU",
+                        "attributedSales14dSameSKU",
+                        "attributedSales30dSameSKU",
+                        "attributed_sales_7d",
+                        "sales14d",
+                        "attributed_sales_14d",
+                        "attributed_sales_30d",
+                        "sales_7d",
+                        "sales_14d",
+                        "sales_30d",
+                        "sales",
+                        "conversion_value",
+                        "conversion_value_14d",
+                        "ordered_product_sales",
+                        "ordered_product_sales_14d",
+                    ],
+                },
+            ]
+
+            for src in sources:
+                table_id = src["table_id"]
+                cols = self._get_table_columns(table_id, dataset_ref=perf_dataset_ref)
+                if not cols:
+                    continue
+
+                date_col = _pick_column(cols, src["date"])
+                spend_col = _pick_column(cols, src["spend"])
+                sales_col = _pick_column(cols, src["sales"])
+
+                if not date_col or not spend_col or not sales_col:
+                    continue
+
+                has_profile = "profile_id" in {str(c).lower() for c in cols}
+
+                # Skip empty tables so we don't return all zeros.
+                if not _has_recent_rows(table_id, date_col, has_profile):
+                    if debug_bq:
+                        logger.info(
+                            "Perf source %s.%s has no recent rows since %s; trying next candidate",
+                            perf_dataset_ref,
+                            table_id,
+                            start_date,
+                        )
+                    continue
+
+                return {
+                    "table_id": table_id,
+                    "date_col": date_col,
+                    "spend_col": spend_col,
+                    "sales_col": sales_col,
+                    "has_profile": has_profile,
+                }
+
+            # Fallback: discover table by schema in INFORMATION_SCHEMA.
+            discovered = self._discover_performance_source(perf_dataset_ref, mode="daily")
+            if discovered and discovered.get("table_id"):
+                return {
+                    "table_id": discovered.get("table_id"),
+                    "date_col": discovered.get("date_col"),
+                    "spend_col": discovered.get("spend_col"),
+                    "sales_col": discovered.get("sales_col"),
+                    "has_profile": bool(discovered.get("has_profile")),
+                }
+
+            return None
+
+        perf_source = _resolve_perf_source()
+
+        if debug_bq:
+            if perf_source:
+                logger.info(
+                    "Daily overview perf source selected: table=%s date=%s spend=%s sales=%s has_profile=%s perf_dataset=%s results_dataset=%s profile_id=%s start_date=%s days=%s",
+                    perf_source.get("table_id"),
+                    perf_source.get("date_col"),
+                    perf_source.get("spend_col"),
+                    perf_source.get("sales_col"),
+                    perf_source.get("has_profile"),
+                    perf_dataset_ref,
+                    self.dataset_ref,
+                    profile_id,
+                    start_date,
+                    days,
+                )
+            else:
+                logger.info(
+                    "Daily overview perf source not found; will use optimization_results-only aggregation (perf_dataset=%s results_dataset=%s profile_id=%s start_date=%s days=%s)",
+                    perf_dataset_ref,
+                    self.dataset_ref,
+                    profile_id,
+                    start_date,
+                    days,
+                )
+
+        # NOTE: Do not join perf + results in a single query.
+        # BigQuery cannot query across datasets in different locations.
+        runs_query = f"""
         SELECT
-            COALESCE(r.day, p.day) AS day,
-            COALESCE(r.runs, 0) AS runs,
-            COALESCE(p.total_spend, 0) AS total_spend,
-            COALESCE(p.total_sales, 0) AS total_sales,
-            SAFE_DIVIDE(COALESCE(p.total_spend, 0), NULLIF(COALESCE(p.total_sales, 0), 0)) AS blended_acos,
-            COALESCE(r.campaigns_analyzed, 0) AS campaigns_analyzed,
-            COALESCE(r.keywords_optimized, 0) AS keywords_optimized,
-            COALESCE(r.budget_changes, 0) AS budget_changes
-        FROM runs r
-        FULL OUTER JOIN perf p
-            ON r.day = p.day
+            DATE(timestamp) AS day,
+            COUNT(1) AS runs,
+            SUM(COALESCE(campaigns_analyzed, 0)) AS campaigns_analyzed,
+            SUM(COALESCE(keywords_optimized, 0)) AS keywords_optimized,
+            SUM(COALESCE(budget_changes, 0)) AS budget_changes
+        FROM {results_ref}
+        WHERE DATE(timestamp) >= @start_date
+            AND (@profile_id IS NULL OR profile_id = @profile_id)
+        GROUP BY day
         ORDER BY day DESC
         """
+
+        perf_only_query: Optional[str] = None
+        if perf_source:
+            perf_ref = f"`{perf_dataset_ref}.{perf_source['table_id']}`"
+            date_col = perf_source["date_col"]
+            spend_col = perf_source["spend_col"]
+            sales_col = perf_source["sales_col"]
+
+            def _is_micros(col_name: str) -> bool:
+                name = str(col_name or "").lower()
+                return "micros" in name or name.endswith("_micro") or name.endswith("_micros")
+
+            spend_expr = (
+                f"SAFE_DIVIDE(COALESCE(`{spend_col}`, 0), 1000000)"
+                if _is_micros(spend_col)
+                else f"COALESCE(`{spend_col}`, 0)"
+            )
+            sales_expr = (
+                f"SAFE_DIVIDE(COALESCE(`{sales_col}`, 0), 1000000)"
+                if _is_micros(sales_col)
+                else f"COALESCE(`{sales_col}`, 0)"
+            )
+            perf_profile_filter = (
+                "AND (@profile_id IS NULL OR profile_id = @profile_id)"
+                if perf_source["has_profile"]
+                else ""
+            )
+
+            perf_only_query = f"""
+            SELECT
+                SAFE_CAST(`{date_col}` AS DATE) AS day,
+                SUM({spend_expr}) AS total_spend,
+                SUM({sales_expr}) AS total_sales
+            FROM {perf_ref}
+            WHERE SAFE_CAST(`{date_col}` AS DATE) >= @start_date
+                {perf_profile_filter}
+            GROUP BY day
+            ORDER BY day DESC
+            """
 
         fallback_query = f"""
         SELECT
@@ -1088,31 +1579,106 @@ class BigQueryClient:
 
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("days", "INT64", days),
                 bigquery.ScalarQueryParameter("start_date", "DATE", start_date),
                 bigquery.ScalarQueryParameter("profile_id", "STRING", profile_id),
             ]
         )
 
         try:
-            try:
-                job = self.client.query(perf_query, job_config=job_config)
-                rows_iter = job.result(timeout=30)
-            except Exception as exc:
-                logger.warning(
-                    "Daily perf query failed; falling back to optimization_results-only aggregation: %s",
-                    exc,
-                )
-                job = self.client.query(fallback_query, job_config=job_config)
-                rows_iter = job.result(timeout=30)
-            result: List[Dict[str, Any]] = []
-            for row in rows_iter:
-                data = self._row_to_dict(row)
-                day_val = data.get("day")
-                if day_val is not None:
-                    data["day"] = str(day_val)
-                result.append(data)
-            return result
+            def _as_float(value: Any) -> float:
+                if value is None:
+                    return 0.0
+                try:
+                    return float(value)
+                except Exception:
+                    return 0.0
+
+            runs_job = self._query(runs_query, job_config=job_config, dataset_ref=self.dataset_ref)
+            runs_rows = [self._row_to_dict(r) for r in runs_job.result(timeout=30)]
+
+            perf_rows: List[Dict[str, Any]] = []
+            if perf_only_query:
+                try:
+                    perf_job = self._query(
+                        perf_only_query,
+                        job_config=job_config,
+                        dataset_ref=perf_dataset_ref,
+                    )
+                    perf_rows = [self._row_to_dict(r) for r in perf_job.result(timeout=30)]
+                except Exception as exc:
+                    logger.warning(
+                        "Daily perf query failed; falling back to optimization_results-only aggregation: %s",
+                        exc,
+                    )
+                    if debug_bq:
+                        logger.info(
+                            "Daily overview fell back to optimization_results-only aggregation (dataset=%s profile_id=%s start_date=%s days=%s)",
+                            self.dataset_ref,
+                            profile_id,
+                            start_date,
+                            days,
+                        )
+                    job = self._query(
+                        fallback_query,
+                        job_config=job_config,
+                        dataset_ref=self.dataset_ref,
+                    )
+                    rows_iter = job.result(timeout=30)
+                    result: List[Dict[str, Any]] = []
+                    for row in rows_iter:
+                        data = self._row_to_dict(row)
+                        day_val = data.get("day")
+                        if day_val is not None:
+                            data["day"] = str(day_val)
+                        result.append(data)
+                    return result
+
+            by_day: Dict[str, Dict[str, Any]] = {}
+
+            for row in runs_rows:
+                day_val = row.get("day")
+                if day_val is None:
+                    continue
+                day_key = str(day_val)
+                by_day[day_key] = {
+                    "day": day_key,
+                    "runs": int(row.get("runs") or 0),
+                    "total_spend": 0.0,
+                    "total_sales": 0.0,
+                    "blended_acos": 0.0,
+                    "campaigns_analyzed": int(row.get("campaigns_analyzed") or 0),
+                    "keywords_optimized": int(row.get("keywords_optimized") or 0),
+                    "budget_changes": int(row.get("budget_changes") or 0),
+                }
+
+            for row in perf_rows:
+                day_val = row.get("day")
+                if day_val is None:
+                    continue
+                day_key = str(day_val)
+                entry = by_day.get(day_key)
+                if not entry:
+                    entry = {
+                        "day": day_key,
+                        "runs": 0,
+                        "total_spend": 0.0,
+                        "total_sales": 0.0,
+                        "blended_acos": 0.0,
+                        "campaigns_analyzed": 0,
+                        "keywords_optimized": 0,
+                        "budget_changes": 0,
+                    }
+                    by_day[day_key] = entry
+
+                entry["total_spend"] = _as_float(row.get("total_spend"))
+                entry["total_sales"] = _as_float(row.get("total_sales"))
+
+            for entry in by_day.values():
+                spend = _as_float(entry.get("total_spend"))
+                sales = _as_float(entry.get("total_sales"))
+                entry["blended_acos"] = (spend / sales) if sales else 0.0
+
+            return sorted(by_day.values(), key=lambda d: d.get("day", ""), reverse=True)
         except Exception as exc:
             logger.warning("Failed to fetch daily overview: %s", exc)
             return []
@@ -1124,8 +1690,8 @@ class BigQueryClient:
     ) -> List[Dict[str, Any]]:
         """Return top-performing keywords for the dashboard.
 
-        Uses keyword_performance (deduped by latest created_at per date+keyword_id)
-        joined to keywords for keyword_text.
+        Uses keyword_performance when available. This helper is best-effort and
+        intentionally schema-tolerant.
         """
 
         import datetime
@@ -1134,37 +1700,90 @@ class BigQueryClient:
         limit = max(1, min(int(limit), 200))
         start_date = datetime.datetime.utcnow().date() - datetime.timedelta(days=days - 1)
 
-        kw_perf_ref = f"`{self.dataset_ref}.keyword_performance`"
-        kw_meta_ref = f"`{self.dataset_ref}.keywords`"
+        perf_dataset_id = (
+            os.getenv("BQ_PERFORMANCE_DATASET_ID")
+            or os.getenv("PPC_PERFORMANCE_DATASET_ID")
+            or os.getenv("BIGQUERY_PERFORMANCE_DATASET")
+            or os.getenv("BIGQUERY_PERF_DATASET")
+            or os.getenv("BQ_PERF_DATASET_ID")
+        )
+        perf_dataset_ref = (
+            f"{self.project_id}.{perf_dataset_id}" if perf_dataset_id else self.dataset_ref
+        )
+
+        kw_table_id = "keyword_performance"
+        cols = self._get_table_columns(kw_table_id, dataset_ref=perf_dataset_ref)
+        source_table_id = kw_table_id
+
+        # Fallback: discover a keyword-level table by schema.
+        discovered = None
+        if not cols:
+            discovered = self._discover_performance_source(perf_dataset_ref, mode="keywords")
+            if discovered and discovered.get("table_id"):
+                source_table_id = str(discovered.get("table_id"))
+                cols = self._get_table_columns(source_table_id, dataset_ref=perf_dataset_ref)
+
+        if not cols:
+            return []
+
+        kw_perf_ref = f"`{perf_dataset_ref}.{source_table_id}`"
+
+        def _pick(available: set, candidates: List[str]) -> Optional[str]:
+            lowered = {str(c).lower(): str(c) for c in available}
+            for cand in candidates:
+                key = str(cand).lower()
+                if key in lowered:
+                    return lowered[key]
+            return None
+
+        date_col = _pick(cols, ["report_date", "reportDate", "segments_date", "segmentsDate", "date", "timestamp", "startDate"])
+        keyword_id_col = _pick(cols, ["keyword_id", "keywordId", "keyword", "keyword_text", "keywordText", "search_term", "searchTerm", "customer_search_term", "customerSearchTerm"])
+        clicks_col = _pick(cols, ["clicks"])
+        cost_col = _pick(cols, ["cost", "spend"])
+        sales_col = _pick(
+            cols,
+            [
+                "attributedSales7d",
+                "attributedSales14d",
+                "attributedSales30d",
+                "attributedSales7dSameSKU",
+                "attributedSales14dSameSKU",
+                "attributedSales30dSameSKU",
+                "attributed_sales_7d",
+                "sales14d",
+                "attributed_sales_14d",
+                "attributed_sales_30d",
+                "sales_7d",
+                "sales_14d",
+                "sales_30d",
+                "conversion_value",
+                "conversion_value_14d",
+                "ordered_product_sales",
+                "ordered_product_sales_14d",
+                "sales",
+            ],
+        )
+
+        if not keyword_id_col and discovered and discovered.get("keyword_col"):
+            keyword_id_col = str(discovered.get("keyword_col"))
+
+        if not clicks_col and discovered and discovered.get("clicks_col"):
+            clicks_col = str(discovered.get("clicks_col"))
+
+        if not (date_col and keyword_id_col and clicks_col and cost_col and sales_col):
+            return []
 
         query = f"""
-        WITH base AS (
-          SELECT
-            date,
-            keyword_id,
-            clicks,
-            cost,
-            conversion_value,
-            created_at,
-            ROW_NUMBER() OVER (
-              PARTITION BY date, keyword_id
-              ORDER BY created_at DESC
-            ) AS rn
-          FROM {kw_perf_ref}
-          WHERE date >= @start_date
-        )
         SELECT
-          COALESCE(m.keyword_text, CAST(b.keyword_id AS STRING)) AS keyword_text,
-          SUM(COALESCE(b.clicks, 0)) AS clicks,
-          SUM(COALESCE(b.conversion_value, 0)) AS sales,
+          CAST(`{keyword_id_col}` AS STRING) AS keyword_text,
+          SUM(COALESCE(`{clicks_col}`, 0)) AS clicks,
+          SUM(COALESCE(`{sales_col}`, 0)) AS sales,
           SAFE_DIVIDE(
-            SUM(COALESCE(b.cost, 0)),
-            NULLIF(SUM(COALESCE(b.conversion_value, 0)), 0)
+            SUM(COALESCE(`{cost_col}`, 0)),
+            NULLIF(SUM(COALESCE(`{sales_col}`, 0)), 0)
           ) AS acos
-        FROM base b
-        LEFT JOIN {kw_meta_ref} m
-          ON b.keyword_id = m.keyword_id
-        WHERE b.rn = 1
+        FROM {kw_perf_ref}
+                WHERE SAFE_CAST(`{date_col}` AS DATE) >= @start_date
         GROUP BY keyword_text
         ORDER BY sales DESC
         LIMIT @limit
@@ -1178,11 +1797,10 @@ class BigQueryClient:
         )
 
         try:
-            job = self.client.query(query, job_config=job_config)
+            job = self._query(query, job_config=job_config, dataset_ref=perf_dataset_ref)
             result: List[Dict[str, Any]] = []
             for row in job.result(timeout=30):
                 data = self._row_to_dict(row)
-                # Keep payload shape compatible with the Next.js dashboard.
                 data.setdefault("bid_change", None)
                 result.append(data)
             return result
@@ -1196,7 +1814,7 @@ class BigQueryClient:
     ) -> Dict[str, Any]:
         """Return keyword discovery summary for the dashboard.
 
-        Derived from keyword_harvest_log when present.
+        Best-effort query over keyword_harvest_log when present.
         """
 
         import datetime
@@ -1204,13 +1822,40 @@ class BigQueryClient:
         days = max(1, min(int(days), 365))
         start_ts = datetime.datetime.utcnow() - datetime.timedelta(days=days)
 
-        harvest_ref = f"`{self.dataset_ref}.keyword_harvest_log`"
+        table_id = "keyword_harvest_log"
+        cols = self._get_table_columns(table_id)
+        if not cols:
+            return {"keywords_discovered": 0, "keywords_added": 0}
+
+        lowered = {str(c).lower(): str(c) for c in cols}
+
+        def _pick(candidates: List[str]) -> Optional[str]:
+            for cand in candidates:
+                key = str(cand).lower()
+                if key in lowered:
+                    return lowered[key]
+            return None
+
+        ts_col = _pick(["harvested_at", "timestamp", "created_at", "fetch_timestamp"])
+        term_col = _pick(["search_term", "keyword", "term"])
+        action_col = _pick(["action", "event", "status"])
+        dry_run_col = _pick(["dry_run", "is_dry_run"])  # optional
+
+        if not (ts_col and term_col and action_col):
+            return {"keywords_discovered": 0, "keywords_added": 0}
+
+        harvest_ref = f"`{self.dataset_ref}.{table_id}`"
+
+        added_condition = f"LOWER(CAST(`{action_col}` AS STRING)) IN ('created', 'added')"
+        if dry_run_col:
+            added_condition += f" AND NOT COALESCE(`{dry_run_col}`, FALSE)"
+
         query = f"""
         SELECT
-          COUNT(DISTINCT search_term) AS keywords_discovered,
-          SUM(CASE WHEN LOWER(action) IN ('created','added') AND NOT COALESCE(dry_run, FALSE) THEN 1 ELSE 0 END) AS keywords_added
+          COUNT(DISTINCT CAST(`{term_col}` AS STRING)) AS keywords_discovered,
+          SUM(CASE WHEN {added_condition} THEN 1 ELSE 0 END) AS keywords_added
         FROM {harvest_ref}
-        WHERE harvested_at >= @start_ts
+        WHERE `{ts_col}` >= @start_ts
         """
 
         job_config = bigquery.QueryJobConfig(
@@ -1220,7 +1865,7 @@ class BigQueryClient:
         )
 
         try:
-            job = self.client.query(query, job_config=job_config)
+            job = self._query(query, job_config=job_config, dataset_ref=self.dataset_ref)
             rows = list(job.result(timeout=30))
             if not rows:
                 return {"keywords_discovered": 0, "keywords_added": 0}
@@ -1280,7 +1925,7 @@ class BigQueryClient:
         )
 
         try:
-            job = self.client.query(query, job_config=job_config)
+            job = self._query(query, job_config=job_config, dataset_ref=self.dataset_ref)
             result = []
             for row in job.result(timeout=30):
                 result.append(self._row_to_dict(row))
@@ -1324,7 +1969,7 @@ class BigQueryClient:
         )
 
         try:
-            job = self.client.query(query, job_config=job_config)
+            job = self._query(query, job_config=job_config, dataset_ref=self.dataset_ref)
             result = []
             for row in job.result(timeout=30):
                 data = self._row_to_dict(row)
@@ -1411,7 +2056,7 @@ class BigQueryClient:
         )
 
         try:
-            job = self.client.query(query, job_config=job_config)
+            job = self._query(query, job_config=job_config, dataset_ref=self.dataset_ref)
             rows = []
             for row in job.result(timeout=30):
                 data = self._row_to_dict(row)
