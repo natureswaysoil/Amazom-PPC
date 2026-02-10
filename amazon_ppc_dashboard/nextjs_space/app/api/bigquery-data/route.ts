@@ -9,7 +9,15 @@ import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
 
 export const dynamic = 'force-dynamic';
 
-const DEFAULT_DATASET_ID = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
+const DATASET_ID_ENV_NAMES = [
+  'BQ_DATASET_ID',
+  'BIGQUERY_DATASET',
+  'BIGQUERY_DATASET_ID',
+  'BQ_DATASET',
+  'BQ_DATASET_NAME',
+];
+
+const DEFAULT_DATASET_ID = getFirstSetEnv(DATASET_ID_ENV_NAMES) || 'amazon_ppc_data';
 const PROJECT_ID =
   process.env.GOOGLE_CLOUD_PROJECT ||
   process.env.GCP_PROJECT ||

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
 import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
+import { getFirstSetEnv } from '../lib/credentials';
 
 export async function POST(request: NextRequest) {
   try {
@@ -33,7 +34,14 @@ export async function POST(request: NextRequest) {
 
       if (runId) {
         const bigquery = new BigQuery();
-        const datasetId = process.env.BQ_DATASET_ID || 'amazon_ppc_data';
+        const datasetId =
+          getFirstSetEnv([
+            'BQ_DATASET_ID',
+            'BIGQUERY_DATASET',
+            'BIGQUERY_DATASET_ID',
+            'BQ_DATASET',
+            'BQ_DATASET_NAME',
+          ]) || 'amazon_ppc_data';
         const tableId = process.env.BQ_RUN_EVENTS_TABLE_ID || 'optimizer_run_events';
 
         const rows = [
