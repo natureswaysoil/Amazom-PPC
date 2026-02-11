@@ -574,7 +574,56 @@ export default function Home() {
 
   const renderAutomationTab = () => {
     const latestResult = pickMostRecentMeaningfulResult() || recentResults[0];
-    const features = latestResult?.features || {};
+    const fallbackFeatures = (() => {
+      const keywordsOptimized = Number((latestResult as any)?.keywords_optimized || 0);
+      const bidsIncreased = Number((latestResult as any)?.bids_increased || 0);
+      const bidsDecreased = Number((latestResult as any)?.bids_decreased || 0);
+      const campaignsAnalyzed = Number((latestResult as any)?.campaigns_analyzed || 0);
+      const budgetChanges = Number((latestResult as any)?.budget_changes || 0);
+      const negativeKeywordsAdded = Number((latestResult as any)?.negative_keywords_added || 0);
+
+      const computedNoChange = Math.max(0, keywordsOptimized - bidsIncreased - bidsDecreased);
+
+      const now = new Date();
+      const dayNames = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+
+      return {
+        bid_optimization: {
+          keywords_analyzed: keywordsOptimized,
+          bids_increased: bidsIncreased,
+          bids_decreased: bidsDecreased,
+          no_change: computedNoChange,
+        },
+        dayparting: {
+          current_day: dayNames[now.getDay()] || 'N/A',
+          current_hour: now.getHours(),
+          keywords_updated: 0,
+          multiplier: 1.0,
+        },
+        campaign_management: {
+          campaigns_analyzed: campaignsAnalyzed,
+          campaigns_paused: 0,
+          campaigns_activated: 0,
+          no_change: campaignsAnalyzed,
+        },
+        keyword_discovery: {
+          keywords_discovered: 0,
+          keywords_added: 0,
+        },
+        negative_keywords: {
+          negative_keywords_added: negativeKeywordsAdded,
+        },
+        budget_optimization: {
+          budget_changes: budgetChanges,
+        },
+      };
+    })();
+
+    const rawFeatures = (latestResult as any)?.features;
+    const features =
+      rawFeatures && typeof rawFeatures === 'object' && Object.keys(rawFeatures).length > 0
+        ? rawFeatures
+        : fallbackFeatures;
     const events = Array.isArray(liveSections.automation.data?.events) ? liveSections.automation.data.events : [];
 
     // Only show the last 2 unique runs (sessions) in the events table.
