@@ -83,14 +83,14 @@ async function getIdTokenHeaders(audience: string): Promise<Record<string, strin
 
 async function fetchOptimizerWithRetry(options: {
   url: string;
-  apiKey: string;
+  apiKey?: string;
   profileId?: string;
   allowIdTokenRetry: boolean;
 }): Promise<OptimizerFetchResult> {
   const { url, apiKey, profileId, allowIdTokenRetry } = options;
 
   const baseHeaders: Record<string, string> = {
-    'X-API-Key': apiKey,
+    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...(profileId ? { 'X-Profile-ID': profileId } : {}),
   };
 
@@ -125,13 +125,8 @@ async function fetchOptimizerWithRetry(options: {
 
 export async function GET(request: NextRequest) {
   try {
-    const resolved = await resolveDashboardApiKey({ required: true });
-    const apiKey = resolved.apiKey;
-    if (!apiKey) {
-      throw new Error(
-        'DASHBOARD_API_KEY is not configured. Set DASHBOARD_API_KEY or configure Secret Manager via DASHBOARD_API_SECRET_NAME / DASHBOARD_API_SECRET_RESOURCE.',
-      );
-    }
+    const resolved = await resolveDashboardApiKey({ required: false });
+    const apiKey = resolved.apiKey || undefined;
 
     const baseUrl = getOptimizerBaseUrl();
     const { searchParams } = new URL(request.url);
@@ -226,7 +221,7 @@ export async function GET(request: NextRequest) {
       optimizerBaseUrl: baseUrl,
       section,
       status: resp.status,
-      auth: usedIdToken ? 'id-token' : 'api-key',
+      auth: usedIdToken ? 'id-token' : apiKey ? 'api-key' : 'none',
       data: payload,
     };
     const statusCode = resp.ok ? 200 : resp.status;
