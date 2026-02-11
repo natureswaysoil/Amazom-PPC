@@ -25,6 +25,12 @@ const PROJECT_ID =
   process.env.GCLOUD_PROJECT ||
   'amazon-ppc-474902';
 
+const BIGQUERY_PROJECT_ID_ENV_NAMES = [
+  'BQ_PROJECT_ID',
+  'BIGQUERY_PROJECT_ID',
+  ...PROJECT_ID_ENV_NAMES,
+];
+
 let cachedDatasetLocation: string | null = null;
 const cachedOrderColumnByTable = new Map<
   string,
@@ -261,7 +267,7 @@ export async function GET(request: NextRequest) {
 
     const projectId =
       credentialResult.projectId ||
-      getFirstSetEnv(PROJECT_ID_ENV_NAMES) ||
+      getFirstSetEnv(BIGQUERY_PROJECT_ID_ENV_NAMES) ||
       PROJECT_ID;
     const datasetId = DEFAULT_DATASET_ID;
 

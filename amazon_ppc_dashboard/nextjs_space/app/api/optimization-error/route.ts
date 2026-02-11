@@ -3,6 +3,15 @@ import { BigQuery } from '@google-cloud/bigquery';
 import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
 import { getFirstSetEnv } from '../lib/credentials';
 
+const BIGQUERY_PROJECT_ID = getFirstSetEnv([
+  'BQ_PROJECT_ID',
+  'BIGQUERY_PROJECT_ID',
+  'GOOGLE_CLOUD_PROJECT',
+  'GCP_PROJECT',
+  'GCP_PROJECT_ID',
+  'GCLOUD_PROJECT',
+]);
+
 export async function POST(request: NextRequest) {
   try {
     // Verify API key (Authorization: Bearer or x-api-key header)
@@ -33,7 +42,9 @@ export async function POST(request: NextRequest) {
       const timestamp = body?.timestamp || new Date().toISOString();
 
       if (runId) {
-        const bigquery = new BigQuery();
+        const bigquery = BIGQUERY_PROJECT_ID
+          ? new BigQuery({ projectId: BIGQUERY_PROJECT_ID })
+          : new BigQuery();
         const datasetId =
           getFirstSetEnv([
             'BQ_DATASET_ID',
