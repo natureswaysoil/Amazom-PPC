@@ -265,7 +265,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const explicitProjectId = getFirstSetEnv(['BQ_PROJECT_ID', 'BIGQUERY_PROJECT_ID']);
     const projectId =
+      explicitProjectId ||
       credentialResult.projectId ||
       getFirstSetEnv(BIGQUERY_PROJECT_ID_ENV_NAMES) ||
       PROJECT_ID;
