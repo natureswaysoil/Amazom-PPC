@@ -1640,7 +1640,7 @@ class BigQueryClient:
                 COALESCE(budget_changes, 0) AS budget_changes,
                 ROW_NUMBER() OVER (
                     PARTITION BY DATE(timestamp)
-                    ORDER BY timestamp DESC
+                    ORDER BY timestamp DESC, run_id DESC
                 ) AS rn
             FROM {results_ref}
             WHERE DATE(timestamp) >= @start_date
@@ -2011,7 +2011,7 @@ class BigQueryClient:
             c.timestamp,
             ROW_NUMBER() OVER (
               PARTITION BY DATE(c.timestamp), c.campaign_id
-              ORDER BY c.timestamp DESC
+              ORDER BY c.timestamp DESC, c.run_id DESC
             ) AS rn
           FROM {campaigns_ref} c
           JOIN runs r ON c.run_id = r.run_id

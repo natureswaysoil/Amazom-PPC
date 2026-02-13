@@ -168,6 +168,7 @@ def summary():
     # Use deduplication to prevent counting overlapping lookback windows multiple times.
     # Each optimization run contains aggregated metrics from its lookback period.
     # Taking only the most recent run per day prevents duplicate counting.
+    # Using run_id as secondary sort ensures deterministic results.
     sql = f"""
         WITH deduplicated_runs AS (
             SELECT
@@ -178,7 +179,7 @@ def summary():
                 timestamp,
                 ROW_NUMBER() OVER (
                     PARTITION BY DATE(timestamp)
-                    ORDER BY timestamp DESC
+                    ORDER BY timestamp DESC, run_id DESC
                 ) AS rn
             FROM `{PROJECT_ID}.{DATASET_ID}.optimization_results`
         )
