@@ -394,11 +394,15 @@ export default function Home() {
 
   const totalOptimizationRuns = summary.reduce((sum, s) => sum + s.optimization_runs, 0);
   const totalKeywordsOptimized = summary.reduce((sum, s) => sum + s.total_keywords_optimized, 0);
-  const avgAcos = summary.length > 0
-    ? summary.reduce((sum, s) => sum + s.avg_acos, 0) / summary.length
-    : 0;
+  // Calculate ACOS as weighted average (total spend / total sales) for the entire period
+  // This is more accurate than averaging daily ACOS values
   const totalSpend = summary.reduce((sum, s) => sum + s.total_spend, 0);
   const totalSales = summary.reduce((sum, s) => sum + s.total_sales, 0);
+  const avgAcos = totalSales > 0 ? totalSpend / totalSales : 0;
+
+  // Data quality: count days with actual spend/sales data
+  const daysWithData = summary.filter(s => s.total_spend > 0 || s.total_sales > 0).length;
+  const expectedDays = 7; // Dashboard shows 7-day metrics
 
   const navItems: { id: NavigationTab; label: string; icon: string; badge?: string }[] = [
     { id: 'overview', label: 'Overview', icon: '📊' },
@@ -473,6 +477,21 @@ export default function Home() {
           <div style={styles.statValue}>{formatCurrency(totalSales)}</div>
         </div>
       </div>
+
+      {daysWithData < expectedDays && daysWithData > 0 && (
+        <div style={{
+          background: '#fff3cd',
+          border: '1px solid #ffc107',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          margin: '16px 0',
+          fontSize: '14px',
+          color: '#856404'
+        }}>
+          ℹ️ <strong>Data Quality Note:</strong> Showing metrics from {daysWithData} day{daysWithData !== 1 ? 's' : ''} out of {expectedDays} days requested. 
+          Some days may not have optimization run data yet.
+        </div>
+      )}
 
       <div style={styles.tableCard}>
         <h2 style={styles.tableTitle}>📊 Recent Optimization Runs</h2>
