@@ -588,6 +588,9 @@ class DashboardClient:
             'bids_increased': 0,
             'bids_decreased': 0,
             'negative_keywords_added': 0,
+            'keywords_discovered': 0,
+            'keywords_added': 0,
+            'dayparting_keywords_updated': 0,
             'budget_changes': 0,
             'total_spend': 0.0,
             'total_sales': 0.0,
@@ -597,29 +600,14 @@ class DashboardClient:
         total_spend = 0.0
         total_sales = 0.0
 
-        # Extract from bid_optimization
-        if 'bid_optimization' in results:
-            bid_data = results['bid_optimization']
-            summary['bids_increased'] += bid_data.get('bids_increased', 0)
-            summary['bids_decreased'] += bid_data.get('bids_decreased', 0)
-            summary['keywords_optimized'] += bid_data.get(
-                'keywords_optimized',
-                bid_data.get('bids_increased', 0) + bid_data.get('bids_decreased', 0)
-            )
-            total_spend += bid_data.get('total_spend', 0.0)
-            total_sales += bid_data.get('total_sales', 0.0)
-
-        # Extract from negative_keywords
-        if 'negative_keywords' in results:
-            neg_data = results['negative_keywords']
-            summary['negative_keywords_added'] += neg_data.get(
-                'negative_keywords_added',
-                neg_data.get('keywords_added', 0)
-            )
-
-        # Extract from campaign_management
+        # Priority order for spend/sales: Use campaign_management as primary source
+        # (most complete view), fall back to bid_optimization if not available.
+        # Do NOT sum both as they measure the same data at different granularities.
         if 'campaign_management' in results:
             camp_data = results['campaign_management']
+            total_spend = camp_data.get('total_spend', 0.0)
+            total_sales = camp_data.get('total_sales', 0.0)
+            
             campaigns_analyzed = camp_data.get('campaigns_analyzed')
             if campaigns_analyzed is None:
                 campaigns_analyzed = (
@@ -637,10 +625,44 @@ class DashboardClient:
                 'budget_changes',
                 camp_data.get('campaigns_paused', 0) + camp_data.get('campaigns_activated', 0)
             )
-            total_spend += camp_data.get('total_spend', 0.0)
-            total_sales += camp_data.get('total_sales', 0.0)
-            # If module already calculated ACOS, prefer that value
-            pass  # Removed logic that overwrites average_acos; always use aggregate calculation
+        elif 'bid_optimization' in results:
+            # Fall back to bid_optimization if campaign_management not available
+            bid_data = results['bid_optimization']
+            total_spend = bid_data.get('total_spend', 0.0)
+            total_sales = bid_data.get('total_sales', 0.0)
+
+        # Extract from bid_optimization (counts only, not spend/sales)
+        if 'bid_optimization' in results:
+            bid_data = results['bid_optimization']
+            summary['bids_increased'] += bid_data.get('bids_increased', 0)
+            summary['bids_decreased'] += bid_data.get('bids_decreased', 0)
+            summary['keywords_optimized'] += bid_data.get(
+                'keywords_optimized',
+                bid_data.get('bids_increased', 0) + bid_data.get('bids_decreased', 0)
+            )
+
+        # Extract from negative_keywords
+        if 'negative_keywords' in results:
+            neg_data = results['negative_keywords']
+            summary['negative_keywords_added'] += neg_data.get(
+                'negative_keywords_added',
+                neg_data.get('keywords_added', 0)
+            )
+        
+        # Extract from keyword_discovery
+        if 'keyword_discovery' in results:
+            kd_data = results['keyword_discovery']
+            summary['keywords_discovered'] += kd_data.get('keywords_discovered', 0)
+            summary['keywords_added'] += kd_data.get(
+                'keywords_added',
+                kd_data.get('keywords_would_add', 0)
+            )
+        
+        # Extract from dayparting
+        if 'dayparting' in results:
+            dp_data = results['dayparting']
+            summary['dayparting_keywords_updated'] += dp_data.get('keywords_updated', 0)
+
         # Populate totals and derived averages
         summary['total_spend'] = total_spend
         summary['total_sales'] = total_sales
