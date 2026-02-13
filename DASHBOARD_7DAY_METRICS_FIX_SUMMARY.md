@@ -2,7 +2,53 @@
 
 **Date:** 2026-02-13  
 **Issue:** Dashboard showing incorrect spend and sales data due to duplicate counting  
-**Status:** ✅ Complete - Ready for deployment
+**Status:** ✅ Complete - All queries fixed with deduplication (2026-02-13 update)
+
+---
+
+## 🆕 UPDATE 2026-02-13: Additional Deduplication Fixes
+
+In addition to the original `campaign_details` deduplication, we have now fixed ALL remaining queries that caused duplicate counting:
+
+### Fixed Queries
+
+1. **Fallback Query in `fetch_daily_overview()`** (bigquery_client.py)
+   - Previously: Summed `total_spend`/`total_sales` from all runs without deduplication
+   - Now: Uses ROW_NUMBER() to take only the most recent run per day
+   - Impact: Prevents 2-3x inflation when performance tables are unavailable
+
+2. **`fetch_campaigns_summary()`** (bigquery_client.py)
+   - Previously: Summed campaign metrics across all runs in the time period
+   - Now: Deduplicates by date and campaign_id before summing
+   - Impact: Campaign-level metrics now accurate across multiple daily runs
+
+3. **Dashboard `/api/summary` endpoint** (dashboard/app.py)
+   - Previously: Summed metrics from all optimization results without deduplication
+   - Now: Takes only the most recent run per day before aggregating
+   - Impact: Overall summary metrics are now accurate
+
+### Deduplication Pattern Used
+
+All three fixes use the same proven pattern:
+```sql
+WITH deduplicated AS (
+    SELECT
+        ...,
+        ROW_NUMBER() OVER (
+            PARTITION BY DATE(timestamp) [, additional_keys]
+            ORDER BY timestamp DESC
+        ) AS rn
+    FROM source_table
+    WHERE ...
+)
+SELECT ... FROM deduplicated WHERE rn = 1
+```
+
+This ensures:
+- ✅ Each day is counted exactly once
+- ✅ Most recent data is used (latest snapshot)
+- ✅ No overlapping lookback windows
+- ✅ Accurate totals across all metrics
 
 ---
 
