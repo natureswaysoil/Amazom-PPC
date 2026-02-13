@@ -245,6 +245,42 @@ class DashboardClient:
         
         return self.current_run_id
     
+    def complete_run(self, duration_seconds: float, dry_run: bool = False) -> bool:
+        """
+        Mark the optimization run as completed
+        
+        Sends a "completed" status event to the dashboard to close the lifecycle
+        of the run that was started with start_run().
+        
+        Args:
+            duration_seconds: Duration of the optimization run
+            dry_run: Whether this was a dry run
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.enabled or not self.send_real_time_updates:
+            logger.debug("Dashboard client disabled or real-time updates disabled, skipping completed status")
+            return False
+        
+        payload = {
+            'timestamp': datetime.now().isoformat(),
+            'run_id': self.current_run_id,
+            'status': 'completed',
+            'profile_id': self.profile_id,
+            'dry_run': dry_run,
+            'duration': duration_seconds
+        }
+        
+        response = self._make_request('/api/optimization-status', payload)
+        
+        if response is not None:
+            logger.info("Run marked as completed in dashboard")
+            return True
+        else:
+            logger.warning("Failed to mark run as completed in dashboard")
+            return False
+    
     @retry_with_backoff(max_attempts=3, initial_delay=2, max_delay=10)
     def send_results(self, results: Dict, config: Dict, duration_seconds: float, 
                     dry_run: bool = False) -> bool:
