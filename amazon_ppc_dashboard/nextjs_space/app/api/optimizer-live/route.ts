@@ -187,7 +187,6 @@ async function handleAnalyticsSection(days: string): Promise<any> {
           CASE 
             WHEN JSON_EXTRACT_SCALAR(features, '$.campaigns') IS NOT NULL 
             THEN JSON_EXTRACT_SCALAR(features, '$.campaigns')
-            ELSE NULL
           END
         ) as total_campaigns,
         COUNTIF(status = 'success') * 100.0 / COUNT(*) as success_rate
@@ -211,7 +210,7 @@ async function handleAnalyticsSection(days: string): Promise<any> {
           campaign_name,
           SUM(CAST(spend AS FLOAT64)) as spend,
           SUM(CAST(sales AS FLOAT64)) as sales,
-          SAFE_DIVIDE(SUM(CAST(spend AS FLOAT64)), SUM(CAST(sales AS FLOAT64))) as acos,
+          SAFE_DIVIDE(SUM(CAST(spend AS FLOAT64)), SUM(CAST(sales AS FLOAT64))) * 100 as acos,
           COUNT(*) as changes
         FROM \`${projectId}.${datasetId}.campaign_details\`
         WHERE segments_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)

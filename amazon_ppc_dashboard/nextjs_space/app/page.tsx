@@ -941,10 +941,13 @@ export default function Home() {
     const analyticsData = analyticsState.data?.data?.data;
 
     // Helper function to format trend indicator
-    const formatTrend = (value: number) => {
-      if (!value || value === 0) return '—';
-      const color = value > 0 ? '#28a745' : '#dc3545';
-      const arrow = value > 0 ? '↑' : '↓';
+    const formatTrend = (value: number, invertColors = false) => {
+      if (value === null || value === undefined || value === 0) return '—';
+      const isPositive = value > 0;
+      const color = invertColors 
+        ? (isPositive ? '#dc3545' : '#28a745')  // Inverted: positive is red, negative is green
+        : (isPositive ? '#28a745' : '#dc3545'); // Normal: positive is green, negative is red
+      const arrow = isPositive ? '↑' : '↓';
       return <span style={{ color }}>{arrow} {Math.abs(value).toFixed(1)}%</span>;
     };
 
@@ -1034,7 +1037,7 @@ export default function Home() {
                   </div>
                   <div style={styles.statCard}>
                     <div style={styles.statLabel}>ACOS Change</div>
-                    <div style={styles.statValue}>{formatTrend(analyticsData.comparative.wow.acos_change)}</div>
+                    <div style={styles.statValue}>{formatTrend(analyticsData.comparative.wow.acos_change, true)}</div>
                   </div>
                 </div>
               </div>
@@ -1118,7 +1121,7 @@ export default function Home() {
                             <td style={styles.td}>{campaign.campaign_name || 'Unknown'}</td>
                             <td style={styles.td}>{formatCurrency(campaign.spend || 0)}</td>
                             <td style={styles.td}>{formatCurrency(campaign.sales || 0)}</td>
-                            <td style={styles.td}>{((campaign.acos || 0) * 100).toFixed(2)}%</td>
+                            <td style={styles.td}>{(campaign.acos || 0).toFixed(2)}%</td>
                             <td style={styles.td}>{roas.toFixed(2)}x</td>
                             <td style={styles.td}>{campaign.changes || 0}</td>
                           </tr>
