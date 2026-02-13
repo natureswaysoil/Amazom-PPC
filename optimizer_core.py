@@ -1959,6 +1959,10 @@ class BidOptimizer:
         # Track keyword performance for top performers list
         keyword_performance = []
         
+        # Track total spend and sales across ALL keywords
+        total_spend = 0.0
+        total_sales = 0.0
+        
         # Analyze each keyword
         for idx, row in enumerate(report_data):
             keyword_id = row.get('keywordId')
@@ -1976,6 +1980,10 @@ class BidOptimizer:
                 sales=float(row.get('attributedSales14d', 0) or 0),
                 orders=int(row.get('attributedConversions14d', 0) or 0)
             )
+            
+            # Accumulate totals from ALL keywords (including those with no sales)
+            total_spend += metrics.cost
+            total_sales += metrics.sales
             
             # Calculate ACOS for this keyword
             acos = (metrics.cost / metrics.sales) if metrics.sales > 0 else 0.0
@@ -2045,10 +2053,11 @@ class BidOptimizer:
         top_performers = keyword_performance[:20]
         results['top_performers'] = top_performers
         
-        # Calculate totals for summary
-        results['total_spend'] = sum(kw['cost'] for kw in keyword_performance)
-        results['total_sales'] = sum(kw['sales'] for kw in keyword_performance)
+        # Use totals accumulated from ALL keywords (not just top performers)
+        results['total_spend'] = total_spend
+        results['total_sales'] = total_sales
         
+        logger.info(f"Fetched spend=${total_spend:.2f}, sales=${total_sales:.2f} from {results['keywords_analyzed']} keywords")
         logger.info(f"Collected {len(top_performers)} top performing keywords for dashboard")
         
         elapsed = time.time() - start_time
@@ -2421,16 +2430,16 @@ class CampaignManager:
             cost = float(row.get('cost', 0) or 0)
             sales = float(row.get('attributedSales14d', 0) or 0)
             
-            # Skip if not enough data
+            # Track aggregated metrics for dashboard reporting (for ALL campaigns)
+            results['total_spend'] += cost
+            results['total_sales'] += sales
+            
+            # Skip action if not enough data to make decisions
             if cost < min_spend:
                 results['no_change'] += 1
                 continue
 
             acos = (cost / sales) if sales > 0 else float('inf')
-
-            # Track aggregated metrics for dashboard reporting
-            results['total_spend'] += cost
-            results['total_sales'] += sales
             
             # Calculate ACOS and other metrics for this campaign
             campaign_acos = (cost / sales) if sales > 0 else 0.0
@@ -2513,10 +2522,11 @@ class CampaignManager:
         campaign_details.sort(key=lambda x: x['spend'], reverse=True)
         results['campaigns'] = campaign_details
         
+        logger.info(f"Fetched spend=${results['total_spend']:.2f}, sales=${results['total_sales']:.2f} from {len(analyzed_campaign_ids)} campaigns with metrics")
         logger.info(f"Collected {len(campaign_details)} campaign details for dashboard")
 
         elapsed = time.time() - start_time
-        logger.info(f"Campaign management complete in {elapsed:.2f}s: {results}")
+        logger.info(f"Campaign management complete in {elapsed:.2f}s: Active={results['campaigns_analyzed']}, WithMetrics={results['campaigns_with_metrics']}, Activated={results['campaigns_activated']}, Paused={results['campaigns_paused']}")
         results['execution_time_seconds'] = round(elapsed, 2)
 
         # Propagate fetch error for visibility if no campaigns were analyzed
