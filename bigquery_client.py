@@ -1624,6 +1624,12 @@ class BigQueryClient:
                 ORDER BY day DESC
                 """
 
+        # FALLBACK QUERY - LAST RESORT ONLY
+        # WARNING: This query sums total_spend/total_sales from optimization_results,
+        # which can cause DUPLICATE COUNTING because each optimization run contains
+        # aggregated metrics from its 14-30 day lookback window.
+        # This fallback should only be used when no performance tables are available.
+        # Multiple runs per day will count the same spend/sales multiple times.
         fallback_query = f"""
         SELECT
             DATE(timestamp) AS day,

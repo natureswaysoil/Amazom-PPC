@@ -399,7 +399,7 @@ export default function Home() {
   const totalSpend = summary.reduce((sum, s) => sum + s.total_spend, 0);
   const totalSales = summary.reduce((sum, s) => sum + s.total_sales, 0);
   const avgAcos = totalSales > 0 ? totalSpend / totalSales : 0;
-  
+
   // Data quality: count days with actual spend/sales data
   const daysWithData = summary.filter(s => s.total_spend > 0 || s.total_sales > 0).length;
   const expectedDays = 7; // Dashboard shows 7-day metrics
