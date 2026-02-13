@@ -1620,9 +1620,9 @@ class BigQueryClient:
                 FROM {perf_ref}
                 WHERE SAFE_CAST(`{date_col}` AS DATE) >= @start_date
                     {perf_profile_filter}
-            GROUP BY day
-            ORDER BY day DESC
-            """
+                GROUP BY day
+                ORDER BY day DESC
+                """
 
         fallback_query = f"""
         SELECT
