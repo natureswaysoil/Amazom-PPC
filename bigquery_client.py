@@ -1625,24 +1625,38 @@ class BigQueryClient:
                 """
 
         # FALLBACK QUERY - LAST RESORT ONLY
-        # WARNING: This query sums total_spend/total_sales from optimization_results,
-        # which can cause DUPLICATE COUNTING because each optimization run contains
-        # aggregated metrics from its 14-30 day lookback window.
-        # This fallback should only be used when no performance tables are available.
-        # Multiple runs per day will count the same spend/sales multiple times.
+        # This query uses optimization_results as a fallback when no performance tables are available.
+        # To prevent DUPLICATE COUNTING (each run contains aggregated metrics from lookback windows),
+        # we deduplicate by taking only the most recent run per day.
+        # This ensures we count metrics only once per day, avoiding inflation from multiple daily runs.
         fallback_query = f"""
+        WITH deduplicated_runs AS (
+            SELECT
+                DATE(timestamp) AS day,
+                COALESCE(total_spend, 0) AS total_spend,
+                COALESCE(total_sales, 0) AS total_sales,
+                COALESCE(campaigns_analyzed, 0) AS campaigns_analyzed,
+                COALESCE(keywords_optimized, 0) AS keywords_optimized,
+                COALESCE(budget_changes, 0) AS budget_changes,
+                ROW_NUMBER() OVER (
+                    PARTITION BY DATE(timestamp)
+                    ORDER BY timestamp DESC
+                ) AS rn
+            FROM {results_ref}
+            WHERE DATE(timestamp) >= @start_date
+                AND (@profile_id IS NULL OR profile_id = @profile_id)
+        )
         SELECT
-            DATE(timestamp) AS day,
+            day,
             COUNT(1) AS runs,
-            SUM(COALESCE(total_spend, 0)) AS total_spend,
-            SUM(COALESCE(total_sales, 0)) AS total_sales,
-            SAFE_DIVIDE(SUM(COALESCE(total_spend, 0)), NULLIF(SUM(COALESCE(total_sales, 0)), 0)) AS blended_acos,
-            SUM(COALESCE(campaigns_analyzed, 0)) AS campaigns_analyzed,
-            SUM(COALESCE(keywords_optimized, 0)) AS keywords_optimized,
-            SUM(COALESCE(budget_changes, 0)) AS budget_changes
-        FROM {results_ref}
-        WHERE DATE(timestamp) >= @start_date
-            AND (@profile_id IS NULL OR profile_id = @profile_id)
+            SUM(total_spend) AS total_spend,
+            SUM(total_sales) AS total_sales,
+            SAFE_DIVIDE(SUM(total_spend), NULLIF(SUM(total_sales), 0)) AS blended_acos,
+            SUM(campaigns_analyzed) AS campaigns_analyzed,
+            SUM(keywords_optimized) AS keywords_optimized,
+            SUM(budget_changes) AS budget_changes
+        FROM deduplicated_runs
+        WHERE rn = 1
         GROUP BY day
         ORDER BY day DESC
         """
@@ -1966,7 +1980,11 @@ class BigQueryClient:
         limit: int = 200,
         profile_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Return campaign aggregates by joining campaign_details to optimization_results."""
+        """Return campaign aggregates by joining campaign_details to optimization_results.
+        
+        Uses deduplication to prevent duplicate counting when campaigns appear in multiple runs.
+        For each campaign and date, takes only the most recent run's data to avoid inflated metrics.
+        """
 
         days = max(1, min(int(days), 365))
         limit = max(1, min(int(limit), 500))
@@ -1976,23 +1994,40 @@ class BigQueryClient:
 
         query = f"""
         WITH runs AS (
-          SELECT run_id
+          SELECT run_id, timestamp
           FROM {results_ref}
           WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
             AND (@profile_id IS NULL OR profile_id = @profile_id)
+        ),
+        deduplicated_campaigns AS (
+          SELECT
+            c.campaign_id,
+            c.campaign_name,
+            c.spend,
+            c.sales,
+            c.impressions,
+            c.clicks,
+            c.conversions,
+            c.timestamp,
+            ROW_NUMBER() OVER (
+              PARTITION BY DATE(c.timestamp), c.campaign_id
+              ORDER BY c.timestamp DESC
+            ) AS rn
+          FROM {campaigns_ref} c
+          JOIN runs r ON c.run_id = r.run_id
         )
         SELECT
-          c.campaign_id AS campaign_id,
-          ANY_VALUE(c.campaign_name) AS campaign_name,
-          SUM(COALESCE(c.spend, 0)) AS spend,
-          SUM(COALESCE(c.sales, 0)) AS sales,
-          SAFE_DIVIDE(SUM(COALESCE(c.spend, 0)), NULLIF(SUM(COALESCE(c.sales, 0)), 0)) AS acos,
-          SUM(COALESCE(c.impressions, 0)) AS impressions,
-          SUM(COALESCE(c.clicks, 0)) AS clicks,
-          SUM(COALESCE(c.conversions, 0)) AS conversions,
-          MAX(c.timestamp) AS last_seen
-        FROM {campaigns_ref} c
-        JOIN runs r ON c.run_id = r.run_id
+          campaign_id,
+          ANY_VALUE(campaign_name) AS campaign_name,
+          SUM(COALESCE(spend, 0)) AS spend,
+          SUM(COALESCE(sales, 0)) AS sales,
+          SAFE_DIVIDE(SUM(COALESCE(spend, 0)), NULLIF(SUM(COALESCE(sales, 0)), 0)) AS acos,
+          SUM(COALESCE(impressions, 0)) AS impressions,
+          SUM(COALESCE(clicks, 0)) AS clicks,
+          SUM(COALESCE(conversions, 0)) AS conversions,
+          MAX(timestamp) AS last_seen
+        FROM deduplicated_campaigns
+        WHERE rn = 1
         GROUP BY campaign_id
         ORDER BY spend DESC
         LIMIT @limit

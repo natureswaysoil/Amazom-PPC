@@ -165,7 +165,23 @@ def table_schema(table):
 def summary():
     client = get_bq_client()
 
+    # Use deduplication to prevent counting overlapping lookback windows multiple times.
+    # Each optimization run contains aggregated metrics from its lookback period.
+    # Taking only the most recent run per day prevents duplicate counting.
     sql = f"""
+        WITH deduplicated_runs AS (
+            SELECT
+                total_spend,
+                total_sales,
+                average_acos,
+                keywords_optimized,
+                timestamp,
+                ROW_NUMBER() OVER (
+                    PARTITION BY DATE(timestamp)
+                    ORDER BY timestamp DESC
+                ) AS rn
+            FROM `{PROJECT_ID}.{DATASET_ID}.optimization_results`
+        )
         SELECT
             COUNT(*) AS total_runs,
             SUM(keywords_optimized) AS keywords_optimized,
@@ -173,7 +189,8 @@ def summary():
             SUM(total_spend) AS total_spend,
             SUM(total_sales) AS total_sales,
             MAX(timestamp) AS last_run
-        FROM `{PROJECT_ID}.{DATASET_ID}.optimization_results`
+        FROM deduplicated_runs
+        WHERE rn = 1
     """
 
     rows = list(client.query(sql))
