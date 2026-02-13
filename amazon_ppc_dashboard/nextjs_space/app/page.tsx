@@ -60,7 +60,7 @@ interface SummaryData {
 
 type NavigationTab = 'overview' | 'campaigns' | 'automation' | 'discovery' | 'budget' | 'dayparting' | 'reports' | 'analytics' | 'performance' | 'hourly' | 'searchterms' | 'datatable' | 'settings';
 
-type LiveSection = 'campaigns' | 'automation' | 'discovery' | 'budget' | 'dayparting' | 'reports';
+type LiveSection = 'campaigns' | 'automation' | 'discovery' | 'budget' | 'dayparting' | 'reports' | 'analytics';
 
 type LiveSectionState = {
   loading: boolean;
@@ -87,6 +87,7 @@ export default function Home() {
     budget: { loading: false, error: null, data: null },
     dayparting: { loading: false, error: null, data: null },
     reports: { loading: false, error: null, data: null },
+    analytics: { loading: false, error: null, data: null },
   });
 
   const pickMostRecentMeaningfulResult = () => {
@@ -119,7 +120,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const sectionsNeedingFetch: LiveSection[] = ['campaigns', 'automation', 'discovery', 'budget', 'dayparting', 'reports'];
+    const sectionsNeedingFetch: LiveSection[] = ['campaigns', 'automation', 'discovery', 'budget', 'dayparting', 'reports', 'analytics'];
     if (!sectionsNeedingFetch.includes(activeTab as LiveSection)) return;
 
     const section = activeTab as LiveSection;
@@ -935,17 +936,264 @@ export default function Home() {
     </div>
   );
 
-  const renderAnalyticsTab = () => (
-    <div style={styles.tableCard}>
-      <h2 style={styles.tableTitle}>📉 Analytics</h2>
-      <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-        <p>Advanced analytics and insights coming soon...</p>
-        <p style={{ fontSize: '14px', marginTop: '10px' }}>
-          View trends, patterns, and predictive analytics for your campaigns.
-        </p>
+  const renderAnalyticsTab = () => {
+    const analyticsState = liveSections.analytics;
+    const analyticsData = analyticsState.data?.data?.data;
+
+    // Helper function to format trend indicator
+    const formatTrend = (value: number) => {
+      if (!value || value === 0) return '—';
+      const color = value > 0 ? '#28a745' : '#dc3545';
+      const arrow = value > 0 ? '↑' : '↓';
+      return <span style={{ color }}>{arrow} {Math.abs(value).toFixed(1)}%</span>;
+    };
+
+    // Helper function to format currency
+    const formatCurrency = (value: number) => {
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
+    };
+
+    // Helper function to format number
+    const formatNumber = (value: number) => {
+      return new Intl.NumberFormat('en-US').format(Math.round(value || 0));
+    };
+
+    return (
+      <div style={styles.tableCard}>
+        <h2 style={styles.tableTitle}>📉 Analytics Dashboard</h2>
+        
+        {analyticsState.loading && (
+          <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+            <p>Loading analytics data...</p>
+          </div>
+        )}
+
+        {analyticsState.error && !analyticsState.loading && (
+          <div style={{ padding: '20px', textAlign: 'center' }}>
+            <p style={{ color: '#b00020', margin: 0 }}>{analyticsState.error}</p>
+            <p style={{ fontSize: '14px', color: '#666', marginTop: '10px' }}>
+              Unable to fetch analytics data. Please ensure BigQuery is configured and contains optimization results.
+            </p>
+          </div>
+        )}
+
+        {!analyticsState.loading && !analyticsState.error && !analyticsData && (
+          <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
+            <p>No analytics data available yet.</p>
+            <p style={{ fontSize: '14px', marginTop: '10px' }}>
+              Run optimizations to populate the analytics dashboard with trends and insights.
+            </p>
+          </div>
+        )}
+
+        {!analyticsState.loading && analyticsData && (
+          <div style={{ padding: '20px' }}>
+            {/* Key Metrics Cards */}
+            <div style={styles.featureSection}>
+              <h3 style={styles.featureTitle}>📊 Key Metrics (Last 30 Days)</h3>
+              <div style={styles.statsGrid}>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Total Runs</div>
+                  <div style={styles.statValue}>{formatNumber(analyticsData.metrics?.total_runs || 0)}</div>
+                </div>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Keywords Optimized</div>
+                  <div style={styles.statValue}>{formatNumber(analyticsData.metrics?.total_keywords || 0)}</div>
+                </div>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Average ACOS</div>
+                  <div style={styles.statValue}>{(analyticsData.metrics?.avg_acos || 0).toFixed(2)}%</div>
+                </div>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Success Rate</div>
+                  <div style={styles.statValue}>{(analyticsData.metrics?.success_rate || 0).toFixed(1)}%</div>
+                </div>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Avg Run Duration</div>
+                  <div style={styles.statValue}>{(analyticsData.metrics?.avg_duration || 0).toFixed(0)}s</div>
+                </div>
+                <div style={styles.statCard}>
+                  <div style={styles.statLabel}>Campaigns Analyzed</div>
+                  <div style={styles.statValue}>{formatNumber(analyticsData.metrics?.total_campaigns || 0)}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Comparative Analysis */}
+            {analyticsData.comparative?.wow && (
+              <div style={styles.featureSection}>
+                <h3 style={styles.featureTitle}>📈 Week-over-Week Changes</h3>
+                <div style={styles.statsGrid}>
+                  <div style={styles.statCard}>
+                    <div style={styles.statLabel}>Spend Change</div>
+                    <div style={styles.statValue}>{formatTrend(analyticsData.comparative.wow.spend_change)}</div>
+                  </div>
+                  <div style={styles.statCard}>
+                    <div style={styles.statLabel}>Sales Change</div>
+                    <div style={styles.statValue}>{formatTrend(analyticsData.comparative.wow.sales_change)}</div>
+                  </div>
+                  <div style={styles.statCard}>
+                    <div style={styles.statLabel}>ACOS Change</div>
+                    <div style={styles.statValue}>{formatTrend(analyticsData.comparative.wow.acos_change)}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Predictive Indicators */}
+            {analyticsData.predictions && (
+              <div style={styles.featureSection}>
+                <h3 style={styles.featureTitle}>🔮 Predictive Indicators</h3>
+                <div style={styles.statsGrid}>
+                  <div style={styles.statCard}>
+                    <div style={styles.statLabel}>Optimization Velocity</div>
+                    <div style={styles.statValue}>{(analyticsData.predictions.runs_per_week || 0).toFixed(1)} runs/week</div>
+                  </div>
+                  <div style={styles.statCard}>
+                    <div style={styles.statLabel}>Keyword Optimization Rate</div>
+                    <div style={styles.statValue}>{(analyticsData.predictions.keywords_per_run || 0).toFixed(0)} keywords/run</div>
+                  </div>
+                  <div style={styles.statCard}>
+                    <div style={styles.statLabel}>Efficiency Score</div>
+                    <div style={styles.statValue}>{formatCurrency(analyticsData.predictions.efficiency_score || 0)}/keyword</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Performance Trends */}
+            {analyticsData.trends?.daily && analyticsData.trends.daily.length > 0 && (
+              <div style={styles.featureSection}>
+                <h3 style={styles.featureTitle}>📊 Performance Trends</h3>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={styles.table}>
+                    <thead>
+                      <tr>
+                        <th style={styles.th}>Date</th>
+                        <th style={styles.th}>Runs</th>
+                        <th style={styles.th}>Keywords</th>
+                        <th style={styles.th}>Spend</th>
+                        <th style={styles.th}>Sales</th>
+                        <th style={styles.th}>ACOS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {analyticsData.trends.daily.slice(-14).reverse().map((day: any, idx: number) => (
+                        <tr key={day.date || idx} style={idx % 2 === 0 ? styles.evenRow : styles.oddRow}>
+                          <td style={styles.td}>{day.date}</td>
+                          <td style={styles.td}>{day.runs || 0}</td>
+                          <td style={styles.td}>{formatNumber(day.keywords || 0)}</td>
+                          <td style={styles.td}>{formatCurrency(day.spend || 0)}</td>
+                          <td style={styles.td}>{formatCurrency(day.sales || 0)}</td>
+                          <td style={styles.td}>{(day.acos || 0).toFixed(2)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Campaign Analytics */}
+            {analyticsData.campaigns && analyticsData.campaigns.length > 0 && (
+              <div style={styles.featureSection}>
+                <h3 style={styles.featureTitle}>🎯 Top Campaigns by Spend</h3>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={styles.table}>
+                    <thead>
+                      <tr>
+                        <th style={styles.th}>Campaign</th>
+                        <th style={styles.th}>Spend</th>
+                        <th style={styles.th}>Sales</th>
+                        <th style={styles.th}>ACOS</th>
+                        <th style={styles.th}>ROAS</th>
+                        <th style={styles.th}>Changes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {analyticsData.campaigns.slice(0, 10).map((campaign: any, idx: number) => {
+                        const roas = campaign.spend > 0 ? campaign.sales / campaign.spend : 0;
+                        return (
+                          <tr key={campaign.campaign_id || idx} style={idx % 2 === 0 ? styles.evenRow : styles.oddRow}>
+                            <td style={styles.td}>{campaign.campaign_name || 'Unknown'}</td>
+                            <td style={styles.td}>{formatCurrency(campaign.spend || 0)}</td>
+                            <td style={styles.td}>{formatCurrency(campaign.sales || 0)}</td>
+                            <td style={styles.td}>{((campaign.acos || 0) * 100).toFixed(2)}%</td>
+                            <td style={styles.td}>{roas.toFixed(2)}x</td>
+                            <td style={styles.td}>{campaign.changes || 0}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Simple Trend Visualization */}
+            {analyticsData.trends?.daily && analyticsData.trends.daily.length > 5 && (
+              <div style={styles.featureSection}>
+                <h3 style={styles.featureTitle}>📈 Spend vs Sales Trend</h3>
+                <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-end', height: '200px', padding: '10px' }}>
+                  {analyticsData.trends.daily.slice(-14).map((day: any, idx: number) => {
+                    const maxSpend = Math.max(...analyticsData.trends.daily.map((d: any) => d.spend || 0));
+                    const maxSales = Math.max(...analyticsData.trends.daily.map((d: any) => d.sales || 0));
+                    const spendHeight = maxSpend > 0 ? (day.spend / maxSpend) * 150 : 0;
+                    const salesHeight = maxSales > 0 ? (day.sales / maxSales) * 150 : 0;
+                    
+                    return (
+                      <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px' }}>
+                        <div style={{ display: 'flex', gap: '2px', alignItems: 'flex-end', height: '150px' }}>
+                          <div
+                            style={{
+                              width: '12px',
+                              height: `${spendHeight}px`,
+                              backgroundColor: '#ff6b6b',
+                              borderRadius: '2px 2px 0 0',
+                            }}
+                            title={`Spend: ${formatCurrency(day.spend || 0)}`}
+                          />
+                          <div
+                            style={{
+                              width: '12px',
+                              height: `${salesHeight}px`,
+                              backgroundColor: '#51cf66',
+                              borderRadius: '2px 2px 0 0',
+                            }}
+                            title={`Sales: ${formatCurrency(day.sales || 0)}`}
+                          />
+                        </div>
+                        <div style={{ fontSize: '10px', color: '#666', transform: 'rotate(-45deg)', whiteSpace: 'nowrap' }}>
+                          {day.date?.split('-').slice(1).join('/')}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: 'flex', gap: '20px', justifyContent: 'center', marginTop: '20px', fontSize: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: '#ff6b6b', borderRadius: '2px' }} />
+                    <span>Spend</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: '#51cf66', borderRadius: '2px' }} />
+                    <span>Sales</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Data Timestamp */}
+            {analyticsState.loadedAt && (
+              <div style={{ textAlign: 'center', fontSize: '12px', color: '#999', marginTop: '20px' }}>
+                Last updated: {new Date(analyticsState.loadedAt).toLocaleString()}
+              </div>
+            )}
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderPerformanceTab = () => (
     <div style={styles.tableCard}>
