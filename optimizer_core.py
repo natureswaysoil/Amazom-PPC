@@ -1982,6 +1982,9 @@ class BidOptimizer:
             )
             
             # Accumulate totals from ALL keywords (including those with no sales)
+            # NOTE: We cannot use sum() on keyword_performance after the loop because
+            # keyword_performance only contains keywords with sales > 0 (see line 2023).
+            # We need totals from ALL keywords in report_data, not just high performers.
             total_spend += metrics.cost
             total_sales += metrics.sales
             
@@ -2057,7 +2060,7 @@ class BidOptimizer:
         results['total_spend'] = total_spend
         results['total_sales'] = total_sales
         
-        logger.info(f"Fetched spend=${total_spend:.2f}, sales=${total_sales:.2f} from {results['keywords_analyzed']} keywords")
+        logger.info(f"Accumulated spend=${total_spend:.2f}, sales=${total_sales:.2f} from {results['keywords_analyzed']} keywords")
         logger.info(f"Collected {len(top_performers)} top performing keywords for dashboard")
         
         elapsed = time.time() - start_time
@@ -2522,7 +2525,7 @@ class CampaignManager:
         campaign_details.sort(key=lambda x: x['spend'], reverse=True)
         results['campaigns'] = campaign_details
         
-        logger.info(f"Fetched spend=${results['total_spend']:.2f}, sales=${results['total_sales']:.2f} from {len(analyzed_campaign_ids)} campaigns with metrics")
+        logger.info(f"Accumulated spend=${results['total_spend']:.2f}, sales=${results['total_sales']:.2f} from {len(analyzed_campaign_ids)} campaigns with metrics")
         logger.info(f"Collected {len(campaign_details)} campaign details for dashboard")
 
         elapsed = time.time() - start_time

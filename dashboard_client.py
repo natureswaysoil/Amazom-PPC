@@ -602,7 +602,10 @@ class DashboardClient:
 
         # Priority order for spend/sales: Use campaign_management as primary source
         # (most complete view), fall back to bid_optimization if not available.
-        # Do NOT sum both as they measure the same data at different granularities.
+        # Do NOT sum both as they measure the same data at different granularities:
+        # - campaign_management: Aggregates spend/sales at campaign level
+        # - bid_optimization: Aggregates spend/sales at keyword level
+        # Since keywords belong to campaigns, summing both would double-count!
         if 'campaign_management' in results:
             camp_data = results['campaign_management']
             total_spend = camp_data.get('total_spend', 0.0)
