@@ -260,6 +260,7 @@ class DashboardClient:
             True if successful, False otherwise
         """
         if not self.enabled or not self.send_real_time_updates:
+            logger.debug("Dashboard client disabled or real-time updates disabled, skipping completed status")
             return False
         
         payload = {

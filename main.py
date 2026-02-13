@@ -1136,10 +1136,14 @@ def run_optimizer(request) -> Tuple[Dict[str, Any], int]:
     # Send to Dashboard (which now also writes to BigQuery automatically)
     try:
       dashboard_client.send_results(results, config, duration, dry_run)
-      # Mark the run as completed in the dashboard
-      dashboard_client.complete_run(duration, dry_run)
     except Exception as e:
       logger.warning(f"Dashboard update failed: {e}")
+    
+    # Mark the run as completed in the dashboard (always try, even if send_results failed)
+    try:
+      dashboard_client.complete_run(duration, dry_run)
+    except Exception as e:
+      logger.warning(f"Failed to mark run as completed: {e}")
 
     # Email & Finish
     summary = format_results_summary(results, duration, dry_run)
