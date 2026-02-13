@@ -1329,6 +1329,17 @@ class BigQueryClient:
 
         def _resolve_perf_source() -> Optional[Dict[str, Any]]:
             sources = [
+                # campaign_details: Contains campaign-level data from each optimization run.
+                # Each row represents a campaign's metrics during an optimization run's lookback window.
+                # We deduplicate by taking the most recent run's data per day to avoid counting
+                # overlapping lookback windows multiple times.
+                {
+                    "table_id": "campaign_details",
+                    "date": ["timestamp"],
+                    "spend": ["spend"],
+                    "sales": ["sales"],
+                    "use_deduplication": True,  # Special flag for campaign_details
+                },
                 {
                     "table_id": "campaign_performance",
                     "date": ["segments_date", "segmentsDate", "report_date", "reportDate", "date", "timestamp"],
@@ -1444,6 +1455,19 @@ class BigQueryClient:
                 if not date_col or not spend_col or not sales_col:
                     continue
 
+                # For deduplication, we also need campaign_id
+                use_deduplication = src.get("use_deduplication", False)
+                if use_deduplication:
+                    has_campaign_id = "campaign_id" in {str(c).lower() for c in cols}
+                    if not has_campaign_id:
+                        if debug_bq:
+                            logger.info(
+                                "Perf source %s.%s requires campaign_id for deduplication but doesn't have it; skipping",
+                                perf_dataset_ref,
+                                table_id,
+                            )
+                        continue
+
                 has_profile = "profile_id" in {str(c).lower() for c in cols}
 
                 # Skip empty tables so we don't return all zeros.
@@ -1463,6 +1487,7 @@ class BigQueryClient:
                     "spend_col": spend_col,
                     "sales_col": sales_col,
                     "has_profile": has_profile,
+                    "use_deduplication": src.get("use_deduplication", False),
                 }
 
             # Fallback: discover table by schema in INFORMATION_SCHEMA.
@@ -1527,6 +1552,7 @@ class BigQueryClient:
             date_col = perf_source["date_col"]
             spend_col = perf_source["spend_col"]
             sales_col = perf_source["sales_col"]
+            use_deduplication = perf_source.get("use_deduplication", False)
 
             def _is_micros(col_name: str) -> bool:
                 name = str(col_name or "").lower()
@@ -1548,14 +1574,52 @@ class BigQueryClient:
                 else ""
             )
 
-            perf_only_query = f"""
-            SELECT
-                SAFE_CAST(`{date_col}` AS DATE) AS day,
-                SUM({spend_expr}) AS total_spend,
-                SUM({sales_expr}) AS total_sales
-            FROM {perf_ref}
-            WHERE SAFE_CAST(`{date_col}` AS DATE) >= @start_date
-                {perf_profile_filter}
+            # For campaign_details, we need to deduplicate by taking the most recent
+            # optimization run's view of each campaign per day. This prevents duplicate
+            # counting from overlapping lookback windows across multiple runs.
+            if use_deduplication:
+                # campaign_details stores campaign-level data from optimization runs.
+                # Each run may have multiple campaigns, and multiple runs may occur per day.
+                # To get accurate daily metrics without duplicate counting:
+                # 1. Group by date and campaign_id
+                # 2. Take the most recent run's data for each campaign per day
+                # 3. Sum across all campaigns for that day
+                # This ensures we count each campaign's metrics only once per day.
+                perf_only_query = f"""
+                WITH deduplicated_campaigns AS (
+                    SELECT
+                        DATE(`{date_col}`) AS day,
+                        `campaign_id`,
+                        {spend_expr} AS spend,
+                        {sales_expr} AS sales,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY DATE(`{date_col}`), `campaign_id`
+                            ORDER BY `{date_col}` DESC
+                        ) AS rn
+                    FROM {perf_ref}
+                    WHERE DATE(`{date_col}`) >= @start_date
+                        {perf_profile_filter}
+                )
+                SELECT
+                    day,
+                    SUM(spend) AS total_spend,
+                    SUM(sales) AS total_sales,
+                    COUNT(DISTINCT campaign_id) AS campaigns_with_data
+                FROM deduplicated_campaigns
+                WHERE rn = 1
+                GROUP BY day
+                ORDER BY day DESC
+                """
+            else:
+                # Standard query for performance tables that already have deduplicated daily data
+                perf_only_query = f"""
+                SELECT
+                    SAFE_CAST(`{date_col}` AS DATE) AS day,
+                    SUM({spend_expr}) AS total_spend,
+                    SUM({sales_expr}) AS total_sales
+                FROM {perf_ref}
+                WHERE SAFE_CAST(`{date_col}` AS DATE) >= @start_date
+                    {perf_profile_filter}
             GROUP BY day
             ORDER BY day DESC
             """
@@ -1677,6 +1741,18 @@ class BigQueryClient:
                 spend = _as_float(entry.get("total_spend"))
                 sales = _as_float(entry.get("total_sales"))
                 entry["blended_acos"] = (spend / sales) if sales else 0.0
+
+            # Data quality check: warn if we have less data than expected
+            days_with_spend = sum(1 for e in by_day.values() if _as_float(e.get("total_spend")) > 0)
+            if days_with_spend < days and debug_bq:
+                logger.warning(
+                    "Daily overview data quality: only %d days with spend data out of %d requested days (dataset=%s profile_id=%s start_date=%s)",
+                    days_with_spend,
+                    days,
+                    self.dataset_ref,
+                    profile_id,
+                    start_date,
+                )
 
             return sorted(by_day.values(), key=lambda d: d.get("day", ""), reverse=True)
         except Exception as exc:
