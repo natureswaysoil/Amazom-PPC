@@ -243,7 +243,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const table = searchParams.get('table') || 'optimization_results';
     const limit = Number.parseInt(searchParams.get('limit') ?? '100', 10) || 100;
-    const days = Number.parseInt(searchParams.get('days') ?? '0', 10) || 0;
+    const days = Number.parseInt(searchParams.get('days') ?? '14', 10) || 14;
 
     // Resolve GCP credentials
     const credentialResult = await resolveGCPCredentials();
