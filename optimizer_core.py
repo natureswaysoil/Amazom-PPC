@@ -894,8 +894,14 @@ class AmazonAdsAPI:
     def list_campaigns_v3(self, count: int = 10, start_index: int = 0) -> List[Dict[str, Any]]:
         """List Sponsored Products campaigns via the v3 list-style endpoint.
 
-        This endpoint has proven more reliable than legacy GET-based collection endpoints
-        for some accounts.
+        This method tries multiple endpoint versions and request body formats to maximize
+        compatibility across different Amazon Advertising API versions:
+        - v3 format: {"pagination": {"startIndex": X, "count": Y}} (preferred as of March 2023)
+        - v2 format: {"startIndex": X, "count": Y} (legacy, deprecated March 2023)
+        
+        Amazon migrated Sponsored Products to v3 in March 2023. The v3 API expects
+        pagination parameters wrapped in a "pagination" object, while v2 expects them
+        at the root level.
         """
 
         count = max(int(count), 1)
@@ -917,14 +923,29 @@ class AmazonAdsAPI:
             },
         ]
 
+        # v3 API expects pagination wrapped in a "pagination" object
+        # v2 API expects pagination at the root level
+        # Try both formats for maximum compatibility
         body_candidates = [
+            # v3 format (preferred)
+            {
+                'pagination': {
+                    'startIndex': start_index,
+                    'count': count
+                }
+            },
+            # v2 format (legacy)
             {'startIndex': start_index, 'count': count},
+            # Empty body (fallback)
             {},
         ]
 
         endpoint_candidates = [
-            # Prefer path-versioned endpoint first to avoid certain gateway/auth parsing issues.
+            # v3 endpoint (preferred for Sponsored Products as of March 2023)
+            '/v3/sp/campaigns/list',
+            # v2 endpoint (legacy, deprecated March 2023)
             '/v2/sp/campaigns/list',
+            # Unversioned (last resort)
             '/sp/campaigns/list',
         ]
 
@@ -941,6 +962,19 @@ class AmazonAdsAPI:
             if "Invalid key=value pair" in body_text:
                 return True
             return False
+        
+        def _log_400_error(exc: Exception, endpoint: str, body: dict) -> None:
+            """Log detailed diagnostics for 400 Bad Request errors."""
+            resp = getattr(exc, 'response', None)
+            if resp is None:
+                return
+            status = getattr(resp, 'status_code', None)
+            if status == 400:
+                body_text = (getattr(resp, 'text', '') or '')[:500]
+                logger.error(
+                    f"400 Bad Request for {endpoint}: {body_text}. "
+                    f"Request body: {body}. This may indicate an API version mismatch or incorrect body format."
+                )
 
         last_exc: Optional[Exception] = None
         for endpoint in endpoint_candidates:
@@ -973,6 +1007,9 @@ class AmazonAdsAPI:
                         return []
                     except Exception as exc:
                         last_exc = exc
+                        
+                        # Log detailed diagnostics for 400 errors
+                        _log_400_error(exc, endpoint, body)
 
                         # If the path-versioned candidate doesn't exist, try the next endpoint.
                         resp = getattr(exc, 'response', None)
