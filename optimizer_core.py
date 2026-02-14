@@ -989,6 +989,17 @@ class AmazonAdsAPI:
                         )
                         payload = response.json() if response is not None else None
 
+                        # ADD DETAILED LOGGING:
+                        logger.info(f"list_campaigns_v3: endpoint={endpoint}, payload_type={type(payload)}")
+                        if isinstance(payload, dict):
+                            logger.info(f"list_campaigns_v3: Dict keys: {list(payload.keys())}")
+                            # Log sample item if available
+                            for key in ('campaigns', 'items', 'results'):
+                                if isinstance(payload.get(key), list) and payload[key]:
+                                    sample = payload[key][0]
+                                    logger.info(f"list_campaigns_v3: Sample item from '{key}' keys: {list(sample.keys()) if isinstance(sample, dict) else 'not a dict'}")
+                                    break
+
                         # Some APIs return a plain list; others wrap it.
                         if isinstance(payload, list):
                             return payload
@@ -1124,6 +1135,18 @@ class AmazonAdsAPI:
             response = self._request('GET', '/v2/sp/campaigns', params=params)
             campaigns_data = response.json()
             
+            # ADD DETAILED LOGGING:
+            logger.info(f"get_campaigns: Received response type: {type(campaigns_data)}")
+            if isinstance(campaigns_data, list):
+                logger.info(f"get_campaigns: Response is list with {len(campaigns_data)} items")
+                if campaigns_data:
+                    # Log first campaign structure (with sensitive data masked)
+                    sample = campaigns_data[0]
+                    logger.info(f"get_campaigns: Sample campaign keys: {list(sample.keys()) if isinstance(sample, dict) else 'not a dict'}")
+                    logger.debug(f"get_campaigns: Sample campaign data: {sample}")
+            else:
+                logger.warning(f"get_campaigns: Unexpected response type, content: {str(campaigns_data)[:500]}")
+            
             if not isinstance(campaigns_data, list):
                 logger.warning(f"Unexpected campaigns response format: {type(campaigns_data)}")
                 return []
@@ -1131,17 +1154,32 @@ class AmazonAdsAPI:
             campaigns = []
             for c in campaigns_data:
                 if not isinstance(c, dict):
+                    logger.warning(f"get_campaigns: Skipping non-dict item: {type(c)}")
                     continue
+                
+                try:
+                    # Log available fields vs expected fields
+                    expected_fields = ['campaignId', 'name', 'state', 'dailyBudget', 'targetingType']
+                    available_fields = list(c.keys())
+                    missing_fields = [f for f in expected_fields if f not in available_fields]
                     
-                campaign = Campaign(
-                    campaign_id=str(c.get('campaignId', '')),
-                    name=c.get('name', ''),
-                    state=c.get('state', ''),
-                    daily_budget=float(c.get('dailyBudget', 0.0)),
-                    targeting_type=c.get('targetingType', ''),
-                    campaign_type='sponsoredProducts'
-                )
-                campaigns.append(campaign)
+                    if missing_fields:
+                        logger.warning(f"get_campaigns: Missing expected fields: {missing_fields}")
+                        logger.warning(f"get_campaigns: Available fields: {available_fields}")
+                    
+                    campaign = Campaign(
+                        campaign_id=str(c.get('campaignId', '')),
+                        name=c.get('name', ''),
+                        state=c.get('state', ''),
+                        daily_budget=float(c.get('dailyBudget', 0.0)),
+                        targeting_type=c.get('targetingType', ''),
+                        campaign_type='sponsoredProducts'
+                    )
+                    campaigns.append(campaign)
+                except Exception as e:
+                    logger.error(f"get_campaigns: Failed to create Campaign object: {e}")
+                    logger.error(f"get_campaigns: Raw campaign data: {c}")
+                    continue
             
             logger.info(f"Retrieved {len(campaigns)} campaigns")
             
@@ -1173,15 +1211,29 @@ class AmazonAdsAPI:
 
                 campaigns: List[Campaign] = []
                 for c in all_items:
-                    campaign = Campaign(
-                        campaign_id=str(c.get('campaignId', '')),
-                        name=c.get('name', ''),
-                        state=c.get('state', ''),
-                        daily_budget=float(c.get('dailyBudget', 0.0)),
-                        targeting_type=c.get('targetingType', ''),
-                        campaign_type='sponsoredProducts'
-                    )
-                    campaigns.append(campaign)
+                    try:
+                        # Log available fields vs expected fields
+                        expected_fields = ['campaignId', 'name', 'state', 'dailyBudget', 'targetingType']
+                        available_fields = list(c.keys())
+                        missing_fields = [f for f in expected_fields if f not in available_fields]
+                        
+                        if missing_fields:
+                            logger.warning(f"get_campaigns (v3 fallback): Missing expected fields: {missing_fields}")
+                            logger.warning(f"get_campaigns (v3 fallback): Available fields: {available_fields}")
+                        
+                        campaign = Campaign(
+                            campaign_id=str(c.get('campaignId', '')),
+                            name=c.get('name', ''),
+                            state=c.get('state', ''),
+                            daily_budget=float(c.get('dailyBudget', 0.0)),
+                            targeting_type=c.get('targetingType', ''),
+                            campaign_type='sponsoredProducts'
+                        )
+                        campaigns.append(campaign)
+                    except Exception as e:
+                        logger.error(f"get_campaigns (v3 fallback): Failed to create Campaign object: {e}")
+                        logger.error(f"get_campaigns (v3 fallback): Raw campaign data: {c}")
+                        continue
 
                 logger.info(f"Retrieved {len(campaigns)} campaigns (v3 list fallback)")
 
@@ -1216,15 +1268,20 @@ class AmazonAdsAPI:
             for campaign in campaigns:
                 if not campaign.campaign_id:
                     continue
-                    
-                budget_data.append({
-                    'campaign_id': campaign.campaign_id,
-                    'campaign_name': campaign.name,
-                    'daily_budget': float(campaign.daily_budget or 0.0),
-                    'budget_type': 'DAILY',  # Amazon Ads API v2 only supports daily budgets
-                    'state': campaign.state,
-                    'targeting_type': campaign.targeting_type,
-                })
+                
+                try:
+                    budget_data.append({
+                        'campaign_id': campaign.campaign_id,
+                        'campaign_name': campaign.name,
+                        'daily_budget': float(campaign.daily_budget or 0.0),
+                        'budget_type': 'DAILY',  # Amazon Ads API v2 only supports daily budgets
+                        'state': campaign.state,
+                        'targeting_type': campaign.targeting_type,
+                    })
+                except Exception as e:
+                    logger.error(f"fetch_campaign_budgets: Failed to process campaign: {e}")
+                    logger.error(f"fetch_campaign_budgets: Campaign object: {campaign}")
+                    raise
             
             logger.info(f"Fetched budget data for {len(budget_data)} campaigns")
             return budget_data
