@@ -2345,7 +2345,8 @@ class DaypartingManager:
         
         # Get hour-specific multipliers
         hour_multipliers = self.config.get('dayparting.hour_multipliers', {})
-        hour_multiplier = hour_multipliers.get(hour, 1.0)
+        # Convert hour to string for JSON key lookup
+        hour_multiplier = hour_multipliers.get(str(hour), 1.0)
         
         # Combined multiplier
         combined = day_multiplier * hour_multiplier
