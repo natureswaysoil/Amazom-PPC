@@ -44,8 +44,9 @@ RUN_EVENTS_SCHEMA = [
 
 # ACOS validation thresholds for data quality checks
 # ACOS ratio (not percentage) = spend / sales
-# Normal range: 0.10 (10% ACOS) to 2.0 (200% ACOS)
-ACOS_SUSPICIOUS_HIGH = 5.0  # Likely indicates duplicate counting across tables
+# Normal range: 0.10 (10% ACOS) to 1.0 (100% ACOS) for profitable campaigns
+# Values > 1.0 mean spending more than revenue generated
+ACOS_SUSPICIOUS_HIGH = 1.0  # ACOS > 100% indicates spending more than revenue (unprofitable or data issue)
 ACOS_SUSPICIOUS_LOW = 0.01  # May indicate missing spend or inflated sales
 MIN_SPEND_FOR_ACOS_CHECK = 10.0  # Minimum spend to check low ACOS (ignore low-spend campaigns)
 
@@ -1449,6 +1450,13 @@ class BigQueryClient:
                 if not date_col or not spend_col or not sales_col:
                     continue
 
+                # Detect if sales column contains lookback attribution (7d, 14d, 30d)
+                # These columns aggregate data over multiple days, not just the date in the row
+                has_lookback_attribution = any(
+                    indicator in sales_col.lower()
+                    for indicator in ["7d", "14d", "30d", "_7_", "_14_", "_30_"]
+                )
+
                 # For deduplication, we also need campaign_id
                 use_deduplication = src.get("use_deduplication", False)
                 if use_deduplication:
@@ -1482,6 +1490,7 @@ class BigQueryClient:
                     "sales_col": sales_col,
                     "has_profile": has_profile,
                     "use_deduplication": src.get("use_deduplication", False),
+                    "has_lookback_attribution": has_lookback_attribution,
                 }
 
             # Fallback: discover table by schema in INFORMATION_SCHEMA.
@@ -1502,19 +1511,32 @@ class BigQueryClient:
         # Always log the selected source (not just in debug mode) for data quality tracking
         if perf_source:
             use_dedup = perf_source.get("use_deduplication", False)
+            has_lookback = perf_source.get("has_lookback_attribution", False)
+            
             logger.info(
-                "Daily overview perf source: table=%s deduplication=%s date_col=%s spend_col=%s sales_col=%s start_date=%s days=%d",
+                "Daily overview perf source: table=%s deduplication=%s lookback_attribution=%s date_col=%s spend_col=%s sales_col=%s start_date=%s days=%d",
                 perf_source.get("table_id"),
                 "ENABLED" if use_dedup else "disabled",
+                "YES" if has_lookback else "no",
                 perf_source.get("date_col"),
                 perf_source.get("spend_col"),
                 perf_source.get("sales_col"),
                 start_date,
                 days,
             )
+            
             if use_dedup:
                 logger.info(
                     "Deduplication strategy: ROW_NUMBER() window function partitioned by (date, campaign_id)"
+                )
+            
+            if has_lookback:
+                logger.warning(
+                    "⚠️ LOOKBACK ATTRIBUTION DETECTED: Sales column '%s' contains multi-day attribution window. "
+                    "Each row's sales represent %s days of lookback, not just that row's date. "
+                    "Dashboard should NOT sum daily values - use most recent day only or the sum will be inflated!",
+                    perf_source.get("sales_col"),
+                    "7/14/30" if any(x in str(perf_source.get("sales_col", "")).lower() for x in ["7d", "14d", "30d"]) else "multiple"
                 )
         else:
             logger.info(
@@ -1805,19 +1827,19 @@ class BigQueryClient:
                     source_info,
                 )
                 
-                # Warn if ACOS is outside typical range (0.1 to 2.0 ratio = 10% to 200%)
-                # ACOS > 5.0 often indicates duplicate counting of spend
+                # Warn if ACOS is outside typical range (0.1 to 1.0 ratio = 10% to 100%)
+                # ACOS > 1.0 (100%) may indicate duplicate counting or genuinely unprofitable campaigns
                 # ACOS < 0.01 may indicate missing spend or inflated sales
                 if acos_ratio > ACOS_SUSPICIOUS_HIGH:
                     logger.warning(
-                        "⚠️ Suspicious ACOS ratio=%.2f (%.0f%%) with spend=$%.2f, sales=$%.2f. "
-                        "ACOS > %.1f may indicate duplicate counting across tables. "
-                        "Source: %s. Consider running scripts/diagnose_sales_data.py to investigate.",
+                        "⚠️ ACOS ratio=%.2f (%.0f%%) with spend=$%.2f, sales=$%.2f. "
+                        "ACOS > %.0f%% may indicate duplicate counting or unprofitable campaigns. "
+                        "Source: %s. Run scripts/verify_deduplication.py to diagnose data issues.",
                         acos_ratio,
                         acos_ratio * 100,
                         total_spend,
                         total_sales,
-                        ACOS_SUSPICIOUS_HIGH,
+                        ACOS_SUSPICIOUS_HIGH * 100,
                         source_info,
                     )
                 elif acos_ratio < ACOS_SUSPICIOUS_LOW and total_spend > MIN_SPEND_FOR_ACOS_CHECK:

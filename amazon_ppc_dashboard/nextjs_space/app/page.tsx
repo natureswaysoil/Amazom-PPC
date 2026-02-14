@@ -182,6 +182,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('overview');
   const [recentResults, setRecentResults] = useState<OptimizationResult[]>([]);
   const [summary, setSummary] = useState<SummaryData[]>([]);
+  const [dataMetadata, setDataMetadata] = useState<any>(null); // Metadata about data structure (e.g., lookback attribution)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
@@ -394,6 +395,14 @@ export default function Home() {
       if (!(liveData?.status === 'skipped' && (!mappedSummary || mappedSummary.length === 0))) {
         setSummary(mappedSummary);
       }
+      
+      // Save metadata about data structure (e.g., lookback attribution)
+      if (liveData.metadata) {
+        setDataMetadata(liveData.metadata);
+        if (liveData.metadata.has_lookback_attribution) {
+          console.log('⚠️ Data contains lookback attribution windows - using latest day for metrics');
+        }
+      }
 
       setLoading(false);
     } catch (err: any) {
@@ -511,10 +520,27 @@ export default function Home() {
 
   const totalOptimizationRuns = summary.reduce((sum, s) => sum + s.optimization_runs, 0);
   const totalKeywordsOptimized = summary.reduce((sum, s) => sum + s.total_keywords_optimized, 0);
+  
+  // Handle metrics calculation based on data structure
+  // If data contains lookback attribution (e.g., attributedSales14d), each day already represents
+  // a multi-day window. Summing these would count the same data multiple times.
+  // Solution: Use the most recent day's metrics only, as they represent the latest N-day window.
+  let totalSpend: number;
+  let totalSales: number;
+  
+  if (dataMetadata?.has_lookback_attribution && summary.length > 0) {
+    // Use most recent day only - it already contains the lookback window
+    const latestDay = summary[0]; // summary is sorted by date descending
+    totalSpend = latestDay.total_spend;
+    totalSales = latestDay.total_sales;
+  } else {
+    // No lookback attribution - safe to sum daily values
+    totalSpend = summary.reduce((sum, s) => sum + s.total_spend, 0);
+    totalSales = summary.reduce((sum, s) => sum + s.total_sales, 0);
+  }
+  
   // Calculate ACOS as weighted average (total spend / total sales) for the entire period
   // This is more accurate than averaging daily ACOS values
-  const totalSpend = summary.reduce((sum, s) => sum + s.total_spend, 0);
-  const totalSales = summary.reduce((sum, s) => sum + s.total_sales, 0);
   const avgAcos = totalSales > 0 ? totalSpend / totalSales : 0;
 
   // Data quality: count days with actual spend/sales data
@@ -583,7 +609,17 @@ export default function Home() {
         </div>
         <div style={styles.statCard}>
           <div style={styles.statLabel}>Average ACOS</div>
-          <div style={styles.statValue}>{formatPercent(avgAcos)}</div>
+          <div style={{
+            ...styles.statValue,
+            color: avgAcos > 1.0 ? '#f44336' : avgAcos > 0.7 ? '#ff9800' : '#4caf50'
+          }}>
+            {formatPercent(avgAcos)}
+          </div>
+          {avgAcos > 1.0 && (
+            <div style={{ fontSize: '12px', color: '#f44336', marginTop: '8px', fontWeight: 'bold' }}>
+              ⚠️ ACOS &gt; 100%
+            </div>
+          )}
         </div>
         <div style={styles.statCard}>
           <div style={styles.statLabel}>Total Spend (7d)</div>
@@ -640,6 +676,38 @@ export default function Home() {
         }}>
           ℹ️ <strong>Data Quality Note:</strong> Showing metrics from {daysWithData} day{daysWithData !== 1 ? 's' : ''} out of {expectedDays} days requested. 
           Some days may not have optimization run data yet.
+        </div>
+      )}
+      
+      {dataMetadata?.has_lookback_attribution && (
+        <div style={{
+          background: '#e3f2fd',
+          border: '1px solid #2196f3',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          margin: '16px 0',
+          fontSize: '14px',
+          color: '#0d47a1'
+        }}>
+          ℹ️ <strong>Attribution Window:</strong> Metrics use Amazon's multi-day attribution windows (7d/14d/30d). 
+          The displayed totals represent the most recent attribution period, not a simple sum of daily values. 
+          This prevents double-counting overlapping periods.
+        </div>
+      )}
+      
+      {avgAcos > 1.0 && (
+        <div style={{
+          background: '#ffebee',
+          border: '1px solid #f44336',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          margin: '16px 0',
+          fontSize: '14px',
+          color: '#c62828'
+        }}>
+          ⚠️ <strong>High ACOS Alert:</strong> Your ACOS is {formatPercent(avgAcos)} (&gt;100%), 
+          meaning you're spending more on ads than the revenue generated. This requires immediate attention. 
+          Review your targeting, bids, and campaign settings.
         </div>
       )}
 
