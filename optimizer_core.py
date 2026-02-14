@@ -989,15 +989,14 @@ class AmazonAdsAPI:
                         )
                         payload = response.json() if response is not None else None
 
-                        # ADD DETAILED LOGGING:
-                        logger.info(f"list_campaigns_v3: endpoint={endpoint}, payload_type={type(payload)}")
+                        logger.debug(f"list_campaigns_v3: endpoint={endpoint}, payload_type={type(payload)}")
                         if isinstance(payload, dict):
-                            logger.info(f"list_campaigns_v3: Dict keys: {list(payload.keys())}")
+                            logger.debug(f"list_campaigns_v3: Dict keys: {list(payload.keys())}")
                             # Log sample item if available
                             for key in ('campaigns', 'items', 'results'):
                                 if isinstance(payload.get(key), list) and payload[key]:
                                     sample = payload[key][0]
-                                    logger.info(f"list_campaigns_v3: Sample item from '{key}' keys: {list(sample.keys()) if isinstance(sample, dict) else 'not a dict'}")
+                                    logger.debug(f"list_campaigns_v3: Sample item from '{key}' keys: {list(sample.keys()) if isinstance(sample, dict) else 'not a dict'}")
                                     break
 
                         # Some APIs return a plain list; others wrap it.
@@ -1135,7 +1134,6 @@ class AmazonAdsAPI:
             response = self._request('GET', '/v2/sp/campaigns', params=params)
             campaigns_data = response.json()
             
-            # ADD DETAILED LOGGING:
             logger.info(f"get_campaigns: Received response type: {type(campaigns_data)}")
             if isinstance(campaigns_data, list):
                 logger.info(f"get_campaigns: Response is list with {len(campaigns_data)} items")
@@ -1144,28 +1142,30 @@ class AmazonAdsAPI:
                     sample = campaigns_data[0]
                     logger.info(f"get_campaigns: Sample campaign keys: {list(sample.keys()) if isinstance(sample, dict) else 'not a dict'}")
                     logger.debug(f"get_campaigns: Sample campaign data: {sample}")
-            else:
-                logger.warning(f"get_campaigns: Unexpected response type, content: {str(campaigns_data)[:500]}")
             
             if not isinstance(campaigns_data, list):
-                logger.warning(f"Unexpected campaigns response format: {type(campaigns_data)}")
+                logger.warning(
+                    f"get_campaigns: Unexpected campaigns response type {type(campaigns_data)}, "
+                    f"content: {str(campaigns_data)[:500]}"
+                )
                 return []
             
             campaigns = []
+            # Track field issues across all campaigns
+            missing_field_campaigns = []
+            expected_fields = ['campaignId', 'name', 'state', 'dailyBudget', 'targetingType']
+            
             for c in campaigns_data:
                 if not isinstance(c, dict):
                     logger.warning(f"get_campaigns: Skipping non-dict item: {type(c)}")
                     continue
                 
                 try:
-                    # Log available fields vs expected fields
-                    expected_fields = ['campaignId', 'name', 'state', 'dailyBudget', 'targetingType']
                     available_fields = list(c.keys())
                     missing_fields = [f for f in expected_fields if f not in available_fields]
                     
                     if missing_fields:
-                        logger.warning(f"get_campaigns: Missing expected fields: {missing_fields}")
-                        logger.warning(f"get_campaigns: Available fields: {available_fields}")
+                        missing_field_campaigns.append(c.get('campaignId', 'unknown'))
                     
                     campaign = Campaign(
                         campaign_id=str(c.get('campaignId', '')),
@@ -1180,6 +1180,11 @@ class AmazonAdsAPI:
                     logger.error(f"get_campaigns: Failed to create Campaign object: {e}")
                     logger.error(f"get_campaigns: Raw campaign data: {c}")
                     continue
+            
+            # Log summary instead of per-campaign warnings
+            if missing_field_campaigns:
+                logger.warning(f"get_campaigns: {len(missing_field_campaigns)} campaigns had missing expected fields: {missing_field_campaigns[:5]}")
+                logger.debug(f"get_campaigns: Sample missing fields - Expected: {expected_fields}, Sample available: {list(campaigns_data[0].keys()) if campaigns_data else []}")
             
             logger.info(f"Retrieved {len(campaigns)} campaigns")
             
@@ -1210,16 +1215,17 @@ class AmazonAdsAPI:
                     start_index += page_size
 
                 campaigns: List[Campaign] = []
+                # Track field issues across all campaigns
+                missing_field_campaigns = []
+                expected_fields = ['campaignId', 'name', 'state', 'dailyBudget', 'targetingType']
+                
                 for c in all_items:
                     try:
-                        # Log available fields vs expected fields
-                        expected_fields = ['campaignId', 'name', 'state', 'dailyBudget', 'targetingType']
                         available_fields = list(c.keys())
                         missing_fields = [f for f in expected_fields if f not in available_fields]
                         
                         if missing_fields:
-                            logger.warning(f"get_campaigns (v3 fallback): Missing expected fields: {missing_fields}")
-                            logger.warning(f"get_campaigns (v3 fallback): Available fields: {available_fields}")
+                            missing_field_campaigns.append(c.get('campaignId', 'unknown'))
                         
                         campaign = Campaign(
                             campaign_id=str(c.get('campaignId', '')),
@@ -1234,6 +1240,11 @@ class AmazonAdsAPI:
                         logger.error(f"get_campaigns (v3 fallback): Failed to create Campaign object: {e}")
                         logger.error(f"get_campaigns (v3 fallback): Raw campaign data: {c}")
                         continue
+
+                # Log summary instead of per-campaign warnings
+                if missing_field_campaigns:
+                    logger.warning(f"get_campaigns (v3 fallback): {len(missing_field_campaigns)} campaigns had missing expected fields: {missing_field_campaigns[:5]}")
+                    logger.debug(f"get_campaigns (v3 fallback): Sample missing fields - Expected: {expected_fields}, Sample available: {list(all_items[0].keys()) if all_items else []}")
 
                 logger.info(f"Retrieved {len(campaigns)} campaigns (v3 list fallback)")
 
@@ -1279,9 +1290,10 @@ class AmazonAdsAPI:
                         'targeting_type': campaign.targeting_type,
                     })
                 except Exception as e:
-                    logger.error(f"fetch_campaign_budgets: Failed to process campaign: {e}")
+                    logger.error(f"fetch_campaign_budgets: Failed to process campaign {campaign.campaign_id}: {e}")
                     logger.error(f"fetch_campaign_budgets: Campaign object: {campaign}")
-                    raise
+                    # Do NOT re-raise - continue processing other campaigns
+                    continue
             
             logger.info(f"Fetched budget data for {len(budget_data)} campaigns")
             return budget_data
