@@ -260,8 +260,13 @@ def diagnose_sales_data(
         print("❌ No suitable campaign-level tables found!")
     
     print(f"\nConfiguration:")
+    print(f"   # Specify which dataset contains performance tables:")
     print(f"   Set environment variable: BQ_PERFORMANCE_DATASET_ID={dataset_id}")
     print(f"   Or in config: bigquery.performance_dataset_id: {dataset_id}")
+    print(f"")
+    print(f"   # Optionally specify preferred table (recommended):")
+    print(f"   Set environment variable: BQ_PREFERRED_PERFORMANCE_TABLE=campaign_performance")
+    print(f"   Or in config: bigquery.preferred_performance_table: campaign_performance")
     
     if errors:
         print(f"\n⚠️  {len(errors)} error(s) occurred during diagnosis")

@@ -42,6 +42,13 @@ RUN_EVENTS_SCHEMA = [
     bigquery.SchemaField("details", "STRING"),
 ]
 
+# ACOS validation thresholds for data quality checks
+# ACOS ratio (not percentage) = spend / sales
+# Normal range: 0.10 (10% ACOS) to 2.0 (200% ACOS)
+ACOS_SUSPICIOUS_HIGH = 5.0  # Likely indicates duplicate counting across tables
+ACOS_SUSPICIOUS_LOW = 0.01  # May indicate missing spend or inflated sales
+MIN_SPEND_FOR_ACOS_CHECK = 10.0  # Minimum spend to check low ACOS (ignore low-spend campaigns)
+
 
 def _normalise_timestamp(value: Optional[datetime]) -> Optional[datetime]:
     """Convert BigQuery timestamps to naive UTC datetimes."""
@@ -1766,40 +1773,45 @@ class BigQueryClient:
             total_sales = sum(_as_float(e.get("total_sales")) for e in by_day.values())
             
             if total_sales > 0 and total_spend > 0:
-                acos = total_spend / total_sales
+                acos_ratio = total_spend / total_sales  # ACOS as ratio (not percentage): 1.0 = 100% ACOS
                 source_info = f"table={perf_source.get('table_id')}" if perf_source else "fallback=optimization_results"
                 
                 # Log summary for all requests
                 logger.info(
-                    "Daily overview summary: spend=$%.2f sales=$%.2f acos=%.2f days=%d source=%s",
+                    "Daily overview summary: spend=$%.2f sales=$%.2f acos_ratio=%.2f (%.0f%%) days=%d source=%s",
                     total_spend,
                     total_sales,
-                    acos,
+                    acos_ratio,
+                    acos_ratio * 100,
                     days,
                     source_info,
                 )
                 
-                # Warn if ACOS is outside typical range (0.1 to 2.0)
+                # Warn if ACOS is outside typical range (0.1 to 2.0 ratio = 10% to 200%)
                 # ACOS > 5.0 often indicates duplicate counting of spend
                 # ACOS < 0.01 may indicate missing spend or inflated sales
-                if acos > 5.0:
+                if acos_ratio > ACOS_SUSPICIOUS_HIGH:
                     logger.warning(
-                        "⚠️ Suspicious ACOS=%.2f (spend=$%.2f, sales=$%.2f). "
-                        "ACOS > 5.0 may indicate duplicate counting across tables. "
+                        "⚠️ Suspicious ACOS ratio=%.2f (%.0f%%) with spend=$%.2f, sales=$%.2f. "
+                        "ACOS > %.1f may indicate duplicate counting across tables. "
                         "Source: %s. Consider running scripts/diagnose_sales_data.py to investigate.",
-                        acos,
+                        acos_ratio,
+                        acos_ratio * 100,
                         total_spend,
                         total_sales,
+                        ACOS_SUSPICIOUS_HIGH,
                         source_info,
                     )
-                elif acos < 0.01 and total_spend > 10:
+                elif acos_ratio < ACOS_SUSPICIOUS_LOW and total_spend > MIN_SPEND_FOR_ACOS_CHECK:
                     logger.warning(
-                        "⚠️ Suspicious ACOS=%.2f (spend=$%.2f, sales=$%.2f). "
-                        "ACOS < 0.01 may indicate missing spend data or inflated sales. "
+                        "⚠️ Suspicious ACOS ratio=%.2f (%.0f%%) with spend=$%.2f, sales=$%.2f. "
+                        "ACOS < %.2f may indicate missing spend data or inflated sales. "
                         "Source: %s",
-                        acos,
+                        acos_ratio,
+                        acos_ratio * 100,
                         total_spend,
                         total_sales,
+                        ACOS_SUSPICIOUS_LOW,
                         source_info,
                     )
             elif total_spend > 0:
