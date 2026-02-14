@@ -93,6 +93,14 @@ type LiveSectionState = {
   loadedAt?: number;
 };
 
+// Constants for demo data generation and analysis
+const ASSUMED_CPC = 0.85; // Average cost per click assumption
+const ASSUMED_CVR = 0.08; // Average conversion rate assumption (8%)
+const ASSUMED_ACOS = 0.35; // Average ACOS assumption (35%)
+const MIN_IMPRESSIONS_THRESHOLD = 100; // Minimum impressions for opportunity analysis
+const LOW_CTR_THRESHOLD = 1.0; // CTR below this is considered low (1%)
+const HIGH_ACOS_THRESHOLD = 0.5; // ACOS above this is considered high (50%)
+
 const generateDemoData = () => {
   const today = new Date();
   const demoSummary: SummaryData[] = [];
@@ -1069,7 +1077,7 @@ export default function Home() {
     const olderDays = summary.slice(7, 14);
     
     const calculateTrend = (recent: number, older: number) => {
-      if (older === 0) return 0;
+      if (older === 0) return recent > 0 ? 100 : 0;
       return ((recent - older) / older) * 100;
     };
     
@@ -1242,16 +1250,16 @@ export default function Home() {
       return hours.map(hour => {
         const factor = hourlyFactors[hour];
         const avgHourlySpend = (totalDailySpend / 24) * factor;
-        const avgHourlySales = avgHourlySpend * (1 / 0.35); // Assume 35% ACOS
-        const clicks = Math.floor(avgHourlySpend / 0.85); // Assume $0.85 CPC
+        const avgHourlySales = avgHourlySpend * (1 / ASSUMED_ACOS);
+        const clicks = Math.floor(avgHourlySpend / ASSUMED_CPC);
         
         return {
           hour,
           spend: avgHourlySpend,
           sales: avgHourlySales,
           clicks,
-          conversions: Math.floor(clicks * 0.08), // 8% CVR
-          acos: 0.35,
+          conversions: Math.floor(clicks * ASSUMED_CVR),
+          acos: ASSUMED_ACOS,
           performance_score: factor
         };
       });
@@ -1377,7 +1385,7 @@ export default function Home() {
       match_type: idx % 3 === 0 ? 'EXACT' : idx % 3 === 1 ? 'PHRASE' : 'BROAD',
       impressions: kw.clicks * 12, // Estimate
       clicks: kw.clicks,
-      spend: kw.clicks * 0.85, // Assume $0.85 CPC
+      spend: kw.clicks * ASSUMED_CPC,
       sales: kw.sales,
       orders: Math.ceil(kw.sales / 45), // Assume $45 AOV
       acos: kw.acos,
@@ -1386,16 +1394,16 @@ export default function Home() {
     }));
     
     // Calculate metrics
-    const totalImpressions = searchTerms.reduce((sum: number, t: any) => sum + (t.impressions || 0), 0);
-    const totalClicks = searchTerms.reduce((sum: number, t: any) => sum + (t.clicks || 0), 0);
-    const totalSpend = searchTerms.reduce((sum: number, t: any) => sum + (t.spend || 0), 0);
-    const totalSales = searchTerms.reduce((sum: number, t: any) => sum + (t.sales || 0), 0);
+    const totalImpressions = searchTerms.reduce((sum: number, t: SearchTerm) => sum + (t.impressions || 0), 0);
+    const totalClicks = searchTerms.reduce((sum: number, t: SearchTerm) => sum + (t.clicks || 0), 0);
+    const totalSpend = searchTerms.reduce((sum: number, t: SearchTerm) => sum + (t.spend || 0), 0);
+    const totalSales = searchTerms.reduce((sum: number, t: SearchTerm) => sum + (t.sales || 0), 0);
     const avgCTR = totalImpressions > 0 ? (totalClicks / totalImpressions * 100) : 0;
     const avgAcos = totalSpend > 0 ? (totalSpend / totalSales) : 0;
     
     // Find opportunity keywords (high impressions, low CTR or high ACOS)
     const opportunities = searchTerms
-      .filter((t: any) => t.impressions > 100 && (t.ctr < 1 || t.acos > 0.5))
+      .filter((t: SearchTerm) => t.impressions > MIN_IMPRESSIONS_THRESHOLD && (t.ctr < LOW_CTR_THRESHOLD || t.acos > HIGH_ACOS_THRESHOLD))
       .slice(0, 5);
 
     return (
