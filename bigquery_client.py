@@ -1239,11 +1239,14 @@ class BigQueryClient:
         Runs/keyword counts come from optimization_results.
         Spend/sales/ACOS come from the best available performance table.
 
-        Preferred sources (first match wins):
-        - campaign_performance (segments_date)
-        - keyword_performance (segments_date)
-        - search_term_reports (segments_date)
-        - sp_campaign_metrics (startDate)
+        Preferred sources (first match wins, campaign-level only to avoid duplication):
+        1. campaign_performance (Amazon Ads API campaign reports - PREFERRED)
+        2. sp_campaign_metrics (Sponsored Products campaign metrics)
+        3. campaign_details (optimizer-written campaign data)
+        
+        Note: keyword_performance and search_term_reports are intentionally excluded
+        because aggregating keyword/search-term level data causes duplication
+        (same campaign spend/sales counted multiple times across different keywords).
         """
 
         import datetime
@@ -1328,18 +1331,13 @@ class BigQueryClient:
                 return True
 
         def _resolve_perf_source() -> Optional[Dict[str, Any]]:
+            # Check if user has configured a preferred table
+            preferred_table = os.getenv("BQ_PREFERRED_PERFORMANCE_TABLE", "").strip().lower()
+            
             sources = [
-                # campaign_details: Contains campaign-level data from each optimization run.
-                # Each row represents a campaign's metrics during an optimization run's lookback window.
-                # We deduplicate by taking the most recent run's data per day to avoid counting
-                # overlapping lookback windows multiple times.
-                {
-                    "table_id": "campaign_details",
-                    "date": ["timestamp"],
-                    "spend": ["spend"],
-                    "sales": ["sales"],
-                    "use_deduplication": True,  # Special flag for campaign_details
-                },
+                # campaign_performance: Preferred source - campaign-level data from Amazon Ads API.
+                # This is the most authoritative source as it comes directly from Amazon's reporting API.
+                # We use deduplication to handle any potential duplicate rows.
                 {
                     "table_id": "campaign_performance",
                     "date": ["segments_date", "segmentsDate", "report_date", "reportDate", "date", "timestamp"],
@@ -1364,57 +1362,9 @@ class BigQueryClient:
                         "ordered_product_sales",
                         "ordered_product_sales_14d",
                     ],
+                    "use_deduplication": True,  # Deduplicate by campaign_id and date
                 },
-                {
-                    "table_id": "keyword_performance",
-                    "date": ["segments_date", "segmentsDate", "report_date", "reportDate", "date", "timestamp"],
-                    "spend": ["cost", "spend"],
-                    "sales": [
-                        "attributedSales7d",
-                        "attributedSales14d",
-                        "attributedSales30d",
-                        "attributedSales7dSameSKU",
-                        "attributedSales14dSameSKU",
-                        "attributedSales30dSameSKU",
-                        "attributed_sales_7d",
-                        "sales14d",
-                        "attributed_sales_14d",
-                        "attributed_sales_30d",
-                        "sales_7d",
-                        "sales_14d",
-                        "sales_30d",
-                        "sales",
-                        "conversion_value",
-                        "conversion_value_14d",
-                        "ordered_product_sales",
-                        "ordered_product_sales_14d",
-                    ],
-                },
-                {
-                    "table_id": "search_term_reports",
-                    "date": ["segments_date", "segmentsDate", "report_date", "reportDate", "date", "timestamp"],
-                    "spend": ["cost", "spend"],
-                    "sales": [
-                        "attributedSales7d",
-                        "attributedSales14d",
-                        "attributedSales30d",
-                        "attributedSales7dSameSKU",
-                        "attributedSales14dSameSKU",
-                        "attributedSales30dSameSKU",
-                        "attributed_sales_7d",
-                        "sales14d",
-                        "attributed_sales_14d",
-                        "attributed_sales_30d",
-                        "sales_7d",
-                        "sales_14d",
-                        "sales_30d",
-                        "sales",
-                        "conversion_value",
-                        "conversion_value_14d",
-                        "ordered_product_sales",
-                        "ordered_product_sales_14d",
-                    ],
-                },
+                # sp_campaign_metrics: Second choice - Sponsored Products campaign metrics
                 {
                     "table_id": "sp_campaign_metrics",
                     "date": ["startDate", "segments_date", "segmentsDate", "report_date", "reportDate", "date"],
@@ -1439,8 +1389,45 @@ class BigQueryClient:
                         "ordered_product_sales",
                         "ordered_product_sales_14d",
                     ],
+                    "use_deduplication": True,  # Deduplicate by campaign_id and date
                 },
+                # campaign_details: Third choice - optimizer-written campaign data.
+                # Contains campaign-level data from each optimization run.
+                # Each row represents a campaign's metrics during an optimization run's lookback window.
+                # We deduplicate by taking the most recent run's data per day to avoid counting
+                # overlapping lookback windows multiple times.
+                {
+                    "table_id": "campaign_details",
+                    "date": ["timestamp"],
+                    "spend": ["spend"],
+                    "sales": ["sales"],
+                    "use_deduplication": True,  # Deduplicate by campaign_id and date
+                },
+                # NOTE: keyword_performance and search_term_reports are NOT used here
+                # because they contain keyword/search-term level data which would cause
+                # duplication when aggregated (same spend/sales counted multiple times
+                # across different keywords/search terms for the same campaign).
+                # We only use campaign-level tables for accurate daily totals.
             ]
+            
+            # If user specified a preferred table, try it first
+            if preferred_table:
+                # Move the preferred table to the front
+                preferred_src = None
+                remaining_srcs = []
+                for src in sources:
+                    if src["table_id"].lower() == preferred_table:
+                        preferred_src = src
+                    else:
+                        remaining_srcs.append(src)
+                
+                if preferred_src:
+                    sources = [preferred_src] + remaining_srcs
+                    if debug_bq:
+                        logger.info(
+                            "User specified preferred performance table: %s",
+                            preferred_table
+                        )
 
             for src in sources:
                 table_id = src["table_id"]
@@ -1772,6 +1759,55 @@ class BigQueryClient:
                     self.dataset_ref,
                     profile_id,
                     start_date,
+                )
+
+            # ACOS sanity check: validate data quality to detect potential duplication issues
+            total_spend = sum(_as_float(e.get("total_spend")) for e in by_day.values())
+            total_sales = sum(_as_float(e.get("total_sales")) for e in by_day.values())
+            
+            if total_sales > 0 and total_spend > 0:
+                acos = total_spend / total_sales
+                source_info = f"table={perf_source.get('table_id')}" if perf_source else "fallback=optimization_results"
+                
+                # Log summary for all requests
+                logger.info(
+                    "Daily overview summary: spend=$%.2f sales=$%.2f acos=%.2f days=%d source=%s",
+                    total_spend,
+                    total_sales,
+                    acos,
+                    days,
+                    source_info,
+                )
+                
+                # Warn if ACOS is outside typical range (0.1 to 2.0)
+                # ACOS > 5.0 often indicates duplicate counting of spend
+                # ACOS < 0.01 may indicate missing spend or inflated sales
+                if acos > 5.0:
+                    logger.warning(
+                        "⚠️ Suspicious ACOS=%.2f (spend=$%.2f, sales=$%.2f). "
+                        "ACOS > 5.0 may indicate duplicate counting across tables. "
+                        "Source: %s. Consider running scripts/diagnose_sales_data.py to investigate.",
+                        acos,
+                        total_spend,
+                        total_sales,
+                        source_info,
+                    )
+                elif acos < 0.01 and total_spend > 10:
+                    logger.warning(
+                        "⚠️ Suspicious ACOS=%.2f (spend=$%.2f, sales=$%.2f). "
+                        "ACOS < 0.01 may indicate missing spend data or inflated sales. "
+                        "Source: %s",
+                        acos,
+                        total_spend,
+                        total_sales,
+                        source_info,
+                    )
+            elif total_spend > 0:
+                source_info = f"table={perf_source.get('table_id')}" if perf_source else "fallback=optimization_results"
+                logger.warning(
+                    "⚠️ Spend data exists ($%.2f) but sales is zero. Source: %s",
+                    total_spend,
+                    source_info,
                 )
 
             return sorted(by_day.values(), key=lambda d: d.get("day", ""), reverse=True)

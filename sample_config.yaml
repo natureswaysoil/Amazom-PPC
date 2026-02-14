@@ -17,8 +17,11 @@ dashboard:
 # - performance_dataset_id: where performance tables live (campaign_performance, keyword_performance, ...)
 #   If omitted, BigQueryClient assumes performance tables are in dataset_id.
 #   You can also set this via env var: BQ_PERFORMANCE_DATASET_ID.
+# - preferred_performance_table: which table to prioritize for dashboard metrics
+#   Options: campaign_performance (recommended), sp_campaign_metrics, campaign_details
 bigquery:
   performance_dataset_id: YOUR_PERFORMANCE_DATASET_ID
+  preferred_performance_table: campaign_performance
 
 email_notifications:
   enabled: false

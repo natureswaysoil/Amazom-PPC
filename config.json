@@ -28,7 +28,8 @@
     "project_id": "amazon-ppc-474902",
     "dataset_id": "amazon_ppc_data",
     "location": "us-east4",
-    "note": "BigQuery configuration for storing optimization data. Project ID can also be set via GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables."
+    "preferred_performance_table": "campaign_performance",
+    "note": "BigQuery configuration for storing optimization data. Project ID can also be set via GCP_PROJECT or GOOGLE_CLOUD_PROJECT environment variables. preferred_performance_table specifies which table to use for dashboard metrics (campaign_performance, sp_campaign_metrics, or campaign_details)."
   },
   "email_notifications": {
     "enabled": false,

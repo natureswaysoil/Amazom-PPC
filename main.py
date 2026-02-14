@@ -1322,6 +1322,12 @@ def set_environment_variables(config: Dict[str, Any]) -> None:
     perf_dataset = (bigquery_cfg.get('performance_dataset_id') or bigquery_cfg.get('perf_dataset_id') or '').strip()
     if perf_dataset and 'YOUR_' not in perf_dataset:
       os.environ['BQ_PERFORMANCE_DATASET_ID'] = perf_dataset
+  
+  # Optional: allow configuration of preferred performance table for dashboard metrics
+  if not os.environ.get('BQ_PREFERRED_PERFORMANCE_TABLE') and isinstance(bigquery_cfg, dict):
+    preferred_table = (bigquery_cfg.get('preferred_performance_table') or '').strip()
+    if preferred_table and 'YOUR_' not in preferred_table.upper():
+      os.environ['BQ_PREFERRED_PERFORMANCE_TABLE'] = preferred_table
 
 
 def set_bigquery_env_vars(project_id: str) -> None:
