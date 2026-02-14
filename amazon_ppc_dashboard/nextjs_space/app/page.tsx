@@ -593,6 +593,33 @@ export default function Home() {
           <div style={styles.statLabel}>Total Sales (7d)</div>
           <div style={styles.statValue}>{formatCurrency(totalSales)}</div>
         </div>
+        {recentResults.length > 0 && (
+          <div style={{
+            ...styles.statCard,
+            border: (() => {
+              const latestRun = new Date(recentResults[0].timestamp);
+              const hoursAgo = (Date.now() - latestRun.getTime()) / (1000 * 60 * 60);
+              if (hoursAgo < 24) return '2px solid #4caf50';
+              if (hoursAgo < 48) return '2px solid #ff9800';
+              return '2px solid #f44336';
+            })()
+          }}>
+            <div style={styles.statLabel}>Data Freshness</div>
+            <div style={{ ...styles.statValue, fontSize: '16px' }}>
+              {(() => {
+                const latestRun = new Date(recentResults[0].timestamp);
+                const hoursAgo = Math.floor((Date.now() - latestRun.getTime()) / (1000 * 60 * 60));
+                if (hoursAgo < 1) return 'Less than 1 hour ago';
+                if (hoursAgo < 24) return `${hoursAgo} hour${hoursAgo > 1 ? 's' : ''} ago`;
+                const daysAgo = Math.floor(hoursAgo / 24);
+                return `${daysAgo} day${daysAgo > 1 ? 's' : ''} ago`;
+              })()}
+            </div>
+            <div style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
+              Last run: {formatDate(recentResults[0].timestamp)}
+            </div>
+          </div>
+        )}
       </div>
 
       {daysWithData < expectedDays && daysWithData > 0 && (
@@ -1716,6 +1743,11 @@ export default function Home() {
         <p style={{ fontSize: '12px', marginTop: '5px' }}>
           Powered by BigQuery | Last updated: {new Date().toLocaleString()}
         </p>
+        {recentResults.length > 0 && (
+          <p style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
+            Most recent optimization run: {formatDate(recentResults[0].timestamp)}
+          </p>
+        )}
       </div>
     </div>
   );
