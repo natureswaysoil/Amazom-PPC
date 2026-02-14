@@ -130,6 +130,29 @@ The fix has been validated with:
 - ✅ Code review (no issues)
 - ✅ Security scan (no vulnerabilities)
 
+### Testing with Google Secret Manager Credentials
+
+To test the fix with actual Amazon Ads API credentials stored in Google Secret Manager:
+
+```bash
+# Load credentials from Google Secret Manager
+eval $(python load_secrets.py --project nature-way-soils)
+
+# Verify secrets are loaded
+python load_secrets.py --project nature-way-soils --verify
+
+# Test API connectivity with the fix
+python optimizer_core.py --config sample_config.yaml --verify-connection
+
+# Test budget fetching (dry-run mode)
+python optimizer_core.py --config sample_config.yaml --dry-run
+```
+
+The fix is fully compatible with Google Secret Manager credential loading because:
+1. Credentials are loaded into environment variables (`AMAZON_CLIENT_ID`, `AMAZON_CLIENT_SECRET`, `AMAZON_REFRESH_TOKEN`)
+2. The optimizer reads these environment variables (already implemented)
+3. The API request format fix applies regardless of how credentials are loaded
+
 ## Impact
 
 This fix resolves:
@@ -137,6 +160,37 @@ This fix resolves:
 - Campaign data retrieval issues
 - `fetch_campaign_budgets()` errors
 - Any code path using `list_campaigns_v3()` or the fallback in `get_campaigns()`
+
+## Integration with Google Secret Manager
+
+The fix is fully compatible with Google Secret Manager credential storage:
+
+### Credential Loading Flow
+1. **Google Secret Manager** stores credentials:
+   - `amazon-client-id` → `AMAZON_CLIENT_ID`
+   - `amazon-client-secret` → `AMAZON_CLIENT_SECRET`
+   - `amazon-refresh-token` → `AMAZON_REFRESH_TOKEN`
+   - `amazon-profile-id` → `AMAZON_PROFILE_ID`
+
+2. **Cloud Functions** automatically injects secrets as environment variables
+
+3. **Optimizer** reads from environment variables:
+   ```python
+   client_id = os.environ.get('AMAZON_CLIENT_ID', '')
+   client_secret = os.environ.get('AMAZON_CLIENT_SECRET', '')
+   refresh_token = os.environ.get('AMAZON_REFRESH_TOKEN', '')
+   ```
+
+4. **Fixed API request** uses correct v3 format with credentials
+
+### No Changes Required to Credential Management
+The API request format fix does not affect:
+- How credentials are stored in Google Secret Manager
+- How credentials are loaded into environment variables
+- How the optimizer authenticates with Amazon Ads API
+- Token refresh mechanism
+
+The fix only changes the **request body format** sent to the Amazon Ads API after authentication succeeds.
 
 ## References
 
