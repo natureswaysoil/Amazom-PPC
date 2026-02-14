@@ -58,6 +58,30 @@ interface SummaryData {
   total_sales: number;
 }
 
+interface HourlyMetric {
+  hour: number;
+  spend: number;
+  sales: number;
+  clicks: number;
+  conversions: number;
+  acos: number;
+  performance_score: number;
+}
+
+interface SearchTerm {
+  search_term: string;
+  keyword_matched: string;
+  match_type: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  sales: number;
+  orders: number;
+  acos: number;
+  conversion_rate: number;
+  ctr: number;
+}
+
 type NavigationTab = 'overview' | 'campaigns' | 'automation' | 'discovery' | 'budget' | 'dayparting' | 'reports' | 'analytics' | 'performance' | 'hourly' | 'searchterms' | 'datatable' | 'settings';
 
 type LiveSection = 'campaigns' | 'automation' | 'discovery' | 'budget' | 'dayparting' | 'reports';
@@ -69,12 +93,98 @@ type LiveSectionState = {
   loadedAt?: number;
 };
 
+// Constants for demo data generation and analysis
+const ASSUMED_CPC = 0.85; // Average cost per click assumption
+const ASSUMED_CVR = 0.08; // Average conversion rate assumption (8%)
+const ASSUMED_ACOS = 0.35; // Average ACOS assumption (35%)
+const MIN_IMPRESSIONS_THRESHOLD = 100; // Minimum impressions for opportunity analysis
+const LOW_CTR_THRESHOLD = 1.0; // CTR below this is considered low (1%)
+const HIGH_ACOS_THRESHOLD = 0.5; // ACOS above this is considered high (50%)
+
+const generateDemoData = () => {
+  const today = new Date();
+  const demoSummary: SummaryData[] = [];
+  const demoResults: OptimizationResult[] = [];
+  
+  // Generate 14 days of summary data
+  for (let i = 0; i < 14; i++) {
+    const date = new Date(today);
+    date.setDate(date.getDate() - i);
+    const dayFactor = 0.8 + Math.random() * 0.4; // 0.8-1.2
+    
+    demoSummary.push({
+      date: date.toISOString().split('T')[0],
+      optimization_runs: Math.floor(1 + Math.random() * 3),
+      total_keywords_optimized: Math.floor(800 * dayFactor + Math.random() * 400),
+      avg_acos: 0.30 + Math.random() * 0.15,
+      total_spend: 450 * dayFactor + Math.random() * 200,
+      total_sales: 1200 * dayFactor + Math.random() * 400,
+    });
+  }
+  
+  // Generate 2 recent optimization results
+  for (let i = 0; i < 2; i++) {
+    const runDate = new Date(today);
+    runDate.setHours(runDate.getHours() - (i * 12));
+    
+    const campaigns: Campaign[] = [
+      { campaign_id: 'c1', campaign_name: 'Product Campaign A', spend: 234.56, sales: 567.89, acos: 0.413, keywords_count: 45, changes_made: 12 },
+      { campaign_id: 'c2', campaign_name: 'Brand Campaign', spend: 189.23, sales: 489.12, acos: 0.387, keywords_count: 32, changes_made: 8 },
+      { campaign_id: 'c3', campaign_name: 'Seasonal Promotion', spend: 156.78, sales: 401.23, acos: 0.391, keywords_count: 28, changes_made: 6 },
+      { campaign_id: 'c4', campaign_name: 'Category Keywords', spend: 123.45, sales: 298.76, acos: 0.413, keywords_count: 38, changes_made: 10 },
+    ];
+    
+    const topPerformers: TopPerformer[] = [
+      { keyword_text: 'organic potting soil', clicks: 145, sales: 389.45, acos: 0.28, bid_change: 0.15 },
+      { keyword_text: 'premium garden soil', clicks: 132, sales: 356.78, acos: 0.31, bid_change: 0.12 },
+      { keyword_text: 'natural fertilizer', clicks: 118, sales: 312.34, acos: 0.33, bid_change: -0.05 },
+      { keyword_text: 'compost mix', clicks: 98, sales: 267.89, acos: 0.29, bid_change: 0.10 },
+      { keyword_text: 'raised bed soil', clicks: 87, sales: 234.56, acos: 0.35, bid_change: 0.08 },
+    ];
+    
+    demoResults.push({
+      timestamp: runDate.toISOString(),
+      run_id: `demo-run-${i + 1}`,
+      status: 'success',
+      keywords_optimized: 1250 + Math.floor(Math.random() * 300),
+      bids_increased: 720 + Math.floor(Math.random() * 150),
+      bids_decreased: 530 + Math.floor(Math.random() * 100),
+      average_acos: 0.35 + Math.random() * 0.10,
+      total_spend: 704.02 + Math.random() * 200,
+      total_sales: 1857.96 + Math.random() * 400,
+      duration_seconds: 45.5 + Math.random() * 20,
+      campaigns_analyzed: campaigns.length,
+      negative_keywords_added: Math.floor(15 + Math.random() * 10),
+      budget_changes: Math.floor(2 + Math.random() * 4),
+      campaigns,
+      top_performers: topPerformers,
+      features: {
+        bid_optimization: { enabled: true, changes: 1250 },
+        dayparting: { enabled: true, rules: 24 },
+        campaign_management: { enabled: true, changes: 6 },
+        keyword_discovery: { enabled: true, new_keywords: 23 },
+        negative_keywords: { enabled: true, added: 18 }
+      },
+      errors: [],
+      warnings: [],
+      config_snapshot: {
+        target_acos: 0.35,
+        lookback_days: 14,
+        enabled_features: ['bid_optimization', 'dayparting', 'campaign_management', 'keyword_discovery', 'negative_keywords']
+      }
+    });
+  }
+  
+  return { summary: demoSummary, results: demoResults };
+};
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('overview');
   const [recentResults, setRecentResults] = useState<OptimizationResult[]>([]);
   const [summary, setSummary] = useState<SummaryData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
 
   const isRunIntervalSkipMessage =
     typeof error === 'string' &&
@@ -292,7 +402,14 @@ export default function Home() {
         setLoading(false);
         return;
       }
-      setError(msg);
+      
+      // If API fails, load demo data to showcase dashboard functionality
+      console.log('⚠️ API unavailable, loading demo data for preview...');
+      const demoData = generateDemoData();
+      setRecentResults(demoData.results);
+      setSummary(demoData.summary);
+      setIsDemoMode(true);
+      setError(msg + ' - Showing demo data for preview');
       setLoading(false);
     }
   };
@@ -323,7 +440,7 @@ export default function Home() {
     );
   }
 
-  if (error && recentResults.length === 0 && !isRunIntervalSkipMessage) {
+  if (error && recentResults.length === 0 && !isRunIntervalSkipMessage && !isDemoMode) {
     return (
       <div style={styles.container}>
         <div style={styles.errorCard}>
@@ -954,17 +1071,134 @@ export default function Home() {
     </div>
   );
 
-  const renderAnalyticsTab = () => (
-    <div style={styles.tableCard}>
-      <h2 style={styles.tableTitle}>📉 Analytics</h2>
-      <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-        <p>Advanced analytics and insights coming soon...</p>
-        <p style={{ fontSize: '14px', marginTop: '10px' }}>
-          View trends, patterns, and predictive analytics for your campaigns.
-        </p>
+  const renderAnalyticsTab = () => {
+    // Calculate trends from summary data
+    const recentDays = summary.slice(0, 7);
+    const olderDays = summary.slice(7, 14);
+    
+    const calculateTrend = (recent: number, older: number) => {
+      if (older === 0) return recent > 0 ? 100 : 0;
+      return ((recent - older) / older) * 100;
+    };
+    
+    const recentSpend = recentDays.reduce((sum, d) => sum + d.total_spend, 0);
+    const olderSpend = olderDays.reduce((sum, d) => sum + d.total_spend, 0);
+    const spendTrend = calculateTrend(recentSpend, olderSpend);
+    
+    const recentSales = recentDays.reduce((sum, d) => sum + d.total_sales, 0);
+    const olderSales = olderDays.reduce((sum, d) => sum + d.total_sales, 0);
+    const salesTrend = calculateTrend(recentSales, olderSales);
+    
+    const recentAcos = recentDays.length > 0 
+      ? recentDays.reduce((sum, d) => sum + d.avg_acos, 0) / recentDays.length
+      : 0;
+    const olderAcos = olderDays.length > 0
+      ? olderDays.reduce((sum, d) => sum + d.avg_acos, 0) / olderDays.length
+      : 0;
+    const acosTrend = calculateTrend(recentAcos, olderAcos);
+    
+    const recentOptimizations = recentDays.reduce((sum, d) => sum + d.total_keywords_optimized, 0);
+    const olderOptimizations = olderDays.reduce((sum, d) => sum + d.total_keywords_optimized, 0);
+    const optimizationsTrend = calculateTrend(recentOptimizations, olderOptimizations);
+
+    return (
+      <div style={styles.tableCard}>
+        <h2 style={styles.tableTitle}>📉 Analytics & Trends</h2>
+        <div style={{ padding: '20px' }}>
+          <p style={{ marginBottom: '20px', color: '#666' }}>
+            7-day trends compared to previous 7 days
+          </p>
+          
+          <div style={styles.statsGrid}>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Spend Trend</div>
+              <div style={styles.statValue}>{formatCurrency(recentSpend)}</div>
+              <div style={{ 
+                fontSize: '14px', 
+                color: spendTrend > 0 ? '#f44336' : '#4caf50',
+                marginTop: '8px'
+              }}>
+                {spendTrend > 0 ? '↑' : '↓'} {Math.abs(spendTrend).toFixed(1)}%
+              </div>
+            </div>
+            
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Sales Trend</div>
+              <div style={styles.statValue}>{formatCurrency(recentSales)}</div>
+              <div style={{ 
+                fontSize: '14px', 
+                color: salesTrend > 0 ? '#4caf50' : '#f44336',
+                marginTop: '8px'
+              }}>
+                {salesTrend > 0 ? '↑' : '↓'} {Math.abs(salesTrend).toFixed(1)}%
+              </div>
+            </div>
+            
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>ACOS Trend</div>
+              <div style={styles.statValue}>{formatPercent(recentAcos)}</div>
+              <div style={{ 
+                fontSize: '14px', 
+                color: acosTrend < 0 ? '#4caf50' : '#f44336',
+                marginTop: '8px'
+              }}>
+                {acosTrend > 0 ? '↑' : '↓'} {Math.abs(acosTrend).toFixed(1)}%
+              </div>
+            </div>
+            
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Optimizations</div>
+              <div style={styles.statValue}>{recentOptimizations.toLocaleString()}</div>
+              <div style={{ 
+                fontSize: '14px', 
+                color: optimizationsTrend > 0 ? '#4caf50' : '#666',
+                marginTop: '8px'
+              }}>
+                {optimizationsTrend > 0 ? '↑' : '↓'} {Math.abs(optimizationsTrend).toFixed(1)}%
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: '30px' }}>
+            <h3 style={{ fontSize: '18px', marginBottom: '15px', color: '#333' }}>
+              Daily Performance (Last 14 Days)
+            </h3>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Date</th>
+                    <th style={styles.th}>Spend</th>
+                    <th style={styles.th}>Sales</th>
+                    <th style={styles.th}>ACOS</th>
+                    <th style={styles.th}>ROI</th>
+                    <th style={styles.th}>Optimizations</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.slice(0, 14).map((day, idx) => {
+                    const roi = day.total_spend > 0 
+                      ? ((day.total_sales - day.total_spend) / day.total_spend * 100)
+                      : 0;
+                    return (
+                      <tr key={idx}>
+                        <td style={styles.td}>{day.date}</td>
+                        <td style={styles.td}>{formatCurrency(day.total_spend)}</td>
+                        <td style={styles.td}>{formatCurrency(day.total_sales)}</td>
+                        <td style={styles.td}>{formatPercent(day.avg_acos)}</td>
+                        <td style={styles.td}>{roi.toFixed(1)}%</td>
+                        <td style={styles.td}>{day.total_keywords_optimized}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderPerformanceTab = () => (
     <div style={styles.tableCard}>
@@ -994,29 +1228,307 @@ export default function Home() {
     </div>
   );
 
-  const renderHourlyTab = () => (
-    <div style={styles.tableCard}>
-      <h2 style={styles.tableTitle}>⏰ Hourly Analysis</h2>
-      <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-        <p>Hourly performance breakdown coming soon...</p>
-        <p style={{ fontSize: '14px', marginTop: '10px' }}>
-          View hour-by-hour performance metrics to optimize dayparting strategy.
-        </p>
-      </div>
-    </div>
-  );
+  const renderHourlyTab = () => {
+    // Extract hourly data from dayparting section if available
+    const daypartingData = liveSections.dayparting?.data;
+    const hourlyMetrics = daypartingData?.hourly_performance || [];
+    
+    // If no hourly data, generate sample structure based on summary data
+    const generateHourlyEstimates = (): HourlyMetric[] => {
+      const hours = Array.from({ length: 24 }, (_, i) => i);
+      const totalDailySpend = summary.length > 0 
+        ? summary.reduce((sum, d) => sum + d.total_spend, 0) / summary.length
+        : 0;
+      
+      // Typical patterns: higher during business hours
+      const hourlyFactors = [
+        0.3, 0.2, 0.2, 0.2, 0.3, 0.4, 0.6, 0.8,  // 0-7 AM
+        1.2, 1.5, 1.6, 1.5, 1.3, 1.2, 1.3, 1.4,  // 8-3 PM
+        1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4   // 4-11 PM
+      ];
+      
+      return hours.map(hour => {
+        const factor = hourlyFactors[hour];
+        const avgHourlySpend = (totalDailySpend / 24) * factor;
+        const avgHourlySales = avgHourlySpend * (1 / ASSUMED_ACOS);
+        const clicks = Math.floor(avgHourlySpend / ASSUMED_CPC);
+        
+        return {
+          hour,
+          spend: avgHourlySpend,
+          sales: avgHourlySales,
+          clicks,
+          conversions: Math.floor(clicks * ASSUMED_CVR),
+          acos: ASSUMED_ACOS,
+          performance_score: factor
+        };
+      });
+    };
+    
+    const hourlyData: HourlyMetric[] = hourlyMetrics.length > 0 ? hourlyMetrics : generateHourlyEstimates();
+    
+    // Find best and worst performing hours
+    const sortedByPerformance = [...hourlyData].sort((a, b) => 
+      (b.sales - b.spend) - (a.sales - a.spend)
+    );
+    const bestHours = sortedByPerformance.slice(0, 3);
+    const worstHours = sortedByPerformance.slice(-3).reverse();
 
-  const renderSearchTermsTab = () => (
-    <div style={styles.tableCard}>
-      <h2 style={styles.tableTitle}>🔎 Search Terms Report</h2>
-      <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-        <p>Search term analysis coming soon...</p>
-        <p style={{ fontSize: '14px', marginTop: '10px' }}>
-          View actual search terms that triggered your ads and identify new keyword opportunities.
-        </p>
+    return (
+      <div style={styles.tableCard}>
+        <h2 style={styles.tableTitle}>⏰ Hourly Analysis</h2>
+        <div style={{ padding: '20px' }}>
+          <p style={{ marginBottom: '20px', color: '#666' }}>
+            {hourlyMetrics.length > 0 
+              ? 'Hour-by-hour performance breakdown' 
+              : 'Estimated hourly patterns based on available data'}
+          </p>
+          
+          <div style={{ marginBottom: '30px' }}>
+            <h3 style={{ fontSize: '18px', marginBottom: '15px', color: '#333' }}>
+              Top Performing Hours
+            </h3>
+            <div style={styles.statsGrid}>
+              {bestHours.map((hour, idx) => (
+                <div key={idx} style={styles.statCard}>
+                  <div style={styles.statLabel}>
+                    {hour.hour}:00 - {hour.hour + 1}:00
+                  </div>
+                  <div style={styles.statValue}>{formatCurrency(hour.sales)}</div>
+                  <div style={{ fontSize: '14px', color: '#666', marginTop: '4px' }}>
+                    Spend: {formatCurrency(hour.spend)}
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#4caf50', marginTop: '4px' }}>
+                    ROI: {hour.spend > 0 ? (((hour.sales - hour.spend) / hour.spend * 100).toFixed(0)) : '0'}%
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '30px' }}>
+            <h3 style={{ fontSize: '18px', marginBottom: '15px', color: '#333' }}>
+              Lowest Performing Hours
+            </h3>
+            <div style={styles.statsGrid}>
+              {worstHours.map((hour, idx) => (
+                <div key={idx} style={styles.statCard}>
+                  <div style={styles.statLabel}>
+                    {hour.hour}:00 - {hour.hour + 1}:00
+                  </div>
+                  <div style={styles.statValue}>{formatCurrency(hour.sales)}</div>
+                  <div style={{ fontSize: '14px', color: '#666', marginTop: '4px' }}>
+                    Spend: {formatCurrency(hour.spend)}
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#f44336', marginTop: '4px' }}>
+                    ROI: {hour.spend > 0 ? (((hour.sales - hour.spend) / hour.spend * 100).toFixed(0)) : '0'}%
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <h3 style={{ fontSize: '18px', marginBottom: '15px', color: '#333' }}>
+              24-Hour Performance Breakdown
+            </h3>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Hour</th>
+                    <th style={styles.th}>Spend</th>
+                    <th style={styles.th}>Sales</th>
+                    <th style={styles.th}>Clicks</th>
+                    <th style={styles.th}>Conv.</th>
+                    <th style={styles.th}>ACOS</th>
+                    <th style={styles.th}>ROI</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hourlyData.map((hour, idx) => {
+                    const roi = hour.spend > 0 
+                      ? ((hour.sales - hour.spend) / hour.spend * 100)
+                      : 0;
+                    return (
+                      <tr key={idx}>
+                        <td style={styles.td}>{hour.hour}:00 - {hour.hour + 1}:00</td>
+                        <td style={styles.td}>{formatCurrency(hour.spend)}</td>
+                        <td style={styles.td}>{formatCurrency(hour.sales)}</td>
+                        <td style={styles.td}>{hour.clicks}</td>
+                        <td style={styles.td}>{hour.conversions}</td>
+                        <td style={styles.td}>{formatPercent(hour.acos)}</td>
+                        <td style={styles.td}>{roi.toFixed(1)}%</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
+
+  const renderSearchTermsTab = () => {
+    // Try to get search term data from discovery section or generate from top performers
+    const discoveryData = liveSections.discovery?.data;
+    const topPerformersFromResults = recentResults.length > 0 && recentResults[0].top_performers 
+      ? recentResults[0].top_performers 
+      : [];
+    
+    // Use top performers as proxy for search terms if no dedicated search term data
+    const searchTerms = discoveryData?.search_terms || topPerformersFromResults.map((kw, idx) => ({
+      search_term: kw.keyword_text,
+      keyword_matched: kw.keyword_text,
+      match_type: idx % 3 === 0 ? 'EXACT' : idx % 3 === 1 ? 'PHRASE' : 'BROAD',
+      impressions: kw.clicks * 12, // Estimate
+      clicks: kw.clicks,
+      spend: kw.clicks * ASSUMED_CPC,
+      sales: kw.sales,
+      orders: Math.ceil(kw.sales / 45), // Assume $45 AOV
+      acos: kw.acos,
+      conversion_rate: (Math.ceil(kw.sales / 45) / kw.clicks * 100),
+      ctr: (kw.clicks / (kw.clicks * 12) * 100) // CTR estimate
+    }));
+    
+    // Calculate metrics
+    const totalImpressions = searchTerms.reduce((sum: number, t: SearchTerm) => sum + (t.impressions || 0), 0);
+    const totalClicks = searchTerms.reduce((sum: number, t: SearchTerm) => sum + (t.clicks || 0), 0);
+    const totalSpend = searchTerms.reduce((sum: number, t: SearchTerm) => sum + (t.spend || 0), 0);
+    const totalSales = searchTerms.reduce((sum: number, t: SearchTerm) => sum + (t.sales || 0), 0);
+    const avgCTR = totalImpressions > 0 ? (totalClicks / totalImpressions * 100) : 0;
+    const avgAcos = totalSpend > 0 ? (totalSpend / totalSales) : 0;
+    
+    // Find opportunity keywords (high impressions, low CTR or high ACOS)
+    const opportunities = searchTerms
+      .filter((t: SearchTerm) => t.impressions > MIN_IMPRESSIONS_THRESHOLD && (t.ctr < LOW_CTR_THRESHOLD || t.acos > HIGH_ACOS_THRESHOLD))
+      .slice(0, 5);
+
+    return (
+      <div style={styles.tableCard}>
+        <h2 style={styles.tableTitle}>🔎 Search Terms Report</h2>
+        <div style={{ padding: '20px' }}>
+          <p style={{ marginBottom: '20px', color: '#666' }}>
+            {discoveryData?.search_terms 
+              ? 'Customer search terms that triggered your ads' 
+              : 'Top performing keywords (search term data when available)'}
+          </p>
+          
+          <div style={styles.statsGrid}>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Total Impressions</div>
+              <div style={styles.statValue}>{totalImpressions.toLocaleString()}</div>
+            </div>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Total Clicks</div>
+              <div style={styles.statValue}>{totalClicks.toLocaleString()}</div>
+            </div>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Avg CTR</div>
+              <div style={styles.statValue}>{avgCTR.toFixed(2)}%</div>
+            </div>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Avg ACOS</div>
+              <div style={styles.statValue}>{formatPercent(avgAcos)}</div>
+            </div>
+          </div>
+
+          {opportunities.length > 0 && (
+            <div style={{ marginTop: '30px', marginBottom: '20px' }}>
+              <h3 style={{ fontSize: '18px', marginBottom: '10px', color: '#ff9800' }}>
+                ⚠️ Optimization Opportunities
+              </h3>
+              <p style={{ fontSize: '14px', color: '#666', marginBottom: '15px' }}>
+                Terms with high impressions but low performance - consider refining bids or adding as negative keywords
+              </p>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>Search Term</th>
+                      <th style={styles.th}>Impressions</th>
+                      <th style={styles.th}>CTR</th>
+                      <th style={styles.th}>ACOS</th>
+                      <th style={styles.th}>Recommendation</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {opportunities.map((term: any, idx: number) => (
+                      <tr key={idx}>
+                        <td style={styles.td}>{term.search_term}</td>
+                        <td style={styles.td}>{term.impressions.toLocaleString()}</td>
+                        <td style={styles.td}>{term.ctr.toFixed(2)}%</td>
+                        <td style={styles.td}>{formatPercent(term.acos)}</td>
+                        <td style={styles.td}>
+                          {term.ctr < 1 ? 'Improve ad relevance' : 'Review profitability'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: '30px' }}>
+            <h3 style={{ fontSize: '18px', marginBottom: '15px', color: '#333' }}>
+              All Search Terms
+            </h3>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Search Term</th>
+                    <th style={styles.th}>Match Type</th>
+                    <th style={styles.th}>Impressions</th>
+                    <th style={styles.th}>Clicks</th>
+                    <th style={styles.th}>CTR</th>
+                    <th style={styles.th}>Spend</th>
+                    <th style={styles.th}>Sales</th>
+                    <th style={styles.th}>Orders</th>
+                    <th style={styles.th}>ACOS</th>
+                    <th style={styles.th}>CVR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {searchTerms.slice(0, 50).map((term: any, idx: number) => (
+                    <tr key={idx}>
+                      <td style={styles.td}>{term.search_term}</td>
+                      <td style={styles.td}>
+                        <span style={{
+                          padding: '2px 6px',
+                          borderRadius: '3px',
+                          fontSize: '12px',
+                          backgroundColor: 
+                            term.match_type === 'EXACT' ? '#e3f2fd' : 
+                            term.match_type === 'PHRASE' ? '#f3e5f5' : '#fff3e0',
+                          color: 
+                            term.match_type === 'EXACT' ? '#1976d2' : 
+                            term.match_type === 'PHRASE' ? '#7b1fa2' : '#f57c00'
+                        }}>
+                          {term.match_type}
+                        </span>
+                      </td>
+                      <td style={styles.td}>{term.impressions.toLocaleString()}</td>
+                      <td style={styles.td}>{term.clicks}</td>
+                      <td style={styles.td}>{term.ctr.toFixed(2)}%</td>
+                      <td style={styles.td}>{formatCurrency(term.spend)}</td>
+                      <td style={styles.td}>{formatCurrency(term.sales)}</td>
+                      <td style={styles.td}>{term.orders}</td>
+                      <td style={styles.td}>{formatPercent(term.acos)}</td>
+                      <td style={styles.td}>{term.conversion_rate.toFixed(2)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderDataTableTab = () => (
     <>
@@ -1132,6 +1644,25 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {/* Demo Mode Banner */}
+      {isDemoMode && (
+        <div style={{
+          backgroundColor: '#fff3cd',
+          border: '1px solid #ffc107',
+          borderRadius: '8px',
+          padding: '15px',
+          margin: '20px',
+          textAlign: 'center',
+        }}>
+          <p style={{ margin: 0, color: '#856404', fontWeight: 'bold' }}>
+            🎭 Demo Mode: Displaying sample data for preview
+          </p>
+          <p style={{ margin: '5px 0 0 0', fontSize: '14px', color: '#856404' }}>
+            Configure backend services to see live optimization data
+          </p>
+        </div>
+      )}
 
       {/* Navigation Bar */}
       <div style={styles.navContainer}>
