@@ -1183,7 +1183,8 @@ class AmazonAdsAPI:
             
             # Log summary instead of per-campaign warnings
             if missing_field_campaigns:
-                logger.warning(f"get_campaigns: {len(missing_field_campaigns)} campaigns had missing expected fields: {missing_field_campaigns[:5]}")
+                sample_ids = missing_field_campaigns[:5] + (['...'] if len(missing_field_campaigns) > 5 else [])
+                logger.warning(f"get_campaigns: {len(missing_field_campaigns)} campaigns had missing expected fields: {sample_ids}")
                 logger.debug(f"get_campaigns: Sample missing fields - Expected: {expected_fields}, Sample available: {list(campaigns_data[0].keys()) if campaigns_data else []}")
             
             logger.info(f"Retrieved {len(campaigns)} campaigns")
@@ -1243,7 +1244,8 @@ class AmazonAdsAPI:
 
                 # Log summary instead of per-campaign warnings
                 if missing_field_campaigns:
-                    logger.warning(f"get_campaigns (v3 fallback): {len(missing_field_campaigns)} campaigns had missing expected fields: {missing_field_campaigns[:5]}")
+                    sample_ids = missing_field_campaigns[:5] + (['...'] if len(missing_field_campaigns) > 5 else [])
+                    logger.warning(f"get_campaigns (v3 fallback): {len(missing_field_campaigns)} campaigns had missing expected fields: {sample_ids}")
                     logger.debug(f"get_campaigns (v3 fallback): Sample missing fields - Expected: {expected_fields}, Sample available: {list(all_items[0].keys()) if all_items else []}")
 
                 logger.info(f"Retrieved {len(campaigns)} campaigns (v3 list fallback)")
