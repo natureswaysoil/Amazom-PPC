@@ -1499,30 +1499,34 @@ class BigQueryClient:
 
         perf_source = _resolve_perf_source()
 
-        if debug_bq:
-            if perf_source:
+        # Always log the selected source (not just in debug mode) for data quality tracking
+        if perf_source:
+            use_dedup = perf_source.get("use_deduplication", False)
+            logger.info(
+                "Daily overview perf source: table=%s deduplication=%s date_col=%s spend_col=%s sales_col=%s start_date=%s days=%d",
+                perf_source.get("table_id"),
+                "ENABLED" if use_dedup else "disabled",
+                perf_source.get("date_col"),
+                perf_source.get("spend_col"),
+                perf_source.get("sales_col"),
+                start_date,
+                days,
+            )
+            if use_dedup:
                 logger.info(
-                    "Daily overview perf source selected: table=%s date=%s spend=%s sales=%s has_profile=%s perf_dataset=%s results_dataset=%s profile_id=%s start_date=%s days=%s",
-                    perf_source.get("table_id"),
-                    perf_source.get("date_col"),
-                    perf_source.get("spend_col"),
-                    perf_source.get("sales_col"),
-                    perf_source.get("has_profile"),
-                    perf_dataset_ref,
-                    self.dataset_ref,
-                    profile_id,
-                    start_date,
-                    days,
+                    "Deduplication strategy: ROW_NUMBER() window function partitioned by (date, campaign_id)"
                 )
-            else:
-                logger.info(
-                    "Daily overview perf source not found; will use optimization_results-only aggregation (perf_dataset=%s results_dataset=%s profile_id=%s start_date=%s days=%s)",
-                    perf_dataset_ref,
-                    self.dataset_ref,
-                    profile_id,
-                    start_date,
-                    days,
-                )
+        else:
+            logger.info(
+                "Daily overview using FALLBACK: optimization_results table with per-day deduplication (start_date=%s days=%d)",
+                start_date,
+                days,
+            )
+            logger.warning(
+                "⚠️ FALLBACK MODE: Using optimization_results which may contain lookback window aggregates. "
+                "Each day's metrics represent the most recent run's aggregated lookback period. "
+                "Summing multiple days will cause duplicate counting!"
+            )
 
         # NOTE: Do not join perf + results in a single query.
         # BigQuery cannot query across datasets in different locations.
@@ -1671,6 +1675,9 @@ class BigQueryClient:
                 except Exception:
                     return 0.0
 
+            if debug_bq and perf_only_query:
+                logger.debug("Performance query:\n%s", perf_only_query)
+            
             runs_job = self._query(runs_query, job_config=job_config, dataset_ref=self.dataset_ref)
             runs_rows = [self._row_to_dict(r) for r in runs_job.result(timeout=30)]
 
@@ -1683,19 +1690,24 @@ class BigQueryClient:
                         dataset_ref=perf_dataset_ref,
                     )
                     perf_rows = [self._row_to_dict(r) for r in perf_job.result(timeout=30)]
+                    
+                    if debug_bq:
+                        logger.debug("Performance query returned %d rows", len(perf_rows))
+                        if perf_rows:
+                            logger.debug("Sample row: %s", perf_rows[0])
                 except Exception as exc:
                     logger.warning(
                         "Daily perf query failed; falling back to optimization_results-only aggregation: %s",
                         exc,
                     )
+                    logger.warning(
+                        "⚠️ Using optimization_results FALLBACK which contains lookback window aggregates. "
+                        "Deduplication will take most recent run per day, but each run's metrics still represent "
+                        "a multi-day lookback period!"
+                    )
                     if debug_bq:
-                        logger.info(
-                            "Daily overview fell back to optimization_results-only aggregation (dataset=%s profile_id=%s start_date=%s days=%s)",
-                            self.dataset_ref,
-                            profile_id,
-                            start_date,
-                            days,
-                        )
+                        logger.debug("Fallback query:\n%s", fallback_query)
+                    
                     job = self._query(
                         fallback_query,
                         job_config=job_config,
@@ -1709,6 +1721,12 @@ class BigQueryClient:
                         if day_val is not None:
                             data["day"] = str(day_val)
                         result.append(data)
+                    
+                    if debug_bq:
+                        logger.debug("Fallback query returned %d rows", len(result))
+                        if result:
+                            logger.debug("Sample row: %s", result[0])
+                    
                     return result
 
             by_day: Dict[str, Dict[str, Any]] = {}
