@@ -93,12 +93,90 @@ type LiveSectionState = {
   loadedAt?: number;
 };
 
+const generateDemoData = () => {
+  const today = new Date();
+  const demoSummary: SummaryData[] = [];
+  const demoResults: OptimizationResult[] = [];
+  
+  // Generate 14 days of summary data
+  for (let i = 0; i < 14; i++) {
+    const date = new Date(today);
+    date.setDate(date.getDate() - i);
+    const dayFactor = 0.8 + Math.random() * 0.4; // 0.8-1.2
+    
+    demoSummary.push({
+      date: date.toISOString().split('T')[0],
+      optimization_runs: Math.floor(1 + Math.random() * 3),
+      total_keywords_optimized: Math.floor(800 * dayFactor + Math.random() * 400),
+      avg_acos: 0.30 + Math.random() * 0.15,
+      total_spend: 450 * dayFactor + Math.random() * 200,
+      total_sales: 1200 * dayFactor + Math.random() * 400,
+    });
+  }
+  
+  // Generate 2 recent optimization results
+  for (let i = 0; i < 2; i++) {
+    const runDate = new Date(today);
+    runDate.setHours(runDate.getHours() - (i * 12));
+    
+    const campaigns: Campaign[] = [
+      { campaign_id: 'c1', campaign_name: 'Product Campaign A', spend: 234.56, sales: 567.89, acos: 0.413, keywords_count: 45, changes_made: 12 },
+      { campaign_id: 'c2', campaign_name: 'Brand Campaign', spend: 189.23, sales: 489.12, acos: 0.387, keywords_count: 32, changes_made: 8 },
+      { campaign_id: 'c3', campaign_name: 'Seasonal Promotion', spend: 156.78, sales: 401.23, acos: 0.391, keywords_count: 28, changes_made: 6 },
+      { campaign_id: 'c4', campaign_name: 'Category Keywords', spend: 123.45, sales: 298.76, acos: 0.413, keywords_count: 38, changes_made: 10 },
+    ];
+    
+    const topPerformers: TopPerformer[] = [
+      { keyword_text: 'organic potting soil', clicks: 145, sales: 389.45, acos: 0.28, bid_change: 0.15 },
+      { keyword_text: 'premium garden soil', clicks: 132, sales: 356.78, acos: 0.31, bid_change: 0.12 },
+      { keyword_text: 'natural fertilizer', clicks: 118, sales: 312.34, acos: 0.33, bid_change: -0.05 },
+      { keyword_text: 'compost mix', clicks: 98, sales: 267.89, acos: 0.29, bid_change: 0.10 },
+      { keyword_text: 'raised bed soil', clicks: 87, sales: 234.56, acos: 0.35, bid_change: 0.08 },
+    ];
+    
+    demoResults.push({
+      timestamp: runDate.toISOString(),
+      run_id: `demo-run-${i + 1}`,
+      status: 'success',
+      keywords_optimized: 1250 + Math.floor(Math.random() * 300),
+      bids_increased: 720 + Math.floor(Math.random() * 150),
+      bids_decreased: 530 + Math.floor(Math.random() * 100),
+      average_acos: 0.35 + Math.random() * 0.10,
+      total_spend: 704.02 + Math.random() * 200,
+      total_sales: 1857.96 + Math.random() * 400,
+      duration_seconds: 45.5 + Math.random() * 20,
+      campaigns_analyzed: campaigns.length,
+      negative_keywords_added: Math.floor(15 + Math.random() * 10),
+      budget_changes: Math.floor(2 + Math.random() * 4),
+      campaigns,
+      top_performers: topPerformers,
+      features: {
+        bid_optimization: { enabled: true, changes: 1250 },
+        dayparting: { enabled: true, rules: 24 },
+        campaign_management: { enabled: true, changes: 6 },
+        keyword_discovery: { enabled: true, new_keywords: 23 },
+        negative_keywords: { enabled: true, added: 18 }
+      },
+      errors: [],
+      warnings: [],
+      config_snapshot: {
+        target_acos: 0.35,
+        lookback_days: 14,
+        enabled_features: ['bid_optimization', 'dayparting', 'campaign_management', 'keyword_discovery', 'negative_keywords']
+      }
+    });
+  }
+  
+  return { summary: demoSummary, results: demoResults };
+};
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('overview');
   const [recentResults, setRecentResults] = useState<OptimizationResult[]>([]);
   const [summary, setSummary] = useState<SummaryData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
 
   const isRunIntervalSkipMessage =
     typeof error === 'string' &&
@@ -316,7 +394,14 @@ export default function Home() {
         setLoading(false);
         return;
       }
-      setError(msg);
+      
+      // If API fails, load demo data to showcase dashboard functionality
+      console.log('⚠️ API unavailable, loading demo data for preview...');
+      const demoData = generateDemoData();
+      setRecentResults(demoData.results);
+      setSummary(demoData.summary);
+      setIsDemoMode(true);
+      setError(msg + ' - Showing demo data for preview');
       setLoading(false);
     }
   };
@@ -347,7 +432,7 @@ export default function Home() {
     );
   }
 
-  if (error && recentResults.length === 0 && !isRunIntervalSkipMessage) {
+  if (error && recentResults.length === 0 && !isRunIntervalSkipMessage && !isDemoMode) {
     return (
       <div style={styles.container}>
         <div style={styles.errorCard}>
@@ -1551,6 +1636,25 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {/* Demo Mode Banner */}
+      {isDemoMode && (
+        <div style={{
+          backgroundColor: '#fff3cd',
+          border: '1px solid #ffc107',
+          borderRadius: '8px',
+          padding: '15px',
+          margin: '20px',
+          textAlign: 'center',
+        }}>
+          <p style={{ margin: 0, color: '#856404', fontWeight: 'bold' }}>
+            🎭 Demo Mode: Displaying sample data for preview
+          </p>
+          <p style={{ margin: '5px 0 0 0', fontSize: '14px', color: '#856404' }}>
+            Configure backend services to see live optimization data
+          </p>
+        </div>
+      )}
 
       {/* Navigation Bar */}
       <div style={styles.navContainer}>
