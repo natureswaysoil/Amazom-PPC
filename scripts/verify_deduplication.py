@@ -154,9 +154,10 @@ def check_lookback_windows(client: bigquery.Client, dataset_id: str):
         
         for row in results:
             acos_pct = (row.avg_acos or 0) * 100
+            lookback_str = str(row.lookback_days) if row.lookback_days is not None else 'N/A'
             logger.info(
                 f"{str(row.run_date):12s} "
-                f"{row.lookback_days or 'N/A':>10s} "
+                f"{lookback_str:>10s} "
                 f"{row.run_count:>6d} "
                 f"${row.avg_spend or 0:>10.2f} "
                 f"${row.avg_sales or 0:>10.2f} "

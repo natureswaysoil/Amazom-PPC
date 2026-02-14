@@ -529,8 +529,13 @@ export default function Home() {
   let totalSales: number;
   
   if (dataMetadata?.has_lookback_attribution && summary.length > 0) {
+    // Sort by date descending to ensure we get the most recent day
+    const sortedSummary = [...summary].sort((a, b) => 
+      new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+    
     // Use most recent day only - it already contains the lookback window
-    const latestDay = summary[0]; // summary is sorted by date descending
+    const latestDay = sortedSummary[0];
     totalSpend = latestDay.total_spend;
     totalSales = latestDay.total_sales;
   } else {
@@ -617,7 +622,7 @@ export default function Home() {
           </div>
           {avgAcos > 1.0 && (
             <div style={{ fontSize: '12px', color: '#f44336', marginTop: '8px', fontWeight: 'bold' }}>
-              ⚠️ ACOS &gt; 100%
+              ⚠️ ACOS > 100%
             </div>
           )}
         </div>
@@ -705,7 +710,7 @@ export default function Home() {
           fontSize: '14px',
           color: '#c62828'
         }}>
-          ⚠️ <strong>High ACOS Alert:</strong> Your ACOS is {formatPercent(avgAcos)} (&gt;100%), 
+          ⚠️ <strong>High ACOS Alert:</strong> Your ACOS is {formatPercent(avgAcos)} (>100%), 
           meaning you're spending more on ads than the revenue generated. This requires immediate attention. 
           Review your targeting, bids, and campaign settings.
         </div>

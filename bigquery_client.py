@@ -1531,12 +1531,21 @@ class BigQueryClient:
                 )
             
             if has_lookback:
+                # Extract specific window from sales column name for detailed warning
+                window_match = None
+                for window in ["7d", "14d", "30d"]:
+                    if window in str(perf_source.get("sales_col", "")).lower():
+                        window_match = window
+                        break
+                
+                window_desc = f"{window_match.upper()} attribution" if window_match else "multi-day attribution"
                 logger.warning(
-                    "⚠️ LOOKBACK ATTRIBUTION DETECTED: Sales column '%s' contains multi-day attribution window. "
-                    "Each row's sales represent %s days of lookback, not just that row's date. "
+                    "⚠️ LOOKBACK ATTRIBUTION DETECTED: Sales column '%s' contains %s window. "
+                    "Each row's sales represent %s lookback, not just that row's date. "
                     "Dashboard should NOT sum daily values - use most recent day only or the sum will be inflated!",
                     perf_source.get("sales_col"),
-                    "7/14/30" if any(x in str(perf_source.get("sales_col", "")).lower() for x in ["7d", "14d", "30d"]) else "multiple"
+                    window_desc,
+                    window_desc
                 )
         else:
             logger.info(
