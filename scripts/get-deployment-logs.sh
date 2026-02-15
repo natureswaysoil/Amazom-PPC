@@ -117,8 +117,17 @@ get_function_logs() {
   
   echo -e "${CYAN}Querying Cloud Functions logs for errors...${NC}\n"
   
-  # Calculate timestamp for 24 hours ago
-  local yesterday=$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -v-24H +"%Y-%m-%dT%H:%M:%SZ")
+  # Calculate timestamp for 24 hours ago with error handling
+  local yesterday
+  if yesterday=$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null); then
+    : # GNU date succeeded
+  elif yesterday=$(date -u -v-24H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null); then
+    : # BSD date succeeded  
+  else
+    # Fallback: use current time minus 86400 seconds
+    yesterday=$(date -u -d "@$(($(date +%s) - 86400))" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
+    echo -e "${YELLOW}⚠️  Using approximate timestamp${NC}"
+  fi
   
   # Query for function errors
   local log_filter="resource.type=\"cloud_function\"

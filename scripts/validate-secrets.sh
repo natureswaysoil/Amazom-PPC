@@ -117,13 +117,16 @@ validate_secret() {
     return 1
   fi
   
-  # Check if value is a placeholder (starts with YOUR_)
-  if [[ "${secret_value}" =~ ^YOUR_ ]]; then
-    echo -e "${RED}  ❌ Secret contains placeholder value: ${secret_value}${NC}"
-    echo -e "${YELLOW}  Update with actual value: echo 'actual_value' | gcloud secrets versions add ${secret_name} --data-file=- --project=${PROJECT_ID}${NC}\n"
-    ((INVALID_COUNT++))
-    return 1
-  fi
+  # Check if value is a placeholder
+  local placeholder_patterns=("^YOUR_" "^CHANGE_ME" "^REPLACE_THIS" "^TODO" "^PLACEHOLDER" "^EXAMPLE")
+  for pattern in "${placeholder_patterns[@]}"; do
+    if [[ "${secret_value}" =~ ${pattern} ]]; then
+      echo -e "${RED}  ❌ Secret contains placeholder value: ${secret_value}${NC}"
+      echo -e "${YELLOW}  Update with actual value: echo 'actual_value' | gcloud secrets versions add ${secret_name} --data-file=- --project=${PROJECT_ID}${NC}\n"
+      ((INVALID_COUNT++))
+      return 1
+    fi
+  done
   
   # Check value length to provide feedback
   local value_length=${#secret_value}

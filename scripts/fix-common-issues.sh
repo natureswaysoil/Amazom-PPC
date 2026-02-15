@@ -50,7 +50,7 @@ print_section() {
 
 confirm() {
   local message="$1"
-  echo -e "${YELLOW}${message} (y/N): ${NC}\c"
+  printf "${YELLOW}%s (y/N): ${NC}" "${message}"
   read -r response
   [[ "${response}" =~ ^[Yy]$ ]]
 }
@@ -108,7 +108,7 @@ fix_missing_secrets() {
   for secret in "${missing_secrets[@]}"; do
     echo ""
     echo -e "${CYAN}Creating secret: ${secret}${NC}"
-    echo -e "${YELLOW}Enter value for ${secret} (input hidden): ${NC}\c"
+    printf "${YELLOW}Enter value for %s (input hidden): ${NC}" "${secret}"
     read -rs secret_value
     echo ""
     
@@ -148,7 +148,7 @@ fix_iam_permissions() {
       echo -e "${CYAN}Using default service account: ${SERVICE_ACCOUNT}${NC}\n"
     else
       echo -e "${YELLOW}⚠️  Could not determine service account${NC}"
-      echo -e "${YELLOW}Please provide service account email: ${NC}\c"
+      printf "${YELLOW}Please provide service account email: ${NC}"
       read -r SERVICE_ACCOUNT
       
       if [[ -z "${SERVICE_ACCOUNT}" ]]; then
@@ -289,7 +289,7 @@ fix_dashboard_api_key() {
     echo -e "${YELLOW}⚠️  dashboard-api-key secret does not exist${NC}"
     
     if confirm "Create dashboard-api-key secret?"; then
-      echo -e "${YELLOW}Enter API key value (input hidden): ${NC}\c"
+      printf "${YELLOW}Enter API key value (input hidden): ${NC}"
       read -rs api_key_value
       echo ""
       

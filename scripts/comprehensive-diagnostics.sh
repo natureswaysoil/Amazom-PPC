@@ -244,8 +244,17 @@ check_error_logs() {
   
   echo -e "${CYAN}Querying Cloud Logging for errors...${NC}\n"
   
-  # Calculate timestamp for 1 hour ago
-  local one_hour_ago=$(date -u -d '1 hour ago' +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -v-1H +"%Y-%m-%dT%H:%M:%SZ")
+  # Calculate timestamp for 1 hour ago with error handling
+  local one_hour_ago
+  if one_hour_ago=$(date -u -d '1 hour ago' +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null); then
+    : # GNU date succeeded
+  elif one_hour_ago=$(date -u -v-1H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null); then
+    : # BSD date succeeded
+  else
+    # Fallback: use current time minus 3600 seconds
+    one_hour_ago=$(date -u -d "@$(($(date +%s) - 3600))" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
+    echo -e "${YELLOW}⚠️  Using approximate timestamp${NC}"
+  fi
   
   # Query logs
   local log_filter="resource.type=\"cloud_function\"

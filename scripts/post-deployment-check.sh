@@ -24,7 +24,7 @@ NC='\033[0m' # No Color
 FUNCTION_NAME="${1:-${FUNCTION_NAME:-ppc-optimizer}}"
 PROJECT_ID="${2:-${PROJECT_ID:-amazon-ppc-474902}}"
 FUNCTION_URL=""
-TIMEOUT=300  # 5 minutes
+TIMEOUT="${DEPLOYMENT_TIMEOUT:-300}"  # 5 minutes, configurable via DEPLOYMENT_TIMEOUT env var
 POLL_INTERVAL=10  # seconds
 
 CHECKS_PASSED=0
