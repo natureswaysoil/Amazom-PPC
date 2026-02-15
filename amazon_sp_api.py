@@ -303,9 +303,17 @@ class AmazonSPAPIClient:
         all_orders = []
         next_token = None
         total_revenue = 0.0
+        max_pages = 100  # Safety limit to prevent infinite loops
+        page_count = 0
         
         try:
             while True:
+                # Safety check for pagination limit
+                page_count += 1
+                if page_count > max_pages:
+                    logger.warning(f"Reached maximum pagination limit ({max_pages} pages)")
+                    break
+                
                 # Add pagination token if available
                 if next_token:
                     params["NextToken"] = next_token
@@ -334,6 +342,8 @@ class AmazonSPAPIClient:
                 
                 logger.debug(f"Fetching next page of orders (current count: {len(all_orders)})")
             
+            # Note: Revenue calculation assumes single currency or accepts mixed currencies
+            # For multi-currency support, track currency codes separately
             logger.info(f"✓ Retrieved {len(all_orders)} orders (total revenue: {total_revenue:,.2f})")
             
             return {
