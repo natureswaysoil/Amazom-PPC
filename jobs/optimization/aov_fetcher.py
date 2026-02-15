@@ -111,8 +111,8 @@ class AOVFetcher:
         if campaign_ids:
             # Convert to integers for native INT64 comparison (no STRING cast in WHERE)
             try:
-                campaign_ids_int = ", ".join([str(int(cid)) for cid in campaign_ids])
-                campaign_filter = f"AND campaign_id IN ({campaign_ids_int})"
+                campaign_ids_str = ", ".join([str(int(cid)) for cid in campaign_ids])
+                campaign_filter = f"AND campaign_id IN ({campaign_ids_str})"
             except (ValueError, TypeError) as e:
                 logger.error(f"Invalid campaign_id format - expected numeric values: {e}")
                 raise ValueError(f"Campaign IDs must be numeric values, got: {campaign_ids}")
