@@ -342,8 +342,9 @@ class AmazonSPAPIClient:
                 
                 logger.debug(f"Fetching next page of orders (current count: {len(all_orders)})")
             
-            # Note: Revenue calculation assumes single currency or accepts mixed currencies
-            # For multi-currency support, track currency codes separately
+            # Note: Total revenue sums all order amounts directly without currency conversion
+            # If orders use different currencies, the total will be mathematically incorrect
+            # For production multi-currency support, implement separate tracking per currency
             logger.info(f"✓ Retrieved {len(all_orders)} orders (total revenue: {total_revenue:,.2f})")
             
             return {
