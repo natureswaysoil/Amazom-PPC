@@ -78,6 +78,7 @@ class AOVBidOptimizer:
         target_cpa = aov * self.target_acos
 
         # Calculate bid adjustment factor
+        adjustment_factor = None
         if current_acos > 0:
             # If current ACOS is above target, decrease bid
             # If current ACOS is below target, increase bid
@@ -103,7 +104,7 @@ class AOVBidOptimizer:
         return {
             "current_bid": current_bid,
             "new_bid": new_bid,
-            "adjustment_factor": adjustment_factor if current_acos > 0 else None,
+            "adjustment_factor": adjustment_factor,
             "bid_change": new_bid - current_bid,
             "bid_change_pct": bid_change_pct,
             "reason": self._get_adjustment_reason(current_acos, self.target_acos),

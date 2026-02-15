@@ -54,7 +54,7 @@ def _features_for_job_type(job_type: str) -> List[str]:
         return ["__DIAGNOSE_PERMISSIONS__"]
 
     raise ValueError(
-        f"Unknown JOB_TYPE '{job_type}'. Expected keyword_harvest, bid_optimizer, optimize, or diagnose_permissions."
+        f"Unknown JOB_TYPE '{jt}'. Expected keyword_harvest, bid_optimizer, optimize, or diagnose_permissions."
     )
 
 

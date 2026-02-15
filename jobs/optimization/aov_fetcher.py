@@ -208,8 +208,7 @@ class AOVFetcher:
         # Per-period counts
         for days in lookback_days_list:
             if days == 1:
-                key = "agg"  # Skip, already have aggregate
-                continue
+                continue  # Skip, already have aggregate
             
             key = f"{days}d"
             try:
