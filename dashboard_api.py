@@ -413,5 +413,11 @@ if __name__ == '__main__':
     )
     
     # Run development server
+    # WARNING: Never use debug=True in production! Set to False for production deployments.
     port = int(os.getenv('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 'yes')
+    
+    if debug_mode:
+        logger.warning("⚠️  Running in DEBUG mode - DO NOT use in production!")
+    
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
