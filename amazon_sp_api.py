@@ -272,7 +272,7 @@ class AmazonSPAPIClient:
         marketplace_ids: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
-        Get orders for date range
+        Get orders for date range from Amazon SP-API
         
         Args:
             start_date: Start date for orders
@@ -283,28 +283,82 @@ class AmazonSPAPIClient:
         Returns:
             Orders data with revenue, counts, and customer info
         """
-        # Note: This is a placeholder implementation
-        # In production, you would use the actual SP-API Orders endpoint
-        # For now, return mock data structure
-        
         logger.info(f"Fetching orders from {start_date.date()} to {end_date.date()}")
         
-        # Mock data for demonstration
-        # In production, replace with actual API call:
-        # endpoint = "/orders/v0/orders"
-        # params = {
-        #     "CreatedAfter": start_date.isoformat(),
-        #     "CreatedBefore": end_date.isoformat(),
-        #     "MarketplaceIds": marketplace_ids or ["ATVPDKIKX0DER"]  # US
-        # }
-        # return self._make_request("GET", endpoint, params=params)
+        # SP-API Orders endpoint
+        endpoint = "/orders/v0/orders"
         
-        return {
-            "orders": [],
-            "total_count": 0,
-            "total_revenue": 0.0,
-            "note": "Mock data - integrate with actual SP-API Orders endpoint"
+        # Build query parameters
+        params = {
+            "CreatedAfter": start_date.isoformat(),
+            "CreatedBefore": end_date.isoformat(),
+            "MarketplaceIds": ",".join(marketplace_ids or ["ATVPDKIKX0DER"])  # US marketplace
         }
+        
+        # Add order status filter if provided
+        if order_statuses:
+            params["OrderStatuses"] = ",".join(order_statuses)
+        
+        # Handle pagination
+        all_orders = []
+        next_token = None
+        total_revenue = 0.0
+        max_pages = 100  # Safety limit to prevent infinite loops
+        page_count = 0
+        
+        try:
+            while True:
+                # Safety check for pagination limit
+                page_count += 1
+                if page_count > max_pages:
+                    logger.warning(f"Reached maximum pagination limit ({max_pages} pages)")
+                    break
+                
+                # Add pagination token if available
+                if next_token:
+                    params["NextToken"] = next_token
+                
+                # Make API request
+                response = self._make_request("GET", endpoint, params=params)
+                
+                # Extract orders from response
+                orders = response.get("Orders", [])
+                all_orders.extend(orders)
+                
+                # Calculate revenue from order totals
+                for order in orders:
+                    order_total = order.get("OrderTotal", {})
+                    amount = order_total.get("Amount")
+                    if amount:
+                        try:
+                            total_revenue += float(amount)
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Invalid order amount '{amount}': {e}")
+                
+                # Check for more pages
+                next_token = response.get("NextToken")
+                if not next_token:
+                    break
+                
+                logger.debug(f"Fetching next page of orders (current count: {len(all_orders)})")
+            
+            # Note: Total revenue sums all order amounts directly without currency conversion
+            # If orders use different currencies, the total will be mathematically incorrect
+            # For production multi-currency support, implement separate tracking per currency
+            logger.info(f"✓ Retrieved {len(all_orders)} orders (total revenue: {total_revenue:,.2f})")
+            
+            return {
+                "orders": all_orders,
+                "total_count": len(all_orders),
+                "total_revenue": total_revenue
+            }
+            
+        except AmazonSPAPIError as e:
+            logger.error(f"Failed to fetch orders: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error fetching orders: {e}", exc_info=True)
+            raise AmazonSPAPIError(f"Failed to fetch orders: {e}")
     
     def get_order_metrics(
         self,
