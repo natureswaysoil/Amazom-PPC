@@ -44,16 +44,17 @@
   },
   "bid_optimization": {
     "lookback_days": 14,
-    "min_clicks": 10,
+    "min_clicks": 20,
     "min_spend": 5.0,
     "target_acos": 0.45,
-    "high_acos": 0.6,
+    "high_acos": 0.5,
     "low_acos": 0.25,
     "min_ctr": 0.003,
-    "up_pct": 0.15,
-    "down_pct": 0.2,
+    "up_pct": 0.10,
+    "down_pct": 0.3,
     "min_bid": 0.25,
-    "max_bid": 5.0
+    "max_bid": 5.0,
+    "_comment": "Updated for ACOS control: more aggressive bid reductions (30% vs 20%), lower high_acos threshold (50% vs 60%), higher min_clicks (20 vs 10), and more conservative increases (10% vs 15%)"
   },
   "dayparting": {
     "enabled": true,

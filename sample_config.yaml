@@ -36,16 +36,18 @@ email_notifications:
 
 bid_optimization:
   lookback_days: 14
-  min_clicks: 10
+  min_clicks: 20          # Require more data before making bid changes (increased from 10)
   min_spend: 5.0
   target_acos: 0.45
-  high_acos: 0.6
+  high_acos: 0.5          # Reduce bids when ACOS exceeds 50% (lowered from 60%)
   low_acos: 0.25
   min_ctr: 0.003
-  up_pct: 0.15
-  down_pct: 0.2
+  up_pct: 0.10            # Increase bids by only 10% for good performers (reduced from 15%)
+  down_pct: 0.3           # Reduce bids by 30% for poor performers (increased from 20%)
   min_bid: 0.25
   max_bid: 5.0
+  # ACOS Control Strategy: These parameters are tuned to bring ACOS from 111.75% down toward 45% target
+  # by cutting bids faster/earlier and being more conservative with bid increases
 
 dayparting:
   enabled: true
