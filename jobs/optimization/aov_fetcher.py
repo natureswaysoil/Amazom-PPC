@@ -122,11 +122,12 @@ class AOVFetcher:
                         # Note: This may lose precision for very large float values
                         float_val = float(cid)
                         int_val = int(float_val)
-                        if float_val != int_val:
+                        # Check if the float has a fractional part (more reliable than !=)
+                        if float_val % 1 != 0:
                             logger.warning(f"Campaign ID {cid} is a float, truncating to {int_val}")
                         validated_ids.append(int_val)
                 
-                # Validate all IDs are non-negative for data integrity
+                # Validate all IDs are non-negative (campaign IDs are always positive)
                 invalid_ids = [cid for cid in validated_ids if cid < 0]
                 if invalid_ids:
                     raise ValueError(f"Campaign IDs must be non-negative integers, found: {invalid_ids}")
