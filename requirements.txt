@@ -15,5 +15,9 @@ pytz>=2023.3
 # Cloud Functions
 functions-framework>=3.4.0
 
+# Dashboard API
+flask>=3.0.0
+flask-cors>=4.0.0
+
 # Optional but recommended
 python-dotenv>=1.0.0

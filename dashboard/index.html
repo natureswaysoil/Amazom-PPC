@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amazon Sales Dashboard - Live Data</title>
+    <meta name="description" content="Real-time Amazon Sales Dashboard with live data from Amazon SP-API">
+    
+    <!-- Tailwind CSS with SRI -->
+    <script src="https://cdn.tailwindcss.com" integrity="sha384-..." crossorigin="anonymous"></script>
+    
+    <!-- Chart.js with SRI -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-S04WRu06x/MhvmWgYBZZ0HOsTlvUL8T5cTzBYPZIDVCb0+QDzFJY/C0tZJlHOaqY" crossorigin="anonymous"></script>
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+</head>
+<body class="bg-gray-50">
+    <!-- Header -->
+    <header class="bg-white shadow-sm border-b border-gray-200">
+        <div class="container mx-auto px-4 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <span class="text-3xl">📊</span>
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-900">Amazon Sales Dashboard</h1>
+                        <p class="text-sm text-gray-500">Real-time analytics with live data</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div class="text-right">
+                        <div class="text-xs text-gray-500">Last updated</div>
+                        <div id="last-updated" class="text-sm font-medium text-gray-900">--:--:--</div>
+                    </div>
+                    <button id="refresh-btn" class="btn-primary">
+                        <span id="refresh-icon">🔄</span> Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="container mx-auto px-4 py-6">
+        <!-- Date Range Selector -->
+        <div class="bg-white rounded-lg shadow-sm p-4 mb-6">
+            <div class="flex flex-wrap items-center gap-3">
+                <span class="font-medium text-gray-700">Date Range:</span>
+                <div class="flex flex-wrap gap-2">
+                    <button class="date-range-btn" data-range="today">Today</button>
+                    <button class="date-range-btn" data-range="yesterday">Yesterday</button>
+                    <button class="date-range-btn" data-range="7">Last 7 Days</button>
+                    <button class="date-range-btn active" data-range="30">Last 30 Days</button>
+                    <button class="date-range-btn" data-range="90">Last 90 Days</button>
+                    <button class="date-range-btn" data-range="this-month">This Month</button>
+                    <button class="date-range-btn" data-range="last-month">Last Month</button>
+                    <button class="date-range-btn" data-range="this-year">This Year</button>
+                </div>
+                <div class="flex items-center gap-2 ml-auto">
+                    <input type="date" id="custom-start" class="date-input">
+                    <span class="text-gray-500">to</span>
+                    <input type="date" id="custom-end" class="date-input">
+                    <button id="apply-custom-range" class="btn-secondary">Apply</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+            <!-- Revenue Card -->
+            <div class="kpi-card">
+                <div class="kpi-icon bg-green-100 text-green-600">💰</div>
+                <div class="kpi-content">
+                    <div class="kpi-label">Total Revenue</div>
+                    <div class="kpi-value" id="revenue-value">$0</div>
+                    <div class="kpi-change" id="revenue-change">
+                        <span class="change-indicator">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Orders Card -->
+            <div class="kpi-card">
+                <div class="kpi-icon bg-blue-100 text-blue-600">📦</div>
+                <div class="kpi-content">
+                    <div class="kpi-label">Total Orders</div>
+                    <div class="kpi-value" id="orders-value">0</div>
+                    <div class="kpi-change" id="orders-change">
+                        <span class="change-indicator">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Average Order Value Card -->
+            <div class="kpi-card">
+                <div class="kpi-icon bg-purple-100 text-purple-600">🛍️</div>
+                <div class="kpi-content">
+                    <div class="kpi-label">Avg Order Value</div>
+                    <div class="kpi-value" id="aov-value">$0</div>
+                    <div class="kpi-change" id="aov-change">
+                        <span class="change-indicator">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Conversion Rate Card -->
+            <div class="kpi-card">
+                <div class="kpi-icon bg-orange-100 text-orange-600">📈</div>
+                <div class="kpi-content">
+                    <div class="kpi-label">Conversion Rate</div>
+                    <div class="kpi-value" id="conversion-value">0%</div>
+                    <div class="kpi-change" id="conversion-change">
+                        <span class="change-indicator">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row 1 -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <!-- Revenue Trend Chart -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h2 class="chart-title">Revenue Trend</h2>
+                    <div class="chart-subtitle">Daily revenue over time</div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="revenue-chart"></canvas>
+                </div>
+            </div>
+
+            <!-- Order Status Chart -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h2 class="chart-title">Order Status</h2>
+                    <div class="chart-subtitle">Distribution by status</div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="order-status-chart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row 2 -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <!-- Top Products Chart -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h2 class="chart-title">Top Products by Revenue</h2>
+                    <div class="chart-subtitle">Top 10 best-selling products</div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="top-products-chart"></canvas>
+                </div>
+            </div>
+
+            <!-- Customer Metrics -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h2 class="chart-title">Customer Metrics</h2>
+                    <div class="chart-subtitle">Customer acquisition and retention</div>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div class="metric-row">
+                        <span class="metric-label">Total Customers</span>
+                        <span class="metric-value" id="total-customers">0</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">New Customers</span>
+                        <span class="metric-value" id="new-customers">0</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Returning Customers</span>
+                        <span class="metric-value" id="returning-customers">0</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Avg Customer Lifetime Value</span>
+                        <span class="metric-value" id="avg-clv">$0</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Avg Rating</span>
+                        <span class="metric-value" id="avg-rating">0.0 ⭐</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Inventory Table -->
+        <div class="chart-card mb-6">
+            <div class="chart-header">
+                <h2 class="chart-title">Inventory Status</h2>
+                <div class="chart-subtitle">Current stock levels and alerts</div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>ASIN</th>
+                            <th>Product Name</th>
+                            <th>Quantity</th>
+                            <th>Days in Stock</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="inventory-table-body">
+                        <tr>
+                            <td colspan="6" class="text-center text-gray-500 py-8">
+                                Loading inventory data...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- System Status -->
+        <div class="bg-white rounded-lg shadow-sm p-4">
+            <div class="flex items-center justify-between text-sm">
+                <div class="flex items-center space-x-4">
+                    <span class="text-gray-600">System Status:</span>
+                    <div class="flex items-center space-x-2">
+                        <span class="status-dot status-healthy"></span>
+                        <span class="text-gray-700">All systems operational</span>
+                    </div>
+                </div>
+                <div class="text-gray-500">
+                    Dashboard v1.0.0 | Auto-refresh: <span id="auto-refresh-status">Enabled (5min)</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Loading dashboard data...</div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/filters.js"></script>
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
