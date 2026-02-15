@@ -114,7 +114,7 @@ class AOVFetcher:
                 # Convert each campaign ID to int, handling floats and strings
                 # Use int(float(cid)) to handle string representations of floats
                 validated_ids = [int(float(cid)) for cid in campaign_ids]
-                # Validate all IDs are non-negative to prevent SQL injection
+                # Validate all IDs are non-negative for data integrity
                 if any(cid < 0 for cid in validated_ids):
                     raise ValueError("Campaign IDs must be non-negative integers")
                 campaign_ids_joined = ", ".join(str(cid) for cid in validated_ids)
