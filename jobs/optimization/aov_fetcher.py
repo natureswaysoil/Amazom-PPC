@@ -119,7 +119,12 @@ class AOVFetcher:
                         validated_ids.append(int(cid))
                     except ValueError:
                         # Handle string representations of floats (e.g., "123.45")
-                        validated_ids.append(int(float(cid)))
+                        # Note: This may lose precision for very large float values
+                        float_val = float(cid)
+                        int_val = int(float_val)
+                        if float_val != int_val:
+                            logger.warning(f"Campaign ID {cid} is a float, truncating to {int_val}")
+                        validated_ids.append(int_val)
                 
                 # Validate all IDs are non-negative for data integrity
                 invalid_ids = [cid for cid in validated_ids if cid < 0]
