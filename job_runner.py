@@ -40,6 +40,10 @@ def _features_for_job_type(job_type: str) -> List[str]:
     # Historic names from Cloud Run Job config.
     if jt in {"keyword_harvest", "keyword-harvest", "keywordharvest"}:
         return ["keyword_discovery"]
+    
+    # AOV-based bid optimizer
+    if jt in {"bid_optimizer", "bid-optimizer", "aov_optimizer", "aov-optimizer"}:
+        return ["aov_bid_optimization"]
 
     # Allow running the full suite if desired.
     if jt in {"optimize", "optimizer", "run_optimizer"}:
@@ -50,7 +54,7 @@ def _features_for_job_type(job_type: str) -> List[str]:
         return ["__DIAGNOSE_PERMISSIONS__"]
 
     raise ValueError(
-        f"Unknown JOB_TYPE '{job_type}'. Expected keyword_harvest, optimize, or diagnose_permissions."
+        f"Unknown JOB_TYPE '{job_type}'. Expected keyword_harvest, bid_optimizer, optimize, or diagnose_permissions."
     )
 
 
@@ -255,6 +259,25 @@ def main() -> int:
     dashboard = DashboardClient(config, bigquery_client=bq)
     run_id = dashboard.start_run(dry_run=dry_run)
     logger.info("Run started run_id=%s dry_run=%s", run_id, dry_run)
+
+    # Handle AOV bid optimizer separately
+    if features == ["aov_bid_optimization"]:
+        from jobs.optimization.aov_bid_optimizer import AOVBidOptimizer
+        
+        optimizer = AOVBidOptimizer(
+            project_id=bq.project_id if bq else os.getenv("GOOGLE_CLOUD_PROJECT"),
+            dataset_id=bq.dataset_id if bq else "amazon_ppc"
+        )
+        
+        start = time.time()
+        result = optimizer.run(dry_run=dry_run, auto_apply=not dry_run)
+        duration = time.time() - start
+        
+        logger.info(f"AOV Bid Optimizer completed: {result.get('status')} - "
+                   f"{result.get('bids_changed', 0)} bids changed of {result.get('bids_processed', 0)} processed")
+        
+        dashboard.send_results(result, config, duration_seconds=duration, dry_run=dry_run)
+        return 0
 
     if not features:
         features = None
