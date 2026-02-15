@@ -136,7 +136,7 @@ class AOVFetcher:
                 campaign_filter = f"AND campaign_id IN ({campaign_ids_joined})"
             except (ValueError, TypeError) as e:
                 logger.error(f"Invalid campaign_id format - expected numeric values: {e}")
-                raise ValueError(f"Campaign IDs must be numeric values, got: {campaign_ids}")
+                raise ValueError(f"Campaign IDs must be numeric values, got: {campaign_ids}") from e
 
         # Use CAST for all ID columns to ensure consistent STRING types
         query = f"""
