@@ -1,0 +1,301 @@
+name: Deployment Diagnostics
+
+on:
+  workflow_run:
+    workflows: ["Deploy to Google Cloud", "Deploy Cloud Functions Gen2 (WIF)", "Deploy PPC Optimizer to Cloud Functions"]
+    types: [completed]
+    
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: 'GCP Project ID'
+        required: false
+        default: 'amazon-ppc-474902'
+      function_name:
+        description: 'Cloud Function Name'
+        required: false
+        default: 'ppc-optimizer'
+
+jobs:
+  diagnostics:
+    name: Run Deployment Diagnostics
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' || github.event_name == 'workflow_dispatch' }}
+    
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    
+    env:
+      PROJECT_ID: ${{ github.event.inputs.project_id || secrets.GCP_PROJECT_ID || 'amazon-ppc-474902' }}
+      FUNCTION_NAME: ${{ github.event.inputs.function_name || 'ppc-optimizer' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        continue-on-error: true
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+        continue-on-error: true
+      
+      - name: Install dependencies
+        run: |
+          # Install jq for JSON parsing
+          sudo apt-get update && sudo apt-get install -y jq
+      
+      - name: Validate Secrets
+        id: secrets
+        run: |
+          echo "::group::Secret Validation"
+          chmod +x scripts/validate-secrets.sh
+          
+          if ./scripts/validate-secrets.sh ${{ env.PROJECT_ID }}; then
+            echo "SECRETS_STATUS=passed" >> $GITHUB_OUTPUT
+            echo "::notice::All secrets validated successfully"
+          else
+            echo "SECRETS_STATUS=failed" >> $GITHUB_OUTPUT
+            echo "::error::Secret validation failed"
+          fi
+          echo "::endgroup::"
+        continue-on-error: true
+      
+      - name: Get Deployment Logs
+        if: always()
+        run: |
+          echo "::group::Deployment Logs"
+          chmod +x scripts/get-deployment-logs.sh
+          
+          export OUTPUT_FILE="/tmp/deployment-logs.txt"
+          ./scripts/get-deployment-logs.sh ${{ env.PROJECT_ID }} || true
+          
+          echo "::notice::Deployment logs saved to ${OUTPUT_FILE}"
+          echo "::endgroup::"
+        continue-on-error: true
+      
+      - name: Run Comprehensive Diagnostics
+        if: always()
+        run: |
+          echo "::group::Comprehensive Diagnostics"
+          chmod +x scripts/comprehensive-diagnostics.sh
+          
+          export OUTPUT_FILE="/tmp/diagnostics.log"
+          ./scripts/comprehensive-diagnostics.sh ${{ env.PROJECT_ID }} ${{ env.FUNCTION_NAME }} || true
+          
+          echo "::notice::Diagnostics saved to ${OUTPUT_FILE}"
+          echo "::endgroup::"
+        continue-on-error: true
+      
+      - name: Post-Deployment Health Check
+        if: always()
+        run: |
+          echo "::group::Post-Deployment Health Check"
+          chmod +x scripts/post-deployment-check.sh
+          
+          if ./scripts/post-deployment-check.sh ${{ env.FUNCTION_NAME }} ${{ env.PROJECT_ID }}; then
+            echo "::notice::Deployment is healthy"
+          else
+            echo "::warning::Deployment health check detected issues"
+          fi
+          echo "::endgroup::"
+        continue-on-error: true
+      
+      - name: Summarize Results
+        if: always()
+        id: summarize
+        run: |
+          echo "::group::Diagnostic Summary"
+          
+          # Create summary for GitHub Actions
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          # 🔍 Deployment Diagnostics Report
+          
+          ## Workflow Information
+          - **Workflow**: ${{ github.workflow }}
+          - **Run Number**: ${{ github.run_number }}
+          - **Triggered By**: ${{ github.event_name }}
+          - **Project ID**: ${{ env.PROJECT_ID }}
+          - **Function Name**: ${{ env.FUNCTION_NAME }}
+          - **Timestamp**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ## Diagnostic Results
+          
+          ### Secret Validation
+          - Status: ${{ steps.secrets.outputs.SECRETS_STATUS || 'not run' }}
+          
+          ### Authentication
+          - GCP Auth: ${{ steps.auth.outcome }}
+          
+          ## Log Files
+          The following diagnostic logs have been generated:
+          - `/tmp/diagnostics.log` - Comprehensive diagnostics
+          - `/tmp/deployment-logs.txt` - Deployment and build logs
+          
+          ## Next Steps
+          
+          1. Review the diagnostic output in the artifacts
+          2. Check the logs for specific error messages
+          3. Run `./scripts/fix-common-issues.sh` locally to resolve common problems
+          4. Verify secrets in Secret Manager
+          5. Check Cloud Console for detailed error messages
+          
+          ## Useful Commands
+          
+          ```bash
+          # Validate secrets
+          ./scripts/validate-secrets.sh
+          
+          # Run pre-deployment checks
+          ./scripts/pre-deployment-check.sh
+          
+          # Get detailed logs
+          ./scripts/get-deployment-logs.sh
+          
+          # Fix common issues
+          ./scripts/fix-common-issues.sh
+          ```
+          
+          EOF
+          
+          echo "::endgroup::"
+      
+      - name: Create Issue on Critical Failure
+        if: failure() && steps.auth.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Read diagnostic outputs
+            let diagnosticsOutput = '';
+            let deploymentLogs = '';
+            
+            try {
+              diagnosticsOutput = fs.readFileSync('/tmp/diagnostics.log', 'utf8');
+            } catch (e) {
+              diagnosticsOutput = 'Diagnostics log not available';
+            }
+            
+            try {
+              deploymentLogs = fs.readFileSync('/tmp/deployment-logs.txt', 'utf8');
+            } catch (e) {
+              deploymentLogs = 'Deployment logs not available';
+            }
+            
+            // Truncate if too long
+            const maxLength = 10000;
+            if (diagnosticsOutput.length > maxLength) {
+              diagnosticsOutput = diagnosticsOutput.substring(0, maxLength) + '\n\n... (truncated, see artifacts for full output)';
+            }
+            if (deploymentLogs.length > maxLength) {
+              deploymentLogs = deploymentLogs.substring(0, maxLength) + '\n\n... (truncated, see artifacts for full output)';
+            }
+            
+            // Create issue
+            const issueBody = `## 🚨 Deployment Failure Detected
+            
+            **Workflow**: ${context.workflow}
+            **Run Number**: ${context.runNumber}
+            **Run ID**: ${context.runId}
+            **Timestamp**: ${new Date().toISOString()}
+            **Triggered by**: ${context.eventName}
+            
+            ### Workflow Run
+            [View workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            
+            ### Diagnostic Output
+            
+            <details>
+            <summary>Click to expand diagnostics</summary>
+            
+            \`\`\`
+            ${diagnosticsOutput}
+            \`\`\`
+            
+            </details>
+            
+            ### Deployment Logs
+            
+            <details>
+            <summary>Click to expand deployment logs</summary>
+            
+            \`\`\`
+            ${deploymentLogs}
+            \`\`\`
+            
+            </details>
+            
+            ### Next Steps
+            
+            1. **Review diagnostic output** above for specific errors
+            2. **Run locally**: \`./scripts/comprehensive-diagnostics.sh\`
+            3. **Fix common issues**: \`./scripts/fix-common-issues.sh\`
+            4. **Validate secrets**: \`./scripts/validate-secrets.sh\`
+            5. **Check Cloud Console**: [Cloud Functions](https://console.cloud.google.com/functions?project=${{ env.PROJECT_ID }})
+            6. **View build logs**: [Cloud Build](https://console.cloud.google.com/cloud-build/builds?project=${{ env.PROJECT_ID }})
+            
+            ### Troubleshooting Commands
+            
+            \`\`\`bash
+            # Pre-deployment validation
+            ./scripts/pre-deployment-check.sh
+            
+            # Get detailed logs
+            ./scripts/get-deployment-logs.sh
+            
+            # Comprehensive diagnostics
+            ./scripts/comprehensive-diagnostics.sh
+            
+            # Auto-fix common issues
+            ./scripts/fix-common-issues.sh
+            
+            # Post-deployment health check
+            ./scripts/post-deployment-check.sh
+            \`\`\`
+            
+            ### Additional Resources
+            
+            - [Deployment Guide](./DEPLOYMENT_GUIDE.md)
+            - [Troubleshooting Guide](./TROUBLESHOOTING.md)
+            - [Scripts Documentation](./scripts/README.md)
+            
+            ---
+            *This issue was automatically created by the Deployment Diagnostics workflow*
+            `;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Deployment Failure: ${new Date().toISOString().split('T')[0]} - Run #${context.runNumber}`,
+              body: issueBody,
+              labels: ['deployment-failure', 'automated-issue', 'needs-triage']
+            });
+        continue-on-error: true
+      
+      - name: Upload Diagnostic Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-diagnostics-${{ github.run_number }}
+          path: |
+            /tmp/diagnostics.log
+            /tmp/deployment-logs.txt
+          retention-days: 30
+          if-no-files-found: warn
+      
+      - name: Report Status
+        if: always()
+        run: |
+          echo "::notice::Deployment diagnostics completed"
+          echo "::notice::Check artifacts for detailed logs"
+          echo "::notice::Review the job summary for next steps"
