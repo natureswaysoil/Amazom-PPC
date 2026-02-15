@@ -265,8 +265,8 @@ def main() -> int:
         from jobs.optimization.aov_bid_optimizer import AOVBidOptimizer
         
         optimizer = AOVBidOptimizer(
-            project_id=bq.project_id if bq else os.getenv("GOOGLE_CLOUD_PROJECT"),
-            dataset_id=bq.dataset_id if bq else "amazon_ppc"
+            project_id=bq.project_id if bq is not None else os.getenv("GOOGLE_CLOUD_PROJECT"),
+            dataset_id=bq.dataset_id if bq is not None else "amazon_ppc"
         )
         
         start = time.time()

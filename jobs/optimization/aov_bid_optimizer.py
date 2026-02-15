@@ -90,7 +90,9 @@ class AOVBidOptimizer:
             new_bid = current_bid * adjustment_factor
         else:
             # No spend data, use conservative bid based on AOV
-            new_bid = target_cpa * 0.5
+            # Use 0.5x of target CPA as the adjustment factor for zero ACOS
+            adjustment_factor = 0.5
+            new_bid = target_cpa * adjustment_factor
 
         # Clamp to min/max bounds
         new_bid = max(self.min_bid, min(self.max_bid, new_bid))
