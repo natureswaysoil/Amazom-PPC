@@ -111,12 +111,21 @@ class AOVFetcher:
         if campaign_ids:
             # Convert to integers for native INT64 comparison (no STRING cast in WHERE)
             try:
-                # Convert each campaign ID to int, handling floats and strings
-                # Use int(float(cid)) to handle string representations of floats
-                validated_ids = [int(float(cid)) for cid in campaign_ids]
+                # First try direct int conversion; if that fails, try float conversion
+                # This preserves precision for large integers while handling string floats
+                validated_ids = []
+                for cid in campaign_ids:
+                    try:
+                        validated_ids.append(int(cid))
+                    except ValueError:
+                        # Handle string representations of floats (e.g., "123.45")
+                        validated_ids.append(int(float(cid)))
+                
                 # Validate all IDs are non-negative for data integrity
-                if any(cid < 0 for cid in validated_ids):
-                    raise ValueError("Campaign IDs must be non-negative integers")
+                invalid_ids = [cid for cid in validated_ids if cid < 0]
+                if invalid_ids:
+                    raise ValueError(f"Campaign IDs must be non-negative integers, found: {invalid_ids}")
+                
                 campaign_ids_joined = ", ".join(str(cid) for cid in validated_ids)
                 campaign_filter = f"AND campaign_id IN ({campaign_ids_joined})"
             except (ValueError, TypeError) as e:
