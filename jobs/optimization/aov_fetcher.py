@@ -62,7 +62,7 @@ class AOVFetcher:
             COUNT(*) as row_count
         FROM `{self.project_id}.{self.dataset_id}.campaign_performance`
         WHERE DATE(report_date) >= DATE_SUB(CURRENT_DATE(), INTERVAL {lookback_days} DAY)
-        GROUP BY campaign_id, campaign_name
+        GROUP BY CAST(campaign_id AS STRING), campaign_name
         HAVING total_conversions > 0
         """
 
@@ -142,8 +142,8 @@ class AOVFetcher:
         FROM `{self.project_id}.{self.dataset_id}.keyword_performance`
         WHERE DATE(report_date) >= DATE_SUB(CURRENT_DATE(), INTERVAL {lookback_days} DAY)
         {campaign_filter}
-        GROUP BY campaign_id, campaign_name, ad_group_id, ad_group_name, 
-                 keyword_id, keyword_text, match_type, current_bid
+        GROUP BY CAST(campaign_id AS STRING), campaign_name, CAST(ad_group_id AS STRING), ad_group_name, 
+                 CAST(keyword_id AS STRING), keyword_text, match_type, current_bid
         HAVING clicks >= {min_clicks}
         ORDER BY clicks DESC
         """
