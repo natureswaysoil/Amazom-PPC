@@ -108,7 +108,11 @@ class AmazonSPAPIClient:
         
         # Try Secret Manager
         try:
-            project_id = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or "amazon-ppc-474902"
+            project_id = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+            if not project_id:
+                logger.debug("GCP_PROJECT_ID not set, using default for Secret Manager access")
+                project_id = "amazon-ppc-474902"  # Fallback for development
+            
             secret_mapping = {
                 "AMAZON_CLIENT_ID": "Amazon_Ads_Client_identifier",
                 "AMAZON_CLIENT_SECRET": "Amazon_Ads_Client_secret",

@@ -158,12 +158,12 @@ class Dashboard {
             }
         }
 
-        // Conversion Rate (mock data)
+        // Conversion Rate (placeholder data - mark as mock)
         const conversionValue = document.getElementById('conversion-value');
         const conversionChange = document.getElementById('conversion-change');
         
         if (conversionValue) {
-            conversionValue.textContent = '15.0%'; // Mock data
+            conversionValue.innerHTML = '15.0% <span class="text-xs text-gray-500 ml-1">(placeholder)</span>';
         }
         
         if (conversionChange) {
@@ -335,7 +335,20 @@ class Dashboard {
      * Show error message
      */
     showError(message) {
-        alert(message); // Simple alert for now, can be enhanced with a toast notification
+        // Log to console for debugging
+        console.error('Dashboard error:', message);
+        
+        // Create a simple toast notification
+        const toast = document.createElement('div');
+        toast.className = 'fixed bottom-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            toast.classList.add('opacity-0');
+            setTimeout(() => toast.remove(), 300);
+        }, 5000);
     }
 
     /**

@@ -153,8 +153,29 @@ class DateRangeFilter {
                 window.dashboard.loadAllData();
             }
         } else {
-            alert('Please select both start and end dates');
+            this.showError('Please select both start and end dates');
         }
+    }
+    
+    /**
+     * Show error message
+     */
+    showError(message) {
+        // Create a toast notification
+        const toast = document.createElement('div');
+        toast.className = 'fixed bottom-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50';
+        toast.style.animation = 'fadeIn 0.3s ease-out';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        }, 5000);
+        
+        // Also log for debugging
+        console.error('Filter error:', message);
     }
 
     /**

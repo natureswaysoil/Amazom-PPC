@@ -45,6 +45,9 @@ class CacheManager:
         Args:
             default_ttl_seconds: Default TTL in seconds (5 minutes)
             max_entries: Maximum number of cache entries
+                        Default 1000 entries ~= 1-10MB depending on data size
+                        For high-memory systems, increase to 5000-10000
+                        For memory-constrained systems, reduce to 100-500
         """
         self.default_ttl = default_ttl_seconds
         self.max_entries = max_entries

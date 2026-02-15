@@ -34,7 +34,11 @@ app = Flask(__name__, static_folder='dashboard/static', static_url_path='/static
 CORS(app)
 
 # Configuration
-PROJECT_ID = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or "amazon-ppc-474902"
+PROJECT_ID = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+if not PROJECT_ID:
+    logger.warning("GCP_PROJECT_ID not set, dashboard may not function correctly without credentials")
+    PROJECT_ID = "amazon-ppc-474902"  # Fallback for development only
+    
 DATASET_ID = os.getenv("BIGQUERY_DATASET", "amazon_ppc_data")
 
 
@@ -114,8 +118,12 @@ def get_revenue():
         
         # Calculate change percentage
         current_revenue = order_metrics.get('total_revenue', 0)
-        prev_revenue = prev_metrics.get('total_revenue', 1)  # Avoid division by zero
-        change_percent = ((current_revenue - prev_revenue) / prev_revenue * 100) if prev_revenue > 0 else 0
+        prev_revenue = prev_metrics.get('total_revenue', 0)
+        if prev_revenue > 0:
+            change_percent = ((current_revenue - prev_revenue) / prev_revenue * 100)
+        else:
+            # If previous revenue was 0, show 100% if current revenue > 0, else 0
+            change_percent = 100.0 if current_revenue > 0 else 0.0
         
         return jsonify({
             "total": current_revenue,

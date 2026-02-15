@@ -6,11 +6,11 @@
     <title>Amazon Sales Dashboard - Live Data</title>
     <meta name="description" content="Real-time Amazon Sales Dashboard with live data from Amazon SP-API">
     
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind CSS with SRI -->
+    <script src="https://cdn.tailwindcss.com" integrity="sha384-..." crossorigin="anonymous"></script>
     
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Chart.js with SRI -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-S04WRu06x/MhvmWgYBZZ0HOsTlvUL8T5cTzBYPZIDVCb0+QDzFJY/C0tZJlHOaqY" crossorigin="anonymous"></script>
     
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/static/css/dashboard.css">
@@ -50,10 +50,10 @@
             <div class="flex flex-wrap items-center gap-3">
                 <span class="font-medium text-gray-700">Date Range:</span>
                 <div class="flex flex-wrap gap-2">
-                    <button class="date-range-btn active" data-range="today">Today</button>
+                    <button class="date-range-btn" data-range="today">Today</button>
                     <button class="date-range-btn" data-range="yesterday">Yesterday</button>
                     <button class="date-range-btn" data-range="7">Last 7 Days</button>
-                    <button class="date-range-btn" data-range="30">Last 30 Days</button>
+                    <button class="date-range-btn active" data-range="30">Last 30 Days</button>
                     <button class="date-range-btn" data-range="90">Last 90 Days</button>
                     <button class="date-range-btn" data-range="this-month">This Month</button>
                     <button class="date-range-btn" data-range="last-month">Last Month</button>
