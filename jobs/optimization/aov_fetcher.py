@@ -106,12 +106,12 @@ class AOVFetcher:
         """
         logger.info("Fetching keyword performance data from BigQuery...")
 
-        # Build campaign filter with proper type casting
+        # Build campaign filter - compare as INT64 to avoid type mismatch
         campaign_filter = ""
         if campaign_ids:
-            # Ensure campaign IDs are strings and properly quoted
-            campaign_ids_str = ", ".join([f"'{str(cid)}'" for cid in campaign_ids])
-            campaign_filter = f"AND CAST(campaign_id AS STRING) IN ({campaign_ids_str})"
+            # Convert to integers for native INT64 comparison (no STRING cast in WHERE)
+            campaign_ids_int = ", ".join([str(int(cid)) for cid in campaign_ids])
+            campaign_filter = f"AND campaign_id IN ({campaign_ids_int})"
 
         # Use CAST for all ID columns to ensure consistent STRING types
         query = f"""
