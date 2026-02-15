@@ -322,7 +322,10 @@ class AmazonSPAPIClient:
                     order_total = order.get("OrderTotal", {})
                     amount = order_total.get("Amount")
                     if amount:
-                        total_revenue += float(amount)
+                        try:
+                            total_revenue += float(amount)
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Invalid order amount '{amount}': {e}")
                 
                 # Check for more pages
                 next_token = response.get("NextToken")
@@ -331,7 +334,7 @@ class AmazonSPAPIClient:
                 
                 logger.debug(f"Fetching next page of orders (current count: {len(all_orders)})")
             
-            logger.info(f"✓ Retrieved {len(all_orders)} orders (total revenue: ${total_revenue:,.2f})")
+            logger.info(f"✓ Retrieved {len(all_orders)} orders (total revenue: {total_revenue:,.2f})")
             
             return {
                 "orders": all_orders,
