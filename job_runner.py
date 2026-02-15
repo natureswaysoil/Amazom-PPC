@@ -264,10 +264,11 @@ def main() -> int:
     if features == ["aov_bid_optimization"]:
         from jobs.optimization.aov_bid_optimizer import AOVBidOptimizer
         
-        optimizer = AOVBidOptimizer(
-            project_id=bq.project_id if bq is not None else os.getenv("GOOGLE_CLOUD_PROJECT"),
-            dataset_id=bq.dataset_id if bq is not None else "amazon_ppc"
-        )
+        # Extract project_id and dataset_id with fallbacks
+        project_id = bq.project_id if bq is not None else os.getenv("GOOGLE_CLOUD_PROJECT")
+        dataset_id = bq.dataset_id if bq is not None else "amazon_ppc"
+        
+        optimizer = AOVBidOptimizer(project_id=project_id, dataset_id=dataset_id)
         
         start = time.time()
         result = optimizer.run(dry_run=dry_run, auto_apply=not dry_run)

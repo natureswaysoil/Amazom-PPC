@@ -77,8 +77,7 @@ class AOVBidOptimizer:
         # Calculate target CPA (Cost Per Acquisition)
         target_cpa = aov * self.target_acos
 
-        # Calculate bid adjustment factor
-        adjustment_factor = None
+        # Calculate bid adjustment factor and new bid
         if current_acos > 0:
             # If current ACOS is above target, decrease bid
             # If current ACOS is below target, increase bid
