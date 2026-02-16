@@ -89,38 +89,68 @@ async function fetchOptimizerWithRetry(options: {
 }): Promise<OptimizerFetchResult> {
   const { url, apiKey, profileId, allowIdTokenRetry } = options;
 
+  // Prioritize API key authentication - if we have an API key, use it exclusively
+  if (apiKey) {
+    console.log('[optimizer-live] Using API key authentication');
+    const headers: Record<string, string> = {
+      'X-API-Key': apiKey,
+      ...(profileId ? { 'X-Profile-ID': profileId } : {}),
+    };
+
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers,
+      cache: 'no-store',
+    });
+    return { resp, usedIdToken: false };
+  }
+
+  // Only use ID token if API key is not available
+  if (allowIdTokenRetry) {
+    console.log('[optimizer-live] Using ID token authentication');
+    try {
+      // The audience should be the target service's origin for proper IAM auth
+      const audience = new URL(url).origin;
+      const idTokenHeaders = await getIdTokenHeaders(audience);
+      const headers: Record<string, string> = {
+        ...idTokenHeaders,
+        ...(profileId ? { 'X-Profile-ID': profileId } : {}),
+      };
+
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+      });
+      return { resp, usedIdToken: true };
+    } catch (err) {
+      console.error('[optimizer-live] Failed to mint ID token:', err);
+      // Fall back to unauthenticated request
+      const headers: Record<string, string> = {
+        ...(profileId ? { 'X-Profile-ID': profileId } : {}),
+      };
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+      });
+      return { resp, usedIdToken: false };
+    }
+  }
+
+  // Fallback: unauthenticated request
+  console.log('[optimizer-live] Using unauthenticated request');
   const baseHeaders: Record<string, string> = {
-    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...(profileId ? { 'X-Profile-ID': profileId } : {}),
   };
 
-  // First attempt: API-key only. This works when the optimizer allows unauthenticated
-  // invocations (or is behind some other layer) and enforces app-level auth.
-  let resp = await fetch(url, {
+  const resp = await fetch(url, {
     method: 'GET',
     headers: baseHeaders,
     cache: 'no-store',
   });
 
-  // Cloud Run/Functions return 401 or 403 when IAM auth is required.
-  if ((resp.status !== 403 && resp.status !== 401) || !allowIdTokenRetry) {
-    return { resp, usedIdToken: false };
-  }
-
-  // Second attempt: Cloud Run IAM auth via ID token + still pass X-API-Key for
-  // the optimizer app-level auth.
-  const audience = new URL(url).origin;
-  const idHeaders = await getIdTokenHeaders(audience);
-  resp = await fetch(url, {
-    method: 'GET',
-    headers: {
-      ...baseHeaders,
-      ...idHeaders,
-    },
-    cache: 'no-store',
-  });
-
-  return { resp, usedIdToken: true };
+  return { resp, usedIdToken: false };
 }
 
 export async function GET(request: NextRequest) {
@@ -153,14 +183,18 @@ export async function GET(request: NextRequest) {
     let resp: Response | undefined;
     let text = '';
 
+    // Don't retry with ID token if we have API key - use mutually exclusive auth
+    // OPTIMIZER_LIVE_ALLOW_ID_TOKEN_RETRY: Set to 'false' to disable ID token retry (defaults to true)
     const allowIdTokenRetry =
-      (process.env.OPTIMIZER_USE_ID_TOKEN || '').trim().toLowerCase() === 'true' ||
-      Boolean(process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.GAE_SERVICE || process.env.CLOUD_RUN_JOB) ||
-      Boolean(
-        (process.env.GCP_SERVICE_ACCOUNT_KEY || '').trim() ||
-          (process.env.GCP_SA_KEY || '').trim() ||
-          (process.env.GCP_SERVICE_ACCOUNT_KEY_JSON || '').trim(),
-      );
+      process.env.OPTIMIZER_LIVE_ALLOW_ID_TOKEN_RETRY !== 'false' &&
+      !apiKey && // Only use ID token if API key is not available
+      ((process.env.OPTIMIZER_USE_ID_TOKEN || '').trim().toLowerCase() === 'true' ||
+        Boolean(process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.GAE_SERVICE || process.env.CLOUD_RUN_JOB) ||
+        Boolean(
+          (process.env.GCP_SERVICE_ACCOUNT_KEY || '').trim() ||
+            (process.env.GCP_SA_KEY || '').trim() ||
+            (process.env.GCP_SERVICE_ACCOUNT_KEY_JSON || '').trim(),
+        ));
 
     // Retry on rate limiting / transient backend errors.
     // If the optimizer requires IAM auth (403), retry once with an ID token.
@@ -237,11 +271,16 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(body, { status: statusCode });
   } catch (err: any) {
+    const apiKey = (await resolveDashboardApiKey({ required: false })).apiKey || undefined;
     return NextResponse.json(
       {
         ok: false,
         error: 'Failed to call optimizer live endpoint',
         message: err?.message || String(err),
+        authMethod: apiKey ? 'api-key' : 'id-token',
+        suggestion: apiKey
+          ? 'Verify DASHBOARD_API_KEY matches optimizer configuration'
+          : 'Consider setting DASHBOARD_API_KEY for more reliable authentication'
       },
       { status: 500 },
     );
