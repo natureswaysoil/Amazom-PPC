@@ -109,7 +109,8 @@ async function fetchOptimizerWithRetry(options: {
   if (allowIdTokenRetry) {
     console.log('[optimizer-live] Using ID token authentication');
     try {
-      const audience = getOptimizerBaseUrl();
+      // The audience should be the target service's origin for proper IAM auth
+      const audience = new URL(url).origin;
       const idTokenHeaders = await getIdTokenHeaders(audience);
       const headers: Record<string, string> = {
         ...idTokenHeaders,
@@ -183,6 +184,7 @@ export async function GET(request: NextRequest) {
     let text = '';
 
     // Don't retry with ID token if we have API key - use mutually exclusive auth
+    // OPTIMIZER_LIVE_ALLOW_ID_TOKEN_RETRY: Set to 'false' to disable ID token retry (defaults to true)
     const allowIdTokenRetry =
       process.env.OPTIMIZER_LIVE_ALLOW_ID_TOKEN_RETRY !== 'false' &&
       !apiKey && // Only use ID token if API key is not available
@@ -276,8 +278,8 @@ export async function GET(request: NextRequest) {
         error: 'Failed to call optimizer live endpoint',
         message: err?.message || String(err),
         authMethod: apiKey ? 'api-key' : 'id-token',
-        suggestion: apiKey 
-          ? 'Verify DASHBOARD_API_KEY matches optimizer configuration' 
+        suggestion: apiKey
+          ? 'Verify DASHBOARD_API_KEY matches optimizer configuration'
           : 'Consider setting DASHBOARD_API_KEY for more reliable authentication'
       },
       { status: 500 },
