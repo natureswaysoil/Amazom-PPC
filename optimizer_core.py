@@ -1838,6 +1838,7 @@ class AmazonAdsAPI:
 
         poll_count = 0
         consecutive_status_failures = 0
+        timeout_warning_logged = False
         logger.info(
             "Waiting for report %s (timeout=%ss, poll_initial=%ss, poll_max=%ss)",
             report_id,
@@ -1857,6 +1858,18 @@ class AmazonAdsAPI:
 
             poll_count += 1
             elapsed = time.time() - start_time
+            
+            # Warn when approaching timeout (at 80% of timeout duration)
+            if not timeout_warning_logged and elapsed > (timeout * 0.8):
+                timeout_warning_logged = True
+                logger.warning(
+                    "Report %s is approaching timeout (%.1fs / %ds). "
+                    "Consider increasing AMAZON_REPORT_TIMEOUT_SECONDS if reports frequently timeout.",
+                    report_id,
+                    elapsed,
+                    timeout,
+                )
+            
             # Log progress occasionally so long-running reports aren't "silent".
             if poll_count == 1 or poll_count % 6 == 0:
                 logger.info(
@@ -1886,7 +1899,14 @@ class AmazonAdsAPI:
             time.sleep(poll_interval)
             poll_interval = min(poll_interval * 1.5, max_poll_interval)
         
-        logger.error(f"Report {report_id} timeout after {timeout}s")
+        logger.error(
+            "Report %s did not complete in time (timeout after %ds). "
+            "To increase timeout, set environment variable: AMAZON_REPORT_TIMEOUT_SECONDS=%d "
+            "(current default: 300). For large accounts, consider 900-1800 seconds.",
+            report_id,
+            timeout,
+            max(timeout * 2, 900),
+        )
         return None
     
     def create_and_download_reports_parallel(self, report_configs: List[Dict], 
