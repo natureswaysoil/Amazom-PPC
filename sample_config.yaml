@@ -4,6 +4,12 @@ amazon_api:
   client_id: amzn1.application-oa2-client.xxxxx
   client_secret: amzn1.oa2-cs.v1.xxxxx
   refresh_token: Atzr|IwEBIxxxxx
+  # Report timeout settings (optional, can also be set via environment variables)
+  # Increase these values if you have a large account with 1000+ keywords/campaigns
+  # report_timeout_seconds: 900        # Default: 300 (5 minutes). For large accounts: 900-1800 (15-30 min)
+  # report_poll_initial_seconds: 2     # Default: 2 seconds
+  # report_poll_max_seconds: 10        # Default: 10 seconds
+  # report_max_status_failures: 8      # Default: 8
 
 dashboard:
   url: https://ppc-dashboard.abacusai.app
