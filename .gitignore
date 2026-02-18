@@ -22,8 +22,9 @@ wheels/
 .installed.cfg
 *.egg
 
-# Exception: Keep API lib directory
+# Exception: Keep API lib directory and Next.js lib directory
 !amazon_ppc_dashboard/nextjs_space/app/api/lib/
+!amazon_ppc_dashboard/nextjs_space/lib/
 
 # Virtual environments
 env/
