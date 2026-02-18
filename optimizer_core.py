@@ -51,6 +51,8 @@ import traceback
 
 import requests
 
+from amazon_api_utils import decode_api_response
+
 try:
     import yaml
 except ImportError as e:
@@ -1768,10 +1770,10 @@ class AmazonAdsAPI:
                 
                 # Check for gzip magic number first (0x1f 0x8b)
                 if len(content) >= 2 and content[0] == 0x1f and content[1] == 0x8b:
-                    # Gzip-compressed response
+                    # Gzip-compressed response - use utility function
                     try:
-                        decompressed = gzip.decompress(content)
-                        text = io.StringIO(decompressed.decode('utf-8'))
+                        text_content = decode_api_response(content)
+                        text = io.StringIO(text_content)
                         data = list(csv.DictReader(text))
                         logger.info(f"Successfully parsed GZIP report with {len(data)} rows")
                         return data
@@ -1789,9 +1791,10 @@ class AmazonAdsAPI:
                             logger.info(f"Successfully parsed ZIP report with {len(data)} rows")
                             return data
                 except zipfile.BadZipFile:
-                    # Try as plain text
+                    # Try as plain text - use utility function for consistent handling
                     try:
-                        text = io.StringIO(content.decode('utf-8'))
+                        text_content = decode_api_response(content)
+                        text = io.StringIO(text_content)
                         data = list(csv.DictReader(text))
                         logger.info(f"Successfully parsed plain text report with {len(data)} rows")
                         return data
