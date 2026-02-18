@@ -156,6 +156,101 @@ The optimizer now:
 
 ---
 
+### UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8b
+
+#### Problem
+
+When syncing placement performance or downloading reports, you may encounter:
+
+```
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8b in position 1: invalid start byte
+```
+
+**Symptoms:**
+- Error occurs during API response processing
+- Byte sequence `0x1f 0x8b` appears in error messages
+- Happens intermittently with Amazon Ads API
+
+#### Root Cause
+
+The byte sequence `0x1f 0x8b` is the **gzip magic number**, indicating that the Amazon Ads API returned a gzip-compressed response instead of plain UTF-8 text. This can happen even when the `Content-Encoding` header is not set.
+
+The code tries to decode the response as UTF-8:
+```python
+content = data_bytes.decode('utf-8')  # ❌ Fails on gzip data
+```
+
+#### Solution
+
+Use the `decode_api_response()` utility function from `amazon_api_utils.py`:
+
+```python
+from amazon_api_utils import decode_api_response
+
+# Instead of:
+# content = data_bytes.decode('utf-8')
+
+# Use:
+content = decode_api_response(data_bytes)
+```
+
+This function:
+1. Detects gzip magic number (`0x1f 0x8b`)
+2. Decompresses gzip data if present
+3. Falls back to plain UTF-8 decoding for non-compressed data
+4. Handles both cases automatically
+
+**Example Integration:**
+
+```python
+import requests
+from amazon_api_utils import decode_api_response
+
+response = requests.get(api_url, headers=headers)
+response.raise_for_status()
+
+# Safely decode response (works with both plain and gzip)
+content = decode_api_response(response.content)
+
+# Now parse as JSON, CSV, etc.
+data = json.loads(content)
+```
+
+#### Testing
+
+The utility is fully tested with:
+- ✅ Plain UTF-8 responses
+- ✅ Gzip-compressed responses
+- ✅ Empty responses
+- ✅ Unicode characters
+- ✅ Large responses
+- ❌ Invalid gzip data (raises `gzip.BadGzipFile`)
+- ❌ Invalid UTF-8 (raises `UnicodeDecodeError`)
+
+Run tests:
+```bash
+python test_amazon_api_utils.py
+```
+
+#### For Container Deployments
+
+If the error occurs in `/app/jobs/data_sync/amazon_ads_sync.py` (inside Docker container):
+
+1. Ensure `amazon_api_utils.py` is included in your Docker image
+2. Update the import in `amazon_ads_sync.py`:
+   ```python
+   from amazon_api_utils import decode_api_response
+   ```
+3. Replace all `data_bytes.decode('utf-8')` calls with `decode_api_response(data_bytes)`
+
+#### Related Files
+
+- **Utility Module**: `amazon_api_utils.py`
+- **Tests**: `test_amazon_api_utils.py`
+- **Example Usage**: `optimizer_core.py` (lines 1766-1780)
+
+---
+
 ## Other Common Issues
 
 ### Dashboard Shows All Zeros
