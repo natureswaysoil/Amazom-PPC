@@ -1766,8 +1766,21 @@ class AmazonAdsAPI:
                 # Try to decompress as gzip or zip
                 content = response.content
                 
+                # Check for gzip magic number first (0x1f 0x8b)
+                if len(content) >= 2 and content[0] == 0x1f and content[1] == 0x8b:
+                    # Gzip-compressed response
+                    try:
+                        decompressed = gzip.decompress(content)
+                        text = io.StringIO(decompressed.decode('utf-8'))
+                        data = list(csv.DictReader(text))
+                        logger.info(f"Successfully parsed GZIP report with {len(data)} rows")
+                        return data
+                    except Exception as e:
+                        logger.error(f"Failed to decompress gzip report: {e}")
+                        raise
+                
+                # Try ZIP format
                 try:
-                    # Try ZIP format first
                     with zipfile.ZipFile(io.BytesIO(content)) as z:
                         names = z.namelist()
                         with z.open(names[0]) as f:
@@ -1776,19 +1789,15 @@ class AmazonAdsAPI:
                             logger.info(f"Successfully parsed ZIP report with {len(data)} rows")
                             return data
                 except zipfile.BadZipFile:
-                    # Try GZIP format
+                    # Try as plain text
                     try:
-                        with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz:
-                            text = io.TextIOWrapper(gz, encoding='utf-8', newline='')
-                            data = list(csv.DictReader(text))
-                            logger.info(f"Successfully parsed GZIP report with {len(data)} rows")
-                            return data
-                    except Exception:
-                        # Try as plain text
                         text = io.StringIO(content.decode('utf-8'))
                         data = list(csv.DictReader(text))
                         logger.info(f"Successfully parsed plain text report with {len(data)} rows")
                         return data
+                    except UnicodeDecodeError as e:
+                        logger.error(f"Failed to decode report as UTF-8: {e}")
+                        raise
                         
             except requests.exceptions.RequestException as e:
                 if attempt == max_retries - 1:
