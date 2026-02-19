@@ -82,27 +82,36 @@ export async function resolveDashboardApiKey(options?: {
 
   const hasSecretConfig = !!(secretResource || secretName);
   if (hasSecretConfig) {
-    let resourceName = secretResource;
+    try {
+      let resourceName = secretResource;
 
-    if (!resourceName) {
-      const projectId =
-        getFirstSetEnv(PROJECT_ID_ENV_NAMES) || (await getProjectIdViaADC());
-      if (!projectId) {
-        throw new Error(
-          'Cannot resolve project ID for Secret Manager. Set GOOGLE_CLOUD_PROJECT (or GCP_PROJECT) or provide DASHBOARD_API_SECRET_RESOURCE.',
-        );
+      if (!resourceName) {
+        const projectId =
+          getFirstSetEnv(PROJECT_ID_ENV_NAMES) || (await getProjectIdViaADC());
+        if (!projectId) {
+          throw new Error(
+            'Cannot resolve project ID for Secret Manager. Set GOOGLE_CLOUD_PROJECT (or GCP_PROJECT) or provide DASHBOARD_API_SECRET_RESOURCE.',
+          );
+        }
+
+        resourceName = `projects/${projectId}/secrets/${secretName}/versions/${secretVersion}`;
       }
 
-      resourceName = `projects/${projectId}/secrets/${secretName}/versions/${secretVersion}`;
-    }
+      const value = (await accessSecretVersion(resourceName)).trim();
+      if (!value) {
+        throw new Error(`Secret Manager returned empty value for ${resourceName}`);
+      }
 
-    const value = (await accessSecretVersion(resourceName)).trim();
-    if (!value) {
-      throw new Error(`Secret Manager returned empty value for ${resourceName}`);
+      cached = { apiKey: value, source: 'secret-manager' };
+      return cached;
+    } catch (err) {
+      if (options?.required) throw err;
+      console.warn(
+        '[dashboard-api-key] Failed to resolve API key from Secret Manager; proceeding without it:',
+        (err as Error).message,
+      );
+      // Fall through to unset.
     }
-
-    cached = { apiKey: value, source: 'secret-manager' };
-    return cached;
   }
 
   // Convenience fallback: if running on GCP with ADC available, attempt to read the

@@ -261,8 +261,8 @@ export default function Home() {
       const msg =
         proxyPayload?.data?.message ||
         proxyPayload?.data?.error ||
-        proxyPayload?.error ||
         proxyPayload?.message ||
+        proxyPayload?.error ||
         resp.statusText ||
         'Unknown error';
 
@@ -342,8 +342,8 @@ export default function Home() {
         const msg =
           livePayload?.data?.message ||
           livePayload?.data?.error ||
-          livePayload?.error ||
           livePayload?.message ||
+          livePayload?.error ||
           liveResponse.statusText ||
           'Unknown error';
 
