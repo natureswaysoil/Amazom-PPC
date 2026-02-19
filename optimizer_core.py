@@ -1748,10 +1748,59 @@ class AmazonAdsAPI:
             return {}
     
     def download_report(self, report_url: str) -> List[Dict]:
-        """Download and parse report with retry logic"""
+        """Download and parse report with retry logic.
+
+        Supports both CSV and JSON Lines (GZIP_JSON) formats returned by the
+        Amazon Ads Reporting v3 API.  The decompressed content is tried first
+        as CSV; if that produces no rows and the text looks like JSON it is
+        re-parsed as JSON Lines (newline-delimited JSON objects).
+        """
         max_retries = 3
         retry_delay = 2
-        
+
+        def _parse_text(text_content: str) -> List[Dict]:
+            """Parse decompressed report text as CSV or JSON Lines.
+
+            Detection order:
+            1. If content starts with ``{`` or ``[`` → JSON Lines / JSON array.
+            2. Otherwise → CSV (with DictReader).
+            """
+            stripped = text_content.strip()
+
+            # JSON Lines or JSON array (GZIP_JSON format from Reporting v3 API)
+            if stripped.startswith('{') or stripped.startswith('['):
+                # Try full JSON array first
+                if stripped.startswith('['):
+                    try:
+                        rows = json.loads(stripped)
+                        if isinstance(rows, list):
+                            return rows
+                    except Exception:
+                        pass
+                # Parse line by line (ndjson / JSON Lines)
+                rows: List[Dict] = []
+                for line in stripped.splitlines():
+                    line = line.strip().rstrip(',')
+                    if not line or line in ('[', ']'):
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        if isinstance(obj, dict):
+                            rows.append(obj)
+                    except Exception:
+                        pass
+                if rows:
+                    return rows
+
+            # CSV fallback (legacy v2 and v3 CSV outputs)
+            try:
+                data = list(csv.DictReader(io.StringIO(text_content)))
+                return data
+            except Exception:
+                pass
+
+            return []
+
         for attempt in range(max_retries):
             try:
                 logger.debug(f"Downloading report from {report_url} (attempt {attempt + 1}/{max_retries})")
@@ -1770,11 +1819,9 @@ class AmazonAdsAPI:
                 
                 # Check for gzip magic number first (0x1f 0x8b)
                 if len(content) >= 2 and content[0] == 0x1f and content[1] == 0x8b:
-                    # Gzip-compressed response - use utility function
                     try:
                         text_content = decode_api_response(content)
-                        text = io.StringIO(text_content)
-                        data = list(csv.DictReader(text))
+                        data = _parse_text(text_content)
                         logger.info(f"Successfully parsed GZIP report with {len(data)} rows")
                         return data
                     except Exception as e:
@@ -1787,15 +1834,14 @@ class AmazonAdsAPI:
                         names = z.namelist()
                         with z.open(names[0]) as f:
                             text = io.TextIOWrapper(f, encoding='utf-8', newline='')
-                            data = list(csv.DictReader(text))
+                            data = _parse_text(text.read())
                             logger.info(f"Successfully parsed ZIP report with {len(data)} rows")
                             return data
                 except zipfile.BadZipFile:
                     # Try as plain text - use utility function for consistent handling
                     try:
                         text_content = decode_api_response(content)
-                        text = io.StringIO(text_content)
-                        data = list(csv.DictReader(text))
+                        data = _parse_text(text_content)
                         logger.info(f"Successfully parsed plain text report with {len(data)} rows")
                         return data
                     except UnicodeDecodeError as e:
@@ -2350,7 +2396,7 @@ class DaypartingManager:
                         keyword_id,
                         f"${keyword.bid:.2f}",
                         f"${new_bid:.2f}",
-                        f"Data-driven dayparting: {current_day} {current_hour}:00 ({multiplier:.2f}x) for campaign {campaign.campaign_name}",
+                        f"Data-driven dayparting: {current_day} {current_hour}:00 ({multiplier:.2f}x) for campaign {campaign.name}",
                         dry_run
                     )
                     
@@ -2524,10 +2570,13 @@ class CampaignManager:
         }
         
         # Get performance data
+        # Use v3 column names (spend, sales14d, purchases14d); the download
+        # parser also recognises the legacy v2 names (cost, attributedSales14d,
+        # attributedConversions14d) so both API versions are handled.
         report_id = self.api.create_report(
             'campaigns',
-            ['campaignId', 'impressions', 'clicks', 'cost', 
-             'attributedSales14d', 'attributedConversions14d']
+            ['campaignId', 'impressions', 'clicks', 'spend',
+             'sales14d', 'purchases14d']
         )
         
         if not report_id:
@@ -2570,9 +2619,10 @@ class CampaignManager:
 
             analyzed_campaign_ids.add(campaign_id)
             
-            # Calculate metrics
-            cost = float(row.get('cost', 0) or 0)
-            sales = float(row.get('attributedSales14d', 0) or 0)
+            # Calculate metrics – support both v3 (spend/sales14d/purchases14d)
+            # and v2 legacy column names (cost/attributedSales14d/attributedConversions14d)
+            cost = float(row.get('spend', row.get('cost', 0)) or 0)
+            sales = float(row.get('sales14d', row.get('attributedSales14d', 0)) or 0)
             
             # Track aggregated metrics for dashboard reporting (for ALL campaigns)
             results['total_spend'] += cost
@@ -2589,7 +2639,7 @@ class CampaignManager:
             campaign_acos = (cost / sales) if sales > 0 else 0.0
             impressions = int(row.get('impressions', 0) or 0)
             clicks = int(row.get('clicks', 0) or 0)
-            conversions = int(row.get('attributedConversions14d', 0) or 0)
+            conversions = int(row.get('purchases14d', row.get('attributedConversions14d', 0)) or 0)
             
             # Collect campaign details for dashboard
             campaign_details.append({
@@ -2701,9 +2751,11 @@ class KeywordDiscovery:
         }
         
         # Get search term report to find high-performing queries
+        # Use v3 column names (spend, sales14d); the row parser also handles
+        # the legacy v2 name (cost / attributedSales14d) via fallback.
         report_id = self.api.create_report(
             'keywords',
-            ['campaignId', 'adGroupId', 'searchTerm', 'clicks', 'cost', 'sales14d'],
+            ['campaignId', 'adGroupId', 'searchTerm', 'clicks', 'spend', 'sales14d'],
             segment='query'
         )
         
@@ -2781,9 +2833,9 @@ class KeywordDiscovery:
                 skip_counts['missing_query_or_ad_group'] += 1
                 continue
             
-            # Calculate metrics
+            # Calculate metrics – support both v3 (spend/sales14d) and v2 legacy names (cost/attributedSales14d)
             clicks = int(row.get('clicks', 0) or 0)
-            cost = float(row.get('cost', 0) or 0)
+            cost = float(row.get('spend', row.get('cost', 0)) or 0)
             sales = float(row.get('sales14d', row.get('attributedSales14d', 0)) or 0)
             
             if clicks < min_clicks:
@@ -2882,10 +2934,12 @@ class NegativeKeywordManager:
         }
         
         # Get search term report
+        # Use v3 column names (spend, sales14d, purchases14d); the row parser
+        # also handles legacy v2 names via fallback.
         report_id = self.api.create_report(
             'targets',
-            ['campaignId', 'adGroupId', 'query', 'impressions', 'clicks', 
-             'cost', 'attributedSales14d', 'attributedConversions14d'],
+            ['campaignId', 'adGroupId', 'query', 'impressions', 'clicks',
+             'spend', 'sales14d', 'purchases14d'],
             segment='query'
         )
         
@@ -2933,8 +2987,9 @@ class NegativeKeywordManager:
                 skip_counts['missing_query_or_campaign'] += 1
                 continue
             
-            cost = float(row.get('cost', 0) or 0)
-            sales = float(row.get('attributedSales14d', 0) or 0)
+            # Support both v3 (spend/sales14d) and v2 legacy column names
+            cost = float(row.get('spend', row.get('cost', 0)) or 0)
+            sales = float(row.get('sales14d', row.get('attributedSales14d', 0)) or 0)
             
             if cost < min_spend:
                 skip_counts['below_min_spend'] += 1
