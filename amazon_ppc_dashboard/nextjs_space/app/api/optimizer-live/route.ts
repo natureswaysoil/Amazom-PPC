@@ -271,16 +271,23 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(body, { status: statusCode });
   } catch (err: any) {
-    const apiKey = (await resolveDashboardApiKey({ required: false })).apiKey || undefined;
+    let apiKey: string | undefined;
+    try {
+      apiKey = (await resolveDashboardApiKey({ required: false })).apiKey || undefined;
+    } catch {
+      // ignore — key resolution failure should not shadow the original error
+    }
+    const optimizerUrl = getOptimizerBaseUrl();
     return NextResponse.json(
       {
         ok: false,
         error: 'Failed to call optimizer live endpoint',
         message: err?.message || String(err),
+        optimizerUrl,
         authMethod: apiKey ? 'api-key' : 'id-token',
         suggestion: apiKey
           ? 'Verify DASHBOARD_API_KEY matches optimizer configuration'
-          : 'Consider setting DASHBOARD_API_KEY for more reliable authentication'
+          : 'Ensure PPC_OPTIMIZER_URL is set and the optimizer service is reachable, or set DASHBOARD_API_KEY for API-key authentication'
       },
       { status: 500 },
     );
