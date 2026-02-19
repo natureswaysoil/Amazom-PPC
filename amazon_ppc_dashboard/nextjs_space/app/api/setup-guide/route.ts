@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveGCPCredentials, getFirstSetEnv, PROJECT_ID_ENV_NAMES } from '../lib/credentials';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Interactive setup guide endpoint
  * Provides step-by-step instructions to get the dashboard working
