@@ -3,6 +3,8 @@ import { BigQuery } from '@google-cloud/bigquery';
 import { resolveDashboardApiKey } from '../lib/dashboard-api-key';
 import { getFirstSetEnv } from '../lib/credentials';
 
+export const dynamic = 'force-dynamic';
+
 const BIGQUERY_PROJECT_ID = getFirstSetEnv([
   'BQ_PROJECT_ID',
   'BIGQUERY_PROJECT_ID',

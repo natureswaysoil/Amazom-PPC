@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Buffer } from 'buffer';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Debug endpoint for GCP credentials troubleshooting
  * Returns non-sensitive diagnostic information about credential configuration
