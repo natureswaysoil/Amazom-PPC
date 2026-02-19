@@ -813,6 +813,8 @@ def run_live_data(request) -> Tuple[Dict[str, Any], int]:
 
     if section == 'discovery':
       data = bigquery_client.fetch_keyword_discovery_summary(days=days)
+      top_keywords = bigquery_client.fetch_top_performing_keywords(days=days, limit=20)
+      data['top_performing_keywords'] = top_keywords
       return {
         'status': 'success',
         'data': data,
