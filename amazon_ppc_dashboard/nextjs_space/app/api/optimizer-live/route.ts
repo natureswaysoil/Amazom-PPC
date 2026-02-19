@@ -280,18 +280,28 @@ export async function GET(request: NextRequest) {
       // ignore — key resolution failure should not shadow the original error
     }
     const optimizerUrl = getOptimizerBaseUrl();
+    const { searchParams: sp } = new URL(request.url);
+    const section = (sp.get('section') || sp.get('live') || 'overview').trim();
+    console.error('[optimizer-live] Optimizer endpoint unreachable:', err?.message || err);
+    // Return a graceful degraded response so the dashboard can still render
+    // with fallback/cached data rather than showing a hard error.
     return NextResponse.json(
       {
-        ok: false,
-        error: 'Failed to call optimizer live endpoint',
-        message: err?.message || String(err),
-        optimizerUrl,
-        authMethod: apiKey ? 'api-key' : 'id-token',
-        suggestion: apiKey
-          ? 'Verify DASHBOARD_API_KEY matches optimizer configuration'
-          : 'Ensure PPC_OPTIMIZER_URL is set and the optimizer service is reachable, or set DASHBOARD_API_KEY for API-key authentication'
+        ok: true,
+        optimizerBaseUrl: optimizerUrl,
+        section,
+        status: 200,
+        auth: apiKey ? 'api-key' : 'id-token',
+        data: {
+          status: 'unavailable',
+          message: err?.message || String(err),
+          optimizerUrl,
+          suggestion: apiKey
+            ? 'Verify DASHBOARD_API_KEY matches optimizer configuration'
+            : 'Ensure PPC_OPTIMIZER_URL is set and the optimizer service is reachable, or set DASHBOARD_API_KEY for API-key authentication',
+        },
       },
-      { status: 500 },
+      { status: 200 },
     );
   }
 }

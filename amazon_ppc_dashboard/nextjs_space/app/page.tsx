@@ -282,9 +282,10 @@ export default function Home() {
 
     const liveData = proxyPayload.data;
     // The optimizer may return status=skipped when the min run interval
-    // has not elapsed. This is not a dashboard error; the dashboard should
+    // has not elapsed, or status=unavailable when the optimizer service
+    // cannot be reached. These are not dashboard errors; the dashboard should
     // still render whatever recent/aggregated data is returned.
-    if (liveData?.status !== 'success' && liveData?.status !== 'skipped') {
+    if (liveData?.status !== 'success' && liveData?.status !== 'skipped' && liveData?.status !== 'unavailable') {
       throw new Error(liveData?.message || `Live ${section} endpoint returned an error`);
     }
 
@@ -358,8 +359,9 @@ export default function Home() {
       }
 
       const liveData = livePayload.data;
-      // status=skipped ("Run interval not met") should not block the dashboard.
-      if (liveData?.status !== 'success' && liveData?.status !== 'skipped') {
+      // status=skipped ("Run interval not met") or status=unavailable (optimizer
+      // unreachable) should not block the dashboard.
+      if (liveData?.status !== 'success' && liveData?.status !== 'skipped' && liveData?.status !== 'unavailable') {
         throw new Error(liveData?.message || 'Live optimizer endpoint returned an error');
       }
 
@@ -908,11 +910,17 @@ export default function Home() {
 
   const renderDiscoveryTab = () => {
     const latestResult = pickMostRecentMeaningfulResult() || recentResults[0];
-    const topPerformers = latestResult?.top_performers || [];
     const discoveryLive = liveSections.discovery.data?.data;
     const discoveryFallback = latestResult?.features?.keyword_discovery || {};
     const discoveryData = (discoveryLive && typeof discoveryLive === 'object') ? discoveryLive : discoveryFallback;
-    
+    // Prefer top_performing_keywords from the live discovery response, then fall
+    // back to the top_performers list stored on the latest optimization result.
+    const topPerformers: TopPerformer[] =
+      (Array.isArray(discoveryLive?.top_performing_keywords) && discoveryLive.top_performing_keywords.length > 0)
+        ? discoveryLive.top_performing_keywords
+        : (latestResult?.top_performers || []);
+    const isUnavailable = liveSections.discovery.data?.status === 'unavailable';
+
     return (
       <div style={styles.tableCard}>
         <h2 style={styles.tableTitle}>🔍 Top Performing Keywords</h2>
@@ -924,6 +932,9 @@ export default function Home() {
             )}
             {liveSections.discovery.error && (
               <p style={{ color: '#b00020', margin: 0 }}>{liveSections.discovery.error}</p>
+            )}
+            {isUnavailable && !liveSections.discovery.error && (
+              <p style={{ color: '#888', margin: 0 }}>Optimizer service temporarily unavailable — showing cached data.</p>
             )}
             <div style={styles.featureStats}>
               <div>Keywords Discovered: {discoveryData?.keywords_discovered || 0}</div>
