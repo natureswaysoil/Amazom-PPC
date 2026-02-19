@@ -97,12 +97,16 @@ async function fetchOptimizerWithRetry(options: {
       ...(profileId ? { 'X-Profile-ID': profileId } : {}),
     };
 
-    const resp = await fetch(url, {
-      method: 'GET',
-      headers,
-      cache: 'no-store',
-    });
-    return { resp, usedIdToken: false };
+    try {
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+      });
+      return { resp, usedIdToken: false };
+    } catch (err) {
+      throw new Error(`Network error reaching optimizer (api-key auth): ${(err as Error).message}`);
+    }
   }
 
   // Only use ID token if API key is not available
@@ -117,24 +121,19 @@ async function fetchOptimizerWithRetry(options: {
         ...(profileId ? { 'X-Profile-ID': profileId } : {}),
       };
 
-      const resp = await fetch(url, {
-        method: 'GET',
-        headers,
-        cache: 'no-store',
-      });
-      return { resp, usedIdToken: true };
+      try {
+        const resp = await fetch(url, {
+          method: 'GET',
+          headers,
+          cache: 'no-store',
+        });
+        return { resp, usedIdToken: true };
+      } catch (err) {
+        throw new Error(`Network error reaching optimizer (id-token auth): ${(err as Error).message}`);
+      }
     } catch (err) {
       console.error('[optimizer-live] Failed to mint ID token:', err);
-      // Fall back to unauthenticated request
-      const headers: Record<string, string> = {
-        ...(profileId ? { 'X-Profile-ID': profileId } : {}),
-      };
-      const resp = await fetch(url, {
-        method: 'GET',
-        headers,
-        cache: 'no-store',
-      });
-      return { resp, usedIdToken: false };
+      // Fall through to unauthenticated request
     }
   }
 
@@ -144,13 +143,16 @@ async function fetchOptimizerWithRetry(options: {
     ...(profileId ? { 'X-Profile-ID': profileId } : {}),
   };
 
-  const resp = await fetch(url, {
-    method: 'GET',
-    headers: baseHeaders,
-    cache: 'no-store',
-  });
-
-  return { resp, usedIdToken: false };
+  try {
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: baseHeaders,
+      cache: 'no-store',
+    });
+    return { resp, usedIdToken: false };
+  } catch (err) {
+    throw new Error(`Network error reaching optimizer (unauthenticated): ${(err as Error).message}`);
+  }
 }
 
 export async function GET(request: NextRequest) {
