@@ -262,6 +262,7 @@ export default function Home() {
         proxyPayload?.data?.message ||
         proxyPayload?.data?.error ||
         proxyPayload?.error ||
+        proxyPayload?.message ||
         resp.statusText ||
         'Unknown error';
 
@@ -342,6 +343,7 @@ export default function Home() {
           livePayload?.data?.message ||
           livePayload?.data?.error ||
           livePayload?.error ||
+          livePayload?.message ||
           liveResponse.statusText ||
           'Unknown error';
 
