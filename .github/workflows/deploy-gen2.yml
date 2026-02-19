@@ -42,7 +42,35 @@ env:
   PPC_FEATURES: bid_optimization,dayparting
 
 jobs:
+  secrets-check:
+    name: Validate deployment prerequisites
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.evaluate.outputs.proceed }}
+    steps:
+      - name: Evaluate required secrets
+        id: evaluate
+        env:
+          GCP_WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SA: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "${GCP_WIF_PROVIDER}" ] || [ -z "${GCP_SA}" ]; then
+            echo "⚠️  Missing required WIF secrets. Skipping deploy job."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Deployment skipped";
+              echo "";
+              echo "The deploy-gen2 workflow requires \`GCP_WORKLOAD_IDENTITY_PROVIDER\` and \`GCP_SERVICE_ACCOUNT\` secrets.";
+              echo "Add these secrets to enable automatic Google Cloud deployments with Workload Identity Federation.";
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "✅ Required WIF secrets detected. Proceeding with deployment."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy:
+    needs: secrets-check
+    if: needs.secrets-check.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
