@@ -1286,17 +1286,47 @@ def load_config(request_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
   raise ValueError("No configuration found")
 
 
+def _fetch_secret_from_gsm(secret_name: str, project_id: str) -> Optional[str]:
+  """Fetch a secret's latest value from Google Secret Manager.
+
+  Returns the stripped secret string on success, or None if the secret cannot
+  be fetched (missing IAM permission, secret not found, import error, etc.).
+  Failures are logged at DEBUG level so they don't pollute normal log output.
+  """
+  try:
+    from google.cloud import secretmanager as _sm
+    client = _sm.SecretManagerServiceClient()
+    resource = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+    response = client.access_secret_version(request={"name": resource})
+    value = response.payload.data.decode("UTF-8").strip()
+    return value if value else None
+  except Exception as exc:
+    logger.debug("Could not fetch secret '%s' from Secret Manager: %s", secret_name, type(exc).__name__)
+    return None
+
+
 def set_environment_variables(config: Dict[str, Any]) -> None:
   """Set env vars from config if not already present"""
   amazon_api = config.get('amazon_api', {})
-  # Guardrail: config sometimes carries Secret Manager secret *names* rather than
-  # actual credential values. Never propagate those into AMAZON_* env vars.
+  # When config carries a Google Secret Manager *secret name* instead of the
+  # actual credential value (common when the config is generated from a Cloud
+  # Run job template that embeds secret identifiers), resolve the value
+  # directly from Secret Manager before falling through to the error path.
+  # This makes the Cloud Function resilient to missing --set-secrets bindings.
   known_secret_names = {
     'Amazon_Ads_Client_identifier',
     'Amazon_Ads_Client_secret',
     'Amazon_Ads_Refresh_Token',
   }
-  for key, val in [('AMAZON_CLIENT_ID', 'client_id'), 
+  # Derive the GCP project ID from available sources (used only for GSM fetch).
+  gsm_project_id: Optional[str] = (
+    os.getenv('GCP_PROJECT_ID') or
+    os.getenv('GCP_PROJECT') or
+    os.getenv('GOOGLE_CLOUD_PROJECT') or
+    (config.get('bigquery', {}) or {}).get('project_id') or
+    ''
+  )
+  for key, val in [('AMAZON_CLIENT_ID', 'client_id'),
                    ('AMAZON_CLIENT_SECRET', 'client_secret'),
                    ('AMAZON_REFRESH_TOKEN', 'refresh_token'),
                    ('AMAZON_PROFILE_ID', 'profile_id')]:
@@ -1305,11 +1335,24 @@ def set_environment_variables(config: Dict[str, Any]) -> None:
       if not cfg_value:
         continue
       if cfg_value in known_secret_names:
+        # The config carries the Secret Manager secret name, not the actual
+        # value.  Attempt a direct fetch so that the credential is available
+        # even when --set-secrets binding is absent or misconfigured.
+        if gsm_project_id:
+          fetched = _fetch_secret_from_gsm(cfg_value, gsm_project_id)
+          if fetched:
+            os.environ[key] = fetched
+            logger.info(
+              "Loaded %s from Google Secret Manager (secret: %s)",
+              key, cfg_value,
+            )
+            continue
         logger.error(
-          "Refusing to set %s from config because it looks like a Secret Manager secret name (%s). "
-          "Ensure secrets are injected into environment variables (e.g. --set-secrets) or provide real values in PPC_CONFIG.",
-          key,
-          cfg_value,
+          "Config contains a Secret Manager secret name for %s (%s) but the "
+          "value could not be fetched. Ensure --set-secrets binds the secret "
+          "to the env var, or that the service account has "
+          "roles/secretmanager.secretAccessor on this secret.",
+          key, cfg_value,
         )
         continue
       # Skip obvious placeholders.
