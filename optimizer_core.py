@@ -82,9 +82,12 @@ USER_AGENT = "NWS-PPC-Automation/2.0"
 
 # Amazon Ads API versions for Amazon-Advertising-API-Version header
 # Sponsored Products (SP) endpoints expect version v2.
-# Reporting API uses version v3.
+# Reporting API v3 does not use the Amazon-Advertising-API-Version header;
+# its version is implied by the /reporting/reports URL path.  Sending the
+# header causes Amazon's gateway to misroute the request, producing a 400
+# "Required fields are invalid or missing: configuration format/timeUnit".
 SP_API_VERSION = "v2"
-REPORTS_API_VERSION = "v3"
+REPORTS_API_VERSION = None
 
 # Rate limiting - Amazon Advertising API supports 10 requests/second
 MAX_REQUESTS_PER_SECOND = 10
@@ -695,8 +698,9 @@ class AmazonAdsAPI:
         `/v2/` prefix retained).
 
         The Reporting API is a special case: `/v2/reports` must be rewritten to
-        `/reporting/reports` with the `Amazon-Advertising-API-Version` header set
-        to the current reporting API version.
+        `/reporting/reports`.  The Amazon-Advertising-API-Version header is NOT
+        sent for Reporting API requests because it causes Amazon's gateway to
+        misroute the request to an SP API handler, producing a spurious 400 error.
 
         Returns: (endpoint_path, api_version_header_or_none)
         """
@@ -1677,8 +1681,6 @@ class AmazonAdsAPI:
                 'timeUnit': 'SUMMARY',
                 'format': 'GZIP_JSON',
                 'columns': columns,
-                # Keep metrics for backward compatibility; some older flows used it.
-                'metrics': columns,
             },
         }
 
