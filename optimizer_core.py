@@ -1005,7 +1005,7 @@ class AmazonAdsAPI:
                         # If the path-versioned candidate doesn't exist, try the next endpoint.
                         resp = getattr(exc, 'response', None)
                         status = getattr(resp, 'status_code', None) if resp is not None else None
-                        if status == 404 and endpoint.startswith('/v2/'):
+                        if status == 404 and (endpoint.startswith('/v2/') or endpoint.startswith('/v3/')):
                             break
 
                         # Abort quickly on known gateway/auth-format error to allow verify_connection fallback.
@@ -1236,6 +1236,8 @@ class AmazonAdsAPI:
                 return campaigns
             except Exception as fallback_exc:
                 logger.error(f"Fallback campaigns list also failed: {fallback_exc}")
+                if state_filter is None:
+                    self._campaigns_cache = []
                 return []
     
     def invalidate_campaigns_cache(self):
