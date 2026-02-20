@@ -687,15 +687,16 @@ class AmazonAdsAPI:
     def _upgrade_endpoint(self, endpoint: str) -> tuple[str, str]:
         """Resolve endpoint path and optional API version header.
 
-        Historically, many Amazon Ads endpoints are versioned via the URL path
-        (e.g., `/v2/sp/keywords`). Some environments/scripts in this repo also
-        attempted header-based versioning by rewriting `/v2/...` -> `/...` and
-        adding `Amazon-Advertising-API-Version`.
+        SP endpoints use path-based versioning (e.g., `/v2/sp/keywords`).
+        Calling an unversioned path such as `/sp/keywords` routes to a gateway
+        layer that parses the Authorization header differently, producing a
+        confusing 403 "Invalid key=value pair" error even with a valid Bearer
+        token.  SP endpoint paths are therefore always kept as-is (with the
+        `/v2/` prefix retained).
 
-        In practice, calling unversioned paths (e.g., `/sp/keywords`) can yield
-        confusing 403s like "Invalid key=value pair" even with a valid Bearer
-        token. To maximize compatibility, we default to *path-based* versioning
-        and only use the header-rewrite behavior when explicitly enabled.
+        The Reporting API is a special case: `/v2/reports` must be rewritten to
+        `/reporting/reports` with the `Amazon-Advertising-API-Version` header set
+        to the current reporting API version.
 
         Returns: (endpoint_path, api_version_header_or_none)
         """
@@ -710,32 +711,10 @@ class AmazonAdsAPI:
             suffix = ep[len("/v2/reports"):]
             return f"/reporting/reports{suffix}", REPORTS_API_VERSION
 
-        versioning_mode = os.getenv("AMAZON_ADS_VERSIONING_MODE", "path").strip().lower()
-        # Modes:
-        # - "path" (default): keep `/v2/...` in the URL and do not set version header.
-        # - "header": rewrite `/v2/...` -> `/...` and set `Amazon-Advertising-API-Version`.
-        if versioning_mode != "header":
-            return ep, None
-
-        # Header-based versioning (opt-in)
-        replacements = {
-            "/v2/sp/campaigns": ("/sp/campaigns", SP_API_VERSION),
-            "/v2/sp/adGroups": ("/sp/adGroups", SP_API_VERSION),
-            "/v2/sp/keywords/extended": ("/sp/keywords/extended", SP_API_VERSION),
-            "/v2/sp/keywords": ("/sp/keywords", SP_API_VERSION),
-            "/v2/sp/negativeKeywords": ("/sp/negativeKeywords", SP_API_VERSION),
-            "/v2/sp/targets/keywords/recommendations": (
-                "/sp/targets/keywords/recommendations", SP_API_VERSION
-            ),
-            "/v2/reports": ("/reporting/reports", REPORTS_API_VERSION),
-        }
-
-        for old_prefix, (new_prefix, api_version) in replacements.items():
-            if ep.startswith(old_prefix):
-                suffix = ep[len(old_prefix):]
-                return f"{new_prefix}{suffix}", api_version
-
-        logger.warning(f"Unknown v2 endpoint format (header mode): {ep}")
+        # All other `/v2/sp/...` paths use path-based versioning.
+        # Do NOT strip the version prefix: unversioned SP paths (e.g.
+        # `/sp/keywords`) cause 403 "Invalid key=value pair" errors because
+        # they are handled by a different gateway tier.
         return ep, None
 
     def _request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
