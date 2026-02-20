@@ -959,7 +959,10 @@ class AmazonAdsAPI:
 
         last_exc: Optional[Exception] = None
         for endpoint in endpoint_candidates:
+            endpoint_not_found = False
             for headers_extra in header_candidates:
+                if endpoint_not_found:
+                    break
                 for body in body_candidates:
                     try:
                         response = self._request(
@@ -1002,10 +1005,12 @@ class AmazonAdsAPI:
                         # Log detailed diagnostics for 400 errors
                         _log_400_error(exc, endpoint, body)
 
-                        # If the path-versioned candidate doesn't exist, try the next endpoint.
+                        # If the path-versioned candidate doesn't exist, skip all remaining
+                        # header/body variants for this endpoint and move to the next one.
                         resp = getattr(exc, 'response', None)
                         status = getattr(resp, 'status_code', None) if resp is not None else None
                         if status == 404 and (endpoint.startswith('/v2/') or endpoint.startswith('/v3/')):
+                            endpoint_not_found = True
                             break
 
                         # Abort quickly on known gateway/auth-format error to allow verify_connection fallback.

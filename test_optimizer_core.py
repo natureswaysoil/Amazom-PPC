@@ -131,7 +131,7 @@ class TestUpgradeEndpoint(unittest.TestCase):
 
 
 class TestListCampaignsV3Dedup(unittest.TestCase):
-    """Tests that list_campaigns_v3 stops trying body variants on 404 for versioned endpoints."""
+    """Tests that list_campaigns_v3 skips all header/body variants on 404 for versioned endpoints."""
 
     def _make_api(self):
         from optimizer_core import AmazonAdsAPI, Auth
@@ -153,8 +153,8 @@ class TestListCampaignsV3Dedup(unittest.TestCase):
         http_err.response = resp
         return http_err
 
-    def test_v3_endpoint_breaks_body_loop_on_404(self):
-        """A 404 from /v3/sp/campaigns/list should stop trying further body variants."""
+    def test_v3_endpoint_breaks_body_and_header_loops_on_404(self):
+        """A 404 from /v3/sp/campaigns/list should stop trying further body AND header variants."""
         api = self._make_api()
         http_err = self._make_404_response()
 
@@ -174,17 +174,16 @@ class TestListCampaignsV3Dedup(unittest.TestCase):
             except Exception:
                 pass
 
-        # With the fix: /v3/ breaks body loop on 404 → 3 headers × 1 body = 3 calls (not 9)
-        self.assertLessEqual(v3_call_count, 3,
-                             f"Expected at most 3 calls for /v3 endpoint on 404 (one per header), got {v3_call_count}")
+        # With the fix: /v3/ breaks body AND header loops on 404 → 1 call per endpoint (not 9)
+        self.assertLessEqual(v3_call_count, 1,
+                             f"Expected at most 1 call for /v3 endpoint on 404 (skip all variants), got {v3_call_count}")
 
-        # Total without fix: 9 (/v3) + 3 (/v2) + 9 (unversioned) = 21
-        # Total with fix:    3 (/v3) + 3 (/v2) + 9 (unversioned)  = 15
-        self.assertLessEqual(total_call_count, 15,
-                             f"Expected at most 15 total calls with 404 break for versioned endpoints, got {total_call_count}")
+        # Total: 1 (/v3) + 1 (/v2) + 9 (unversioned, all fail) = 11
+        self.assertLessEqual(total_call_count, 11,
+                             f"Expected at most 11 total calls with 404 break for versioned endpoints, got {total_call_count}")
 
-    def test_v2_endpoint_breaks_body_loop_on_404(self):
-        """Pre-existing behaviour: a 404 from /v2/sp/campaigns/list stops further body variants."""
+    def test_v2_endpoint_breaks_body_and_header_loops_on_404(self):
+        """Pre-existing behaviour: a 404 from /v2/sp/campaigns/list stops all header/body variants."""
         api = self._make_api()
         http_err = self._make_404_response()
 
@@ -202,9 +201,9 @@ class TestListCampaignsV3Dedup(unittest.TestCase):
             except Exception:
                 pass
 
-        # /v2/ should only try one body per header set (3 headers × 1 body = 3)
-        self.assertLessEqual(v2_call_count, 3,
-                             f"Expected at most 3 calls for /v2 endpoint on 404, got {v2_call_count}")
+        # /v2/ should only try once per endpoint (1 call, not 3 headers × 1 body = 3)
+        self.assertLessEqual(v2_call_count, 1,
+                             f"Expected at most 1 call for /v2 endpoint on 404, got {v2_call_count}")
 
 
 class TestGetCampaignsCachesFailure(unittest.TestCase):
