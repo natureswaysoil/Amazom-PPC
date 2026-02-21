@@ -333,8 +333,6 @@ def chart_data(chart_type):
 @app.route("/api/bigquery-health")
 def bigquery_health():
     """Detailed BigQuery connectivity health check."""
-    import gcp_credentials
-
     client, error_msg = get_bigquery_client()
 
     if client is None:
