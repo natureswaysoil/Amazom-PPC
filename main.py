@@ -22,6 +22,7 @@ from optimizer_core import PPCAutomation, AmazonAdsAPI, AuthenticationError
 from dashboard_client import DashboardClient
 from bigquery_client import BigQueryClient
 from gcp_credentials import validate_credentials_early, GCPCredentialError
+from auth_utils import is_authorized_dashboard_request as _is_authorized_dashboard_request_util
 
 # Configure logging for Cloud Functions
 # Detect if running in Cloud Functions environment
@@ -689,22 +690,7 @@ def _resolve_dashboard_api_key_from_config(config: Dict[str, Any]) -> str:
 
 
 def _is_authorized_dashboard_request(request, api_key: str) -> bool:
-  if not api_key:
-    return True
-
-  auth_header = request.headers.get('Authorization') or request.headers.get('authorization') or ''
-  token = ''
-  if auth_header.startswith('Bearer '):
-    token = auth_header[len('Bearer '):].strip()
-  else:
-    token = auth_header.strip()
-
-  header_api_key = (
-    request.headers.get('X-API-Key') or
-    request.headers.get('x-api-key') or
-    ''
-  ).strip()
-  return token == api_key or header_api_key == api_key
+  return _is_authorized_dashboard_request_util(request, api_key)
 
 
 def run_live_data(request) -> Tuple[Dict[str, Any], int]:
