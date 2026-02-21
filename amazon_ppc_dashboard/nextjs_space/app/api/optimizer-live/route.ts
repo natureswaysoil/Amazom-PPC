@@ -6,6 +6,38 @@ import { resolveGCPCredentials } from '../lib/credentials';
 
 export const dynamic = 'force-dynamic';
 
+/** Emits a structured JSON log entry compatible with Cloud Logging. */
+function logApiCall(entry: {
+  severity: 'INFO' | 'WARNING' | 'ERROR';
+  message: string;
+  route: string;
+  durationMs?: number;
+  upstreamDurationMs?: number;
+  cacheHit?: boolean;
+  status?: number;
+  auth?: string;
+  section?: string;
+  upstreamStatus?: number;
+  error?: string;
+}) {
+  // Cloud Logging parses JSON log lines and extracts structured fields.
+  const log: Record<string, unknown> = {
+    severity: entry.severity,
+    message: entry.message,
+    route: entry.route,
+    timestamp: new Date().toISOString(),
+  };
+  if (entry.durationMs !== undefined) log['durationMs'] = entry.durationMs;
+  if (entry.upstreamDurationMs !== undefined) log['upstreamDurationMs'] = entry.upstreamDurationMs;
+  if (entry.cacheHit !== undefined) log['cacheHit'] = entry.cacheHit;
+  if (entry.status !== undefined) log['status'] = entry.status;
+  if (entry.auth !== undefined) log['auth'] = entry.auth;
+  if (entry.section !== undefined) log['section'] = entry.section;
+  if (entry.upstreamStatus !== undefined) log['upstreamStatus'] = entry.upstreamStatus;
+  if (entry.error !== undefined) log['error'] = entry.error;
+  console.log(JSON.stringify(log));
+}
+
 type CachedResponse = {
   expiresAt: number;
   status: number;
@@ -156,6 +188,7 @@ async function fetchOptimizerWithRetry(options: {
 }
 
 export async function GET(request: NextRequest) {
+  const requestStart = Date.now();
   try {
     const resolved = await resolveDashboardApiKey({ required: false });
     const apiKey = resolved.apiKey || undefined;
@@ -172,6 +205,15 @@ export async function GET(request: NextRequest) {
     const now = Date.now();
     const cached = liveCache.get(cacheKey);
     if (cached && cached.expiresAt > now) {
+      logApiCall({
+        severity: 'INFO',
+        message: 'optimizer-live cache hit',
+        route: '/api/optimizer-live',
+        durationMs: Date.now() - requestStart,
+        cacheHit: true,
+        status: cached.status,
+        section,
+      });
       return NextResponse.json(cached.body, { status: cached.status });
     }
 
@@ -201,6 +243,7 @@ export async function GET(request: NextRequest) {
     // Retry on rate limiting / transient backend errors.
     // If the optimizer requires IAM auth (403), retry once with an ID token.
     let usedIdToken = false;
+    const upstreamStart = Date.now();
     for (let attempt = 0; attempt < 3; attempt++) {
       const result = await fetchOptimizerWithRetry({
         url: target.toString(),
@@ -214,6 +257,7 @@ export async function GET(request: NextRequest) {
       if (resp.status !== 429 && resp.status !== 503) break;
       await sleep(400 * (attempt + 1));
     }
+    const upstreamDurationMs = Date.now() - upstreamStart;
 
     if (!resp) throw new Error('Optimizer request did not return a response');
 
@@ -249,15 +293,29 @@ export async function GET(request: NextRequest) {
         });
       }
 
+      logApiCall({
+        severity: 'INFO',
+        message: 'optimizer-live skipped (run interval not met)',
+        route: '/api/optimizer-live',
+        durationMs: Date.now() - requestStart,
+        upstreamDurationMs,
+        cacheHit: false,
+        status: 200,
+        auth: usedIdToken ? 'id-token' : apiKey ? 'api-key' : 'none',
+        section,
+        upstreamStatus: resp.status,
+      });
+
       return NextResponse.json(skipped, { status: 200 });
     }
 
+    const authMethod = usedIdToken ? 'id-token' : apiKey ? 'api-key' : 'none';
     const body = {
       ok: resp.ok,
       optimizerBaseUrl: baseUrl,
       section,
       status: resp.status,
-      auth: usedIdToken ? 'id-token' : apiKey ? 'api-key' : 'none',
+      auth: authMethod,
       data: payload,
     };
     const statusCode = resp.ok ? 200 : resp.status;
@@ -271,6 +329,19 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    logApiCall({
+      severity: resp.ok ? 'INFO' : 'WARNING',
+      message: `optimizer-live ${resp.ok ? 'success' : 'upstream error'}`,
+      route: '/api/optimizer-live',
+      durationMs: Date.now() - requestStart,
+      upstreamDurationMs,
+      cacheHit: false,
+      status: statusCode,
+      auth: authMethod,
+      section,
+      upstreamStatus: resp.status,
+    });
+
     return NextResponse.json(body, { status: statusCode });
   } catch (err: any) {
     let apiKey: string | undefined;
@@ -283,6 +354,18 @@ export async function GET(request: NextRequest) {
     const { searchParams: sp } = new URL(request.url);
     const section = (sp.get('section') || sp.get('live') || 'overview').trim();
     console.error('[optimizer-live] Optimizer endpoint unreachable:', err?.message || err);
+    const errorAuthMethod = apiKey ? 'api-key' : 'none';
+    logApiCall({
+      severity: 'ERROR',
+      message: 'optimizer-live request failed',
+      route: '/api/optimizer-live',
+      durationMs: Date.now() - requestStart,
+      cacheHit: false,
+      status: 200,
+      auth: errorAuthMethod,
+      section,
+      error: err?.message || String(err),
+    });
     // Return a graceful degraded response so the dashboard can still render
     // with fallback/cached data rather than showing a hard error.
     return NextResponse.json(
@@ -291,7 +374,7 @@ export async function GET(request: NextRequest) {
         optimizerBaseUrl: optimizerUrl,
         section,
         status: 200,
-        auth: apiKey ? 'api-key' : 'id-token',
+        auth: errorAuthMethod,
         data: {
           status: 'unavailable',
           message: err?.message || String(err),

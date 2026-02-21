@@ -1,0 +1,153 @@
+name: Monitor Dashboard API Logs
+
+on:
+  schedule:
+    # Run every 6 hours to check API health and response times
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dashboard_url:
+        description: 'Dashboard base URL (overrides secret DASHBOARD_URL)'
+        required: false
+        type: string
+      slow_threshold_ms:
+        description: 'Response time threshold in ms to flag as slow (default: 5000)'
+        required: false
+        default: '5000'
+        type: string
+
+jobs:
+  monitor:
+    name: Check API Response Times
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      INPUT_DASHBOARD_URL: ${{ inputs.dashboard_url }}
+      SECRET_DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+      SLOW_THRESHOLD_MS: ${{ inputs.slow_threshold_ms || '5000' }}
+
+    steps:
+      - name: Resolve dashboard URL
+        id: resolve_url
+        shell: bash
+        run: |
+          set -e
+          if [ -n "$INPUT_DASHBOARD_URL" ]; then
+            echo "dashboard_url=$INPUT_DASHBOARD_URL" >> "$GITHUB_OUTPUT"
+          elif [ -n "$SECRET_DASHBOARD_URL" ]; then
+            echo "dashboard_url=$SECRET_DASHBOARD_URL" >> "$GITHUB_OUTPUT"
+          else
+            # Fall back to the known production URL for this project.
+            echo "dashboard_url=https://ppc-dashboard-nextjs-1009540130231.us-central1.run.app" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Probe /api/health
+        id: health
+        env:
+          DASHBOARD_URL: ${{ steps.resolve_url.outputs.dashboard_url }}
+        shell: bash
+        run: |
+          BASE="${DASHBOARD_URL%/}"
+          START=$(date +%s%3N)
+          HTTP_CODE=$(curl -s -o /tmp/health_body.json \
+            -w "%{http_code}" \
+            --max-time 15 \
+            "${BASE}/api/health" || echo "000")
+          END=$(date +%s%3N)
+          DURATION_MS=$(( END - START ))
+          BODY=$(cat /tmp/health_body.json 2>/dev/null || echo '{}')
+
+          echo "http_code=$HTTP_CODE" >> "$GITHUB_OUTPUT"
+          echo "duration_ms=$DURATION_MS" >> "$GITHUB_OUTPUT"
+          echo "/api/health → HTTP $HTTP_CODE in ${DURATION_MS}ms"
+          echo "Body: $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::/api/health returned $HTTP_CODE"
+          fi
+
+      - name: Probe /api/optimizer-live
+        id: optimizer_live
+        env:
+          DASHBOARD_URL: ${{ steps.resolve_url.outputs.dashboard_url }}
+        shell: bash
+        run: |
+          BASE="${DASHBOARD_URL%/}"
+          START=$(date +%s%3N)
+          HTTP_CODE=$(curl -s -o /tmp/live_body.json \
+            -w "%{http_code}" \
+            --max-time 30 \
+            "${BASE}/api/optimizer-live?section=overview&limit=50&days=7" || echo "000")
+          END=$(date +%s%3N)
+          DURATION_MS=$(( END - START ))
+          BODY=$(cat /tmp/live_body.json 2>/dev/null || echo '{}')
+
+          echo "http_code=$HTTP_CODE" >> "$GITHUB_OUTPUT"
+          echo "duration_ms=$DURATION_MS" >> "$GITHUB_OUTPUT"
+          echo "/api/optimizer-live → HTTP $HTTP_CODE in ${DURATION_MS}ms"
+
+          # Extract key fields from the JSON response for the summary
+          STATUS_FIELD=$(echo "$BODY" | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('status','unknown'))" \
+            2>/dev/null || echo "unknown")
+          AUTH_FIELD=$(echo "$BODY" | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); print(d.get('auth','unknown'))" \
+            2>/dev/null || echo "unknown")
+          echo "optimizer_status=$STATUS_FIELD" >> "$GITHUB_OUTPUT"
+          echo "auth=$AUTH_FIELD" >> "$GITHUB_OUTPUT"
+          echo "Optimizer status: $STATUS_FIELD  Auth: $AUTH_FIELD"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::/api/optimizer-live returned $HTTP_CODE"
+          fi
+          if [ "$DURATION_MS" -gt "$SLOW_THRESHOLD_MS" ]; then
+            echo "::warning::/api/optimizer-live response time ${DURATION_MS}ms exceeds threshold ${SLOW_THRESHOLD_MS}ms"
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          DASHBOARD_URL: ${{ steps.resolve_url.outputs.dashboard_url }}
+          HEALTH_CODE: ${{ steps.health.outputs.http_code }}
+          HEALTH_MS: ${{ steps.health.outputs.duration_ms }}
+          LIVE_CODE: ${{ steps.optimizer_live.outputs.http_code }}
+          LIVE_MS: ${{ steps.optimizer_live.outputs.duration_ms }}
+          OPTIMIZER_STATUS: ${{ steps.optimizer_live.outputs.optimizer_status }}
+          AUTH: ${{ steps.optimizer_live.outputs.auth }}
+        shell: bash
+        run: |
+          {
+            echo "## Dashboard API Monitoring Report"
+            echo ""
+            echo "**Service URL**: ${DASHBOARD_URL}"
+            echo "**Slow threshold**: ${SLOW_THRESHOLD_MS}ms"
+            echo ""
+            echo "| Endpoint | HTTP | Duration |"
+            echo "|---|---|---|"
+            if [ "${HEALTH_CODE}" = "200" ]; then
+              HEALTH_ICON="✅"
+            else
+              HEALTH_ICON="❌"
+            fi
+            if [ -n "${HEALTH_MS}" ] && [ "$(( HEALTH_MS + 0 ))" -gt "$(( SLOW_THRESHOLD_MS + 0 ))" ]; then
+              HEALTH_SPEED="⚠️ slow"
+            else
+              HEALTH_SPEED="ok"
+            fi
+            echo "| \`/api/health\` | ${HEALTH_ICON} ${HEALTH_CODE} | ${HEALTH_MS}ms (${HEALTH_SPEED}) |"
+            if [ "${LIVE_CODE}" = "200" ]; then
+              LIVE_ICON="✅"
+            else
+              LIVE_ICON="❌"
+            fi
+            if [ -n "${LIVE_MS}" ] && [ "$(( LIVE_MS + 0 ))" -gt "$(( SLOW_THRESHOLD_MS + 0 ))" ]; then
+              LIVE_SPEED="⚠️ slow"
+            else
+              LIVE_SPEED="ok"
+            fi
+            echo "| \`/api/optimizer-live\` | ${LIVE_ICON} ${LIVE_CODE} | ${LIVE_MS}ms (${LIVE_SPEED}) |"
+            echo ""
+            echo "**Optimizer status**: \`${OPTIMIZER_STATUS}\`"
+            echo "**Auth method**: \`${AUTH}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
