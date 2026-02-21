@@ -269,6 +269,46 @@ export async function GET(request: NextRequest) {
       payload = { raw: text };
     }
 
+    // When the optimizer returns 401/403 the dashboard cannot do anything useful
+    // with the raw auth error.  Surface it as an "unavailable" state so the
+    // frontend renders a graceful degraded view instead of a hard error.
+    if (!resp.ok && (resp.status === 401 || resp.status === 403)) {
+      const authMethod = usedIdToken ? 'id-token' : apiKey ? 'api-key' : 'none';
+      const authUnavailable = {
+        ok: true,
+        optimizerBaseUrl: baseUrl,
+        section,
+        status: 200,
+        auth: authMethod,
+        data: {
+          status: 'unavailable',
+          message:
+            payload?.message ||
+            payload?.error ||
+            'Optimizer authentication failed. Verify DASHBOARD_API_KEY is set correctly on both services.',
+          upstreamStatus: resp.status,
+          suggestion: apiKey
+            ? 'Verify DASHBOARD_API_KEY matches the optimizer configuration'
+            : 'Set DASHBOARD_API_KEY in the dashboard environment or ensure Cloud Run IAM is configured',
+        },
+      };
+
+      logApiCall({
+        severity: 'WARNING',
+        message: `optimizer-live auth error (${resp.status})`,
+        route: '/api/optimizer-live',
+        durationMs: Date.now() - requestStart,
+        upstreamDurationMs,
+        cacheHit: false,
+        status: 200,
+        auth: authMethod,
+        section,
+        upstreamStatus: resp.status,
+      });
+
+      return NextResponse.json(authUnavailable, { status: 200 });
+    }
+
     // The optimizer sometimes returns a non-200 status for "Run interval not met",
     // but the dashboard UX should treat that as a normal skipped state.
     if (!resp.ok && includesRunIntervalNotMet(payload, text)) {

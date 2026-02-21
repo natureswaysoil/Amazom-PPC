@@ -395,5 +395,128 @@ class TestGetKeywordsErrorHandling(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class TestIsGoogleOidcToken(unittest.TestCase):
+    """Tests for auth_utils.is_google_oidc_token."""
+
+    def _make_jwt(self, payload: dict) -> str:
+        """Construct a minimal (unsigned) JWT string for testing."""
+        import base64, json as _json
+        def b64url(data: str) -> str:
+            return base64.urlsafe_b64encode(data.encode()).rstrip(b'=').decode()
+        header = b64url('{"alg":"RS256","typ":"JWT"}')
+        body = b64url(_json.dumps(payload))
+        return f"{header}.{body}.fakesig"
+
+    def test_google_https_issuer_accepted(self):
+        from auth_utils import is_google_oidc_token
+        token = self._make_jwt({"iss": "https://accounts.google.com", "sub": "1234"})
+        self.assertTrue(is_google_oidc_token(token))
+
+    def test_google_plain_issuer_accepted(self):
+        from auth_utils import is_google_oidc_token
+        token = self._make_jwt({"iss": "accounts.google.com", "sub": "1234"})
+        self.assertTrue(is_google_oidc_token(token))
+
+    def test_non_google_issuer_rejected(self):
+        from auth_utils import is_google_oidc_token
+        token = self._make_jwt({"iss": "https://evil.example.com", "sub": "1234"})
+        self.assertFalse(is_google_oidc_token(token))
+
+    def test_plain_api_key_string_rejected(self):
+        from auth_utils import is_google_oidc_token
+        self.assertFalse(is_google_oidc_token("my-api-key-abc123"))
+
+    def test_empty_string_rejected(self):
+        from auth_utils import is_google_oidc_token
+        self.assertFalse(is_google_oidc_token(""))
+
+    def test_two_segment_string_rejected(self):
+        from auth_utils import is_google_oidc_token
+        self.assertFalse(is_google_oidc_token("part1.part2"))
+
+    def test_malformed_base64_rejected(self):
+        from auth_utils import is_google_oidc_token
+        self.assertFalse(is_google_oidc_token("header.!!!.sig"))
+
+
+class TestIsAuthorizedDashboardRequest(unittest.TestCase):
+    """Tests for auth_utils.is_authorized_dashboard_request."""
+
+    def _make_request(self, headers: dict):
+        req = MagicMock()
+        headers_mock = MagicMock()
+        headers_mock.get = lambda key, default='': headers.get(key, headers.get(key.lower(), default))
+        req.headers = headers_mock
+        return req
+
+    def test_no_api_key_allows_all(self):
+        from auth_utils import is_authorized_dashboard_request
+        req = self._make_request({})
+        self.assertTrue(is_authorized_dashboard_request(req, ''))
+
+    def test_matching_x_api_key_header(self):
+        from auth_utils import is_authorized_dashboard_request
+        req = self._make_request({'X-API-Key': 'secret'})
+        self.assertTrue(is_authorized_dashboard_request(req, 'secret'))
+
+    def test_mismatched_x_api_key_header(self):
+        from auth_utils import is_authorized_dashboard_request
+        req = self._make_request({'X-API-Key': 'wrong'})
+        self.assertFalse(is_authorized_dashboard_request(req, 'secret'))
+
+    def test_matching_bearer_token(self):
+        from auth_utils import is_authorized_dashboard_request
+        req = self._make_request({'Authorization': 'Bearer secret'})
+        self.assertTrue(is_authorized_dashboard_request(req, 'secret'))
+
+    def test_mismatched_bearer_token(self):
+        from auth_utils import is_authorized_dashboard_request
+        req = self._make_request({'Authorization': 'Bearer wrongkey'})
+        self.assertFalse(is_authorized_dashboard_request(req, 'secret'))
+
+    def test_google_oidc_token_accepted_on_cloud_run(self):
+        """Google OIDC JWT is accepted when running on Cloud Run."""
+        import base64, json as _json
+        from auth_utils import is_authorized_dashboard_request
+
+        def b64url(data: str) -> str:
+            return base64.urlsafe_b64encode(data.encode()).rstrip(b'=').decode()
+        payload = b64url(_json.dumps({"iss": "https://accounts.google.com", "sub": "svc"}))
+        token = f"{b64url('{\"alg\":\"RS256\"}')}.{payload}.sig"
+
+        req = self._make_request({'Authorization': f'Bearer {token}'})
+        with patch.dict('os.environ', {'K_SERVICE': 'my-optimizer'}):
+            self.assertTrue(is_authorized_dashboard_request(req, 'secret'))
+
+    def test_google_oidc_token_rejected_outside_cloud_run(self):
+        """Google OIDC JWT must NOT bypass auth when not on Cloud Run."""
+        import base64, json as _json
+        from auth_utils import is_authorized_dashboard_request
+
+        def b64url(data: str) -> str:
+            return base64.urlsafe_b64encode(data.encode()).rstrip(b'=').decode()
+        payload = b64url(_json.dumps({"iss": "https://accounts.google.com", "sub": "svc"}))
+        token = f"{b64url('{\"alg\":\"RS256\"}')}.{payload}.sig"
+
+        req = self._make_request({'Authorization': f'Bearer {token}'})
+        env_without_cloud = {k: '' for k in ('K_SERVICE', 'FUNCTION_TARGET', 'GAE_SERVICE', 'CLOUD_RUN_JOB')}
+        with patch.dict('os.environ', env_without_cloud):
+            self.assertFalse(is_authorized_dashboard_request(req, 'secret'))
+
+    def test_fake_jwt_without_google_issuer_rejected_on_cloud_run(self):
+        """A JWT-shaped token with a non-Google issuer must still be rejected."""
+        import base64, json as _json
+        from auth_utils import is_authorized_dashboard_request
+
+        def b64url(data: str) -> str:
+            return base64.urlsafe_b64encode(data.encode()).rstrip(b'=').decode()
+        payload = b64url(_json.dumps({"iss": "https://evil.example.com", "sub": "attacker"}))
+        token = f"{b64url('{\"alg\":\"RS256\"}')}.{payload}.sig"
+
+        req = self._make_request({'Authorization': f'Bearer {token}'})
+        with patch.dict('os.environ', {'K_SERVICE': 'my-optimizer'}):
+            self.assertFalse(is_authorized_dashboard_request(req, 'secret'))
+
+
 if __name__ == "__main__":
     unittest.main()
