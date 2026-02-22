@@ -3586,11 +3586,6 @@ class SuggestedBidOptimizer:
 
             if sales_missing:
                 logger.warning(
-                    "keyword_performance schema missing sales field; "
-                    "treating sales as 0. ACoS will be null/inf and may affect "
-                    "selection logic."
-                )
-                logger.warning(
                     "keyword_performance has %d records but sales data is "
                     "unavailable; skipping top-performance selection "
                     "(falling back to all-enabled).",
@@ -3635,15 +3630,27 @@ class SuggestedBidOptimizer:
         for kw in kw_performance:
             sales = float(kw.get("sales") or 0)
             cost = float(kw.get("cost") or 0)
-            # Derive orders from conversions or purchases fields when available,
-            # otherwise approximate from sales (non-zero sales ≈ at least 1 order).
-            orders = int(
-                kw.get("orders")
-                or kw.get("conversions")
-                or kw.get("purchases")
-                or (1 if sales > 0 else 0)
-            )
-            acos = (cost / sales) if sales > 0 else float("inf")
+            # Use pre-computed acos from BigQuery when available; fall back to
+            # local calculation so the filter still works when acos is absent.
+            acos_val = kw.get("acos")
+            if acos_val is not None:
+                acos = float(acos_val)
+            else:
+                acos = (cost / sales) if sales > 0 else float("inf")
+            # Use the dedicated orders/conversions/purchases column when present
+            # (including when its value is 0, which means genuinely zero orders).
+            # Fall back to sales-based approximation only when no orders field exists.
+            orders = None
+            for _field in ("orders", "conversions", "purchases"):
+                _val = kw.get(_field)
+                if _val is not None:
+                    try:
+                        orders = int(_val)
+                    except (TypeError, ValueError):
+                        continue
+                    break
+            if orders is None:
+                orders = 1 if sales > 0 else 0
             if orders >= min_orders and acos <= max_acos:
                 text = str(kw.get("keyword_text") or "").strip().lower()
                 if text:

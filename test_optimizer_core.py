@@ -923,6 +923,120 @@ class TestLoadKeywordPerformance(unittest.TestCase):
         self.assertEqual(result, records)
 
 
+class TestSelectTopPerformers(unittest.TestCase):
+    """Tests for SuggestedBidOptimizer._select_top_performers."""
+
+    def _make_optimizer(self):
+        from optimizer_core import (
+            AmazonAdsAPI,
+            Auth,
+            Config,
+            AuditLogger,
+            SuggestedBidOptimizer,
+        )
+        import tempfile, json, os
+
+        fake_auth = Auth(
+            access_token="fake_token",
+            token_type="bearer",
+            expires_at=time.time() + 3600,
+        )
+
+        cfg_data = {
+            "api": {"region": "NA"},
+            "dayparting": {
+                "timezone": "UTC",
+                "hour_multipliers": {str(h): 1.0 for h in range(24)},
+            },
+            "suggested_bid_optimization": {
+                "min_bid": 0.02,
+                "max_bid": 10.0,
+                "max_step": 2.0,
+                "min_delta": 0.01,
+                "max_keywords": 2000,
+                "min_orders": 1,
+                "max_acos": 0.40,
+            },
+            "logging": {"output_dir": "/tmp"},
+        }
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as fh:
+            json.dump(cfg_data, fh)
+            cfg_path = fh.name
+
+        try:
+            with patch.object(AmazonAdsAPI, "_authenticate", return_value=fake_auth):
+                api = AmazonAdsAPI(profile_id="123456789")
+            config = Config(cfg_path)
+            audit = AuditLogger("/tmp")
+            optimizer = SuggestedBidOptimizer(config, api, audit)
+        finally:
+            os.unlink(cfg_path)
+
+        return optimizer, api
+
+    def _make_keyword(self, keyword_text="organic soil", bid=0.50):
+        from optimizer_core import Keyword
+
+        return Keyword(
+            keyword_id="1",
+            ad_group_id="100",
+            campaign_id="10",
+            keyword_text=keyword_text,
+            match_type="EXACT",
+            state="enabled",
+            bid=bid,
+        )
+
+    def test_uses_precomputed_acos_from_bigquery(self):
+        """When 'acos' is present in the performance record, _select_top_performers
+        uses it instead of recalculating from cost/sales."""
+        optimizer, api = self._make_optimizer()
+        kw = self._make_keyword("organic soil")
+        # acos=0.30 (below max_acos=0.40) — should be selected.
+        # cost=0 is deliberately omitted to confirm acos field takes precedence.
+        kw_perf = [{"keyword_text": "organic soil", "sales": 20.0, "acos": 0.30}]
+        with patch.object(api, "get_keywords", return_value=[kw]):
+            result = optimizer._select_top_performers(kw_perf, min_orders=1, max_acos=0.40)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].keyword_text, "organic soil")
+
+    def test_precomputed_acos_above_max_excluded(self):
+        """Keywords with precomputed acos > max_acos are excluded even if
+        recalculating from cost=0 would give acos=0."""
+        optimizer, api = self._make_optimizer()
+        kw = self._make_keyword("organic soil")
+        # acos=0.60 (above max_acos=0.40) — should be excluded.
+        kw_perf = [{"keyword_text": "organic soil", "sales": 20.0, "acos": 0.60}]
+        with patch.object(api, "get_keywords", return_value=[kw]):
+            result = optimizer._select_top_performers(kw_perf, min_orders=1, max_acos=0.40)
+        self.assertEqual(result, [])
+
+    def test_uses_orders_column_when_present(self):
+        """When 'orders' is present in the performance record, it is used
+        for the min_orders filter instead of the sales-based approximation."""
+        optimizer, api = self._make_optimizer()
+        kw = self._make_keyword("organic soil")
+        # orders=2 satisfies min_orders=1; acos=0.25 satisfies max_acos=0.40.
+        kw_perf = [{"keyword_text": "organic soil", "sales": 20.0, "orders": 2, "acos": 0.25}]
+        with patch.object(api, "get_keywords", return_value=[kw]):
+            result = optimizer._select_top_performers(kw_perf, min_orders=1, max_acos=0.40)
+        self.assertEqual(len(result), 1)
+
+    def test_orders_zero_excluded_when_min_orders_positive(self):
+        """Keywords with orders=0 are excluded when min_orders >= 1,
+        even if sales > 0."""
+        optimizer, api = self._make_optimizer()
+        kw = self._make_keyword("organic soil")
+        # orders=0 — should fail min_orders=1 filter.
+        kw_perf = [{"keyword_text": "organic soil", "sales": 20.0, "orders": 0, "acos": 0.25}]
+        with patch.object(api, "get_keywords", return_value=[kw]):
+            result = optimizer._select_top_performers(kw_perf, min_orders=1, max_acos=0.40)
+        self.assertEqual(result, [])
+
+
 class TestSitecustomizeHotfix(unittest.TestCase):
     """Tests for the sitecustomize bidRecommendations 429→404 HOTFIX.
 
