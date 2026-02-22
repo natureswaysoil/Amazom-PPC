@@ -1907,6 +1907,22 @@ class BigQueryClient:
                 "sales",
             ],
         )
+        orders_col = _pick(
+            cols,
+            [
+                "attributedConversions14d",
+                "attributedConversions7d",
+                "attributedConversions30d",
+                "attributed_conversions_14d",
+                "attributed_conversions_7d",
+                "attributed_conversions_30d",
+                "purchases14d",
+                "purchases_14d",
+                "purchases",
+                "orders",
+                "conversions",
+            ],
+        )
 
         if not keyword_id_col and discovered and discovered.get("keyword_col"):
             keyword_id_col = str(discovered.get("keyword_col"))
@@ -1917,11 +1933,19 @@ class BigQueryClient:
         if not (date_col and keyword_id_col and clicks_col and cost_col and sales_col):
             return []
 
+        orders_expr = (
+            f"SUM(COALESCE(`{orders_col}`, 0)) AS orders,"
+            if orders_col
+            else ""
+        )
+
         query = f"""
         SELECT
           CAST(`{keyword_id_col}` AS STRING) AS keyword_text,
           SUM(COALESCE(`{clicks_col}`, 0)) AS clicks,
+          SUM(COALESCE(`{cost_col}`, 0)) AS cost,
           SUM(COALESCE(`{sales_col}`, 0)) AS sales,
+          {orders_expr}
           SAFE_DIVIDE(
             SUM(COALESCE(`{cost_col}`, 0)),
             NULLIF(SUM(COALESCE(`{sales_col}`, 0)), 0)
