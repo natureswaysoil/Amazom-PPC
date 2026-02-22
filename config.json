@@ -137,8 +137,20 @@
       "dayparting",
       "campaign_management",
       "keyword_discovery",
-      "negative_keywords"
+      "negative_keywords",
+      "suggested_bid_optimization"
     ]
+  },
+  "suggested_bid_optimization": {
+    "enabled": true,
+    "min_bid": 0.02,
+    "max_bid": 10.0,
+    "max_step": 2.0,
+    "min_delta": 0.01,
+    "max_keywords": 2000,
+    "min_orders": 1,
+    "max_acos": 0.40,
+    "_comment": "Applies Amazon's suggested bids to enabled keywords with guardrails. max_step limits per-run bid change to a multiple of the current bid. min_delta skips negligible adjustments. SUGGESTED_BID_MAX_KEYWORDS and SUGGESTED_BID_FALLBACK_TO_ALL env vars override max_keywords and fallback behaviour respectively."
   },
   "logging": {
     "level": "INFO",

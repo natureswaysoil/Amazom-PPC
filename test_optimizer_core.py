@@ -395,5 +395,441 @@ class TestGetKeywordsErrorHandling(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class TestGetKeywordBidRecommendations(unittest.TestCase):
+    """Tests for AmazonAdsAPI.get_keyword_bid_recommendations."""
+
+    def _make_api(self):
+        from optimizer_core import AmazonAdsAPI, Auth
+
+        fake_auth = Auth(
+            access_token="fake_token",
+            token_type="bearer",
+            expires_at=time.time() + 3600,
+        )
+        with patch.object(AmazonAdsAPI, "_authenticate", return_value=fake_auth):
+            return AmazonAdsAPI(profile_id="123456789")
+
+    def test_returns_suggested_bid_on_success(self):
+        """A successful 200 response returns the suggested bid per keyword."""
+        api = self._make_api()
+
+        def fake_request(method, endpoint, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "keywords": [
+                    {
+                        "keywordId": 111,
+                        "code": "SUCCESS",
+                        "bid": {"suggested": 0.75, "rangeStart": 0.5, "rangeEnd": 1.0},
+                    }
+                ]
+            }
+            return mock_resp
+
+        with patch.object(api, "_request", side_effect=fake_request):
+            result = api.get_keyword_bid_recommendations(
+                [{"keywordId": 111, "campaignId": 1, "adGroupId": 2, "matchType": "EXACT"}]
+            )
+
+        self.assertEqual(result.get("111"), 0.75)
+
+    def test_non_success_code_returns_none(self):
+        """A keyword with a non-SUCCESS code is mapped to None."""
+        api = self._make_api()
+
+        def fake_request(method, endpoint, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "keywords": [{"keywordId": 222, "code": "NOT_APPLICABLE"}]
+            }
+            return mock_resp
+
+        with patch.object(api, "_request", side_effect=fake_request):
+            result = api.get_keyword_bid_recommendations(
+                [{"keywordId": 222, "campaignId": 1, "adGroupId": 2}]
+            )
+
+        self.assertIsNone(result.get("222"))
+
+    def test_404_response_returns_error_tuple(self):
+        """A 404 HTTP error is returned as a (404, None) tuple."""
+        import requests as _requests
+
+        api = self._make_api()
+
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.text = "Not Found"
+        http_err = _requests.exceptions.HTTPError(response=resp)
+        http_err.response = resp
+
+        with patch.object(api, "_request", side_effect=http_err):
+            result = api.get_keyword_bid_recommendations(
+                [{"keywordId": 333, "campaignId": 1, "adGroupId": 2}]
+            )
+
+        self.assertEqual(result.get("333"), (404, None))
+
+    def test_uses_bulk_bid_recommendations_endpoint(self):
+        """The bulk endpoint /v2/sp/keywords/bidRecommendations must be used."""
+        api = self._make_api()
+        called_endpoints = []
+
+        def fake_request(method, endpoint, **kwargs):
+            called_endpoints.append(endpoint)
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"keywords": []}
+            return mock_resp
+
+        with patch.object(api, "_request", side_effect=fake_request):
+            api.get_keyword_bid_recommendations(
+                [{"keywordId": 444, "campaignId": 5, "adGroupId": 6}]
+            )
+
+        self.assertEqual(len(called_endpoints), 1)
+        self.assertEqual(called_endpoints[0], "/v2/sp/keywords/bidRecommendations")
+
+    def test_groups_by_ad_group(self):
+        """Keywords in different ad groups are sent as separate API calls."""
+        api = self._make_api()
+        call_count = [0]
+
+        def fake_request(method, endpoint, **kwargs):
+            call_count[0] += 1
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"keywords": []}
+            return mock_resp
+
+        keywords = [
+            {"keywordId": 1, "campaignId": 10, "adGroupId": 100},
+            {"keywordId": 2, "campaignId": 10, "adGroupId": 200},  # different ad group
+        ]
+        with patch.object(api, "_request", side_effect=fake_request):
+            api.get_keyword_bid_recommendations(keywords)
+
+        self.assertEqual(call_count[0], 2)
+
+
+class TestBatchUpdateKeywordsWithFallback(unittest.TestCase):
+    """Tests for AmazonAdsAPI.batch_update_keywords_with_fallback."""
+
+    def _make_api(self):
+        from optimizer_core import AmazonAdsAPI, Auth
+
+        fake_auth = Auth(
+            access_token="fake_token",
+            token_type="bearer",
+            expires_at=time.time() + 3600,
+        )
+        with patch.object(AmazonAdsAPI, "_authenticate", return_value=fake_auth):
+            return AmazonAdsAPI(profile_id="123456789")
+
+    def test_success_on_v2_endpoint(self):
+        """Successful PUT /v2/sp/keywords returns correct success count."""
+        api = self._make_api()
+
+        def fake_request(method, endpoint, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = [
+                {"keywordId": 1, "code": "SUCCESS"},
+                {"keywordId": 2, "code": "SUCCESS"},
+            ]
+            return mock_resp
+
+        with patch.object(api, "_request", side_effect=fake_request):
+            result = api.batch_update_keywords_with_fallback(
+                [{"keywordId": 1, "bid": 0.5}, {"keywordId": 2, "bid": 0.6}]
+            )
+
+        self.assertEqual(result["success"], 2)
+        self.assertEqual(result["failed"], 0)
+
+    def test_falls_back_to_v3_on_404(self):
+        """A 404 from PUT /v2/sp/keywords triggers a retry via PUT /sp/keywords."""
+        import requests as _requests
+
+        api = self._make_api()
+        called_endpoints = []
+
+        resp_404 = MagicMock()
+        resp_404.status_code = 404
+        resp_404.text = "Not Found"
+        http_err = _requests.exceptions.HTTPError(response=resp_404)
+        http_err.response = resp_404
+
+        def fake_request(method, endpoint, **kwargs):
+            called_endpoints.append(endpoint)
+            if endpoint == "/v2/sp/keywords":
+                raise http_err
+            # v3 fallback succeeds
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = [{"keywordId": 1, "code": "SUCCESS"}]
+            return mock_resp
+
+        with patch.object(api, "_request", side_effect=fake_request):
+            result = api.batch_update_keywords_with_fallback(
+                [{"keywordId": 1, "bid": 0.5}]
+            )
+
+        self.assertIn("/v2/sp/keywords", called_endpoints)
+        self.assertIn("/sp/keywords", called_endpoints)
+        self.assertEqual(result["success"], 1)
+        self.assertEqual(result["failed"], 0)
+
+
+class TestSuggestedBidOptimizerUnit(unittest.TestCase):
+    """Unit tests for SuggestedBidOptimizer."""
+
+    def _make_optimizer(self):
+        from optimizer_core import (
+            AmazonAdsAPI,
+            Auth,
+            Config,
+            AuditLogger,
+            SuggestedBidOptimizer,
+        )
+        import tempfile, json, os
+
+        fake_auth = Auth(
+            access_token="fake_token",
+            token_type="bearer",
+            expires_at=time.time() + 3600,
+        )
+
+        cfg_data = {
+            "api": {"region": "NA"},
+            "dayparting": {
+                "timezone": "UTC",
+                "hour_multipliers": {str(h): 1.0 for h in range(24)},
+            },
+            "suggested_bid_optimization": {
+                "min_bid": 0.02,
+                "max_bid": 10.0,
+                "max_step": 2.0,
+                "min_delta": 0.01,
+                "max_keywords": 2000,
+                "min_orders": 1,
+                "max_acos": 0.40,
+            },
+            "logging": {"output_dir": "/tmp"},
+        }
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as fh:
+            json.dump(cfg_data, fh)
+            cfg_path = fh.name
+
+        try:
+            with patch.object(AmazonAdsAPI, "_authenticate", return_value=fake_auth):
+                api = AmazonAdsAPI(profile_id="123456789")
+            config = Config(cfg_path)
+            audit = AuditLogger("/tmp")
+            optimizer = SuggestedBidOptimizer(config, api, audit)
+        finally:
+            os.unlink(cfg_path)
+
+        return optimizer, api
+
+    def _make_keyword(self, keyword_id="1", bid=0.50, state="enabled", match_type="EXACT"):
+        from optimizer_core import Keyword
+
+        return Keyword(
+            keyword_id=keyword_id,
+            ad_group_id="100",
+            campaign_id="10",
+            keyword_text="test keyword",
+            match_type=match_type,
+            state=state,
+            bid=bid,
+        )
+
+    def test_dry_run_does_not_call_update(self):
+        """In dry-run mode, no update API calls should be made."""
+        optimizer, api = self._make_optimizer()
+        kw = self._make_keyword()
+
+        with (
+            patch.object(optimizer, "_load_recent_update_count", return_value=None),
+            patch.object(optimizer, "_load_keyword_performance", return_value=[]),
+            patch.object(optimizer, "_get_all_enabled_keywords", return_value=[kw]),
+            patch.object(
+                api,
+                "get_keyword_bid_recommendations",
+                return_value={"1": 0.75},
+            ),
+            patch.object(
+                api, "batch_update_keywords_with_fallback"
+            ) as mock_update,
+        ):
+            result = optimizer.optimize(dry_run=True)
+
+        mock_update.assert_not_called()
+        self.assertTrue(result.get("dry_run"))
+        self.assertEqual(result["reco_summary"].get("proposed", 0), 1)
+
+    def test_no_candidates_returns_empty_result(self):
+        """When SUGGESTED_BID_FALLBACK_TO_ALL=false and no top performers,
+        optimize() returns an empty result without calling the API."""
+        import os
+
+        optimizer, api = self._make_optimizer()
+
+        with (
+            patch.dict(os.environ, {"SUGGESTED_BID_FALLBACK_TO_ALL": "false"}),
+            patch.object(optimizer, "_load_recent_update_count", return_value=None),
+            patch.object(optimizer, "_load_keyword_performance", return_value=[]),
+            patch.object(optimizer, "_select_top_performers", return_value=[]),
+        ):
+            result = optimizer.optimize(dry_run=True)
+
+        self.assertEqual(result["keywords_evaluated"], 0)
+        self.assertIn("message", result)
+
+    def test_guardrail_step_cap_applied(self):
+        """A suggested bid that exceeds max_step should be capped."""
+        optimizer, api = self._make_optimizer()
+        # Current bid $0.50; suggested bid $2.00 — max_step=2.0 means max change
+        # = 0.50 * (2.0 - 1) = $0.50, so new bid should be capped at $1.00.
+        kw = self._make_keyword(bid=0.50)
+
+        with (
+            patch.object(optimizer, "_load_recent_update_count", return_value=None),
+            patch.object(optimizer, "_load_keyword_performance", return_value=[]),
+            patch.object(optimizer, "_get_all_enabled_keywords", return_value=[kw]),
+            patch.object(
+                api,
+                "get_keyword_bid_recommendations",
+                return_value={"1": 2.00},
+            ),
+            patch.object(
+                api,
+                "batch_update_keywords_with_fallback",
+                return_value={"success": 1, "failed": 0},
+            ) as mock_update,
+        ):
+            result = optimizer.optimize(dry_run=False)
+
+        applied_updates = mock_update.call_args[0][0]
+        self.assertEqual(len(applied_updates), 1)
+        # Capped new bid: 0.50 + 0.50 = 1.00
+        self.assertAlmostEqual(applied_updates[0]["bid"], 1.00, places=2)
+        self.assertGreater(result["guardrails"]["step_capped"], 0)
+
+    def test_below_min_delta_skipped(self):
+        """Keywords whose bid change is below min_delta must not be updated."""
+        optimizer, api = self._make_optimizer()
+        # Current bid $0.50; suggested $0.504 — delta=$0.004 < min_delta=$0.01.
+        kw = self._make_keyword(bid=0.50)
+
+        with (
+            patch.object(optimizer, "_load_recent_update_count", return_value=None),
+            patch.object(optimizer, "_load_keyword_performance", return_value=[]),
+            patch.object(optimizer, "_get_all_enabled_keywords", return_value=[kw]),
+            patch.object(
+                api,
+                "get_keyword_bid_recommendations",
+                return_value={"1": 0.504},
+            ),
+            patch.object(
+                api, "batch_update_keywords_with_fallback"
+            ) as mock_update,
+        ):
+            result = optimizer.optimize(dry_run=False)
+
+        mock_update.assert_not_called()
+        self.assertEqual(result["reco_summary"].get("below_min_delta", 0), 1)
+
+    def test_http_404_reco_counted_in_summary(self):
+        """Keywords whose recommendation returns 404 are counted in the reco summary."""
+        optimizer, api = self._make_optimizer()
+        kw = self._make_keyword()
+
+        with (
+            patch.object(optimizer, "_load_recent_update_count", return_value=None),
+            patch.object(optimizer, "_load_keyword_performance", return_value=[]),
+            patch.object(optimizer, "_get_all_enabled_keywords", return_value=[kw]),
+            patch.object(
+                api,
+                "get_keyword_bid_recommendations",
+                return_value={"1": (404, None)},
+            ),
+        ):
+            result = optimizer.optimize(dry_run=True)
+
+        self.assertEqual(result["reco_summary"].get("http_404", 0), 1)
+        self.assertEqual(result["reco_summary"].get("no_base", 0), 1)
+        self.assertEqual(result["reco_summary"].get("unparsed", 0), 1)
+
+
+class TestSitecustomizeHotfix(unittest.TestCase):
+    """Tests for the sitecustomize bidRecommendations 429→404 HOTFIX.
+
+    Because Python may have loaded a system-level sitecustomize.py before
+    the project's own copy, these tests import the project file explicitly
+    via importlib to guarantee they test the correct implementation.
+    """
+
+    @classmethod
+    def _load_our_sitecustomize(cls):
+        """Return the project's sitecustomize module, loaded via its file path."""
+        import importlib.util, os
+
+        sc_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "sitecustomize.py"
+        )
+        spec = importlib.util.spec_from_file_location("_project_sitecustomize", sc_path)
+        sc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sc)
+        return sc
+
+    def test_hotfix_is_active(self):
+        """HOTFIX_ACTIVE must be True after our sitecustomize module is loaded."""
+        sc = self._load_our_sitecustomize()
+        self.assertTrue(sc.HOTFIX_ACTIVE)
+
+    def test_deprecated_429_converted_to_404(self):
+        """_should_convert_to_no_reco returns True for a deprecated 429 on
+        a bidRecommendations URL."""
+        sc = self._load_our_sitecustomize()
+        result = sc._should_convert_to_no_reco(
+            response_status=429,
+            url="https://advertising.amazon.com/v2/sp/keywords/bidRecommendations",
+            body="deprecated resource",
+        )
+        self.assertTrue(result)
+
+    def test_non_deprecated_429_not_converted(self):
+        """_should_convert_to_no_reco returns False for a rate-limit 429 that
+        is NOT a deprecated-resource response."""
+        sc = self._load_our_sitecustomize()
+        result = sc._should_convert_to_no_reco(
+            response_status=429,
+            url="https://advertising.amazon.com/v2/sp/keywords/bidRecommendations",
+            body="Too Many Requests - rate limit exceeded",
+        )
+        self.assertFalse(result)
+
+    def test_non_bid_reco_url_not_converted(self):
+        """_should_convert_to_no_reco returns False for non-bidRecommendations URLs."""
+        sc = self._load_our_sitecustomize()
+        result = sc._should_convert_to_no_reco(
+            response_status=429,
+            url="https://advertising.amazon.com/v2/sp/campaigns",
+            body="deprecated resource",
+        )
+        self.assertFalse(result)
+
+    def test_non_429_not_converted(self):
+        """_should_convert_to_no_reco returns False for non-429 status codes."""
+        sc = self._load_our_sitecustomize()
+        result = sc._should_convert_to_no_reco(
+            response_status=200,
+            url="https://advertising.amazon.com/v2/sp/keywords/bidRecommendations",
+            body="deprecated resource",
+        )
+        self.assertFalse(result)
+
+
 if __name__ == "__main__":
     unittest.main()
