@@ -1553,9 +1553,11 @@ class AmazonAdsAPI:
     ) -> Dict[str, Optional[float]]:
         """Get suggested bids from Amazon for a list of keywords.
 
-        Uses the bulk SP bid-recommendations endpoint
-        (POST /v2/sp/keywords/bidRecommendations), grouping keywords by
-        (campaign_id, ad_group_id) as required by the API.
+        Tries the bulk SP bid-recommendations endpoint in order:
+          1. POST /v2/sp/keywords/bidRecommendations  (v2, legacy)
+          2. POST /sp/keywords/bidRecommendations     (v3/unversioned, fallback on 404)
+
+        Keywords are grouped by (campaign_id, ad_group_id) as required by the API.
 
         Args:
             keywords: List of dicts with keys 'keywordId', 'campaignId',
@@ -1577,6 +1579,24 @@ class AmazonAdsAPI:
 
         results: Dict[str, Any] = {}
 
+        def _parse_reco_response(data: dict, group_kws: List[Dict]) -> None:
+            """Parse a successful bid-recommendations response into `results`."""
+            reco_list = data.get("keywords") or data.get("recommendations") or []
+            for rec in reco_list:
+                kw_id = str(rec.get("keywordId", ""))
+                code = rec.get("code", "")
+                if code and code != "SUCCESS":
+                    results[kw_id] = None
+                    continue
+                bid_info = rec.get("bid") or rec.get("suggestedBid") or {}
+                suggested = bid_info.get("suggested")
+                results[kw_id] = float(suggested) if suggested is not None else None
+            # Mark any keyword not returned by the API as no-reco.
+            for kw in group_kws:
+                kw_id = str(kw["keywordId"])
+                if kw_id not in results:
+                    results[kw_id] = None
+
         for (campaign_id, ad_group_id), group_kws in groups.items():
             payload = {
                 "campaignId": int(campaign_id),
@@ -1593,23 +1613,7 @@ class AmazonAdsAPI:
                 response = self._request(
                     "POST", "/v2/sp/keywords/bidRecommendations", json=payload
                 )
-                data = response.json()
-                # The response may use 'keywords' or 'recommendations' as the list key.
-                reco_list = data.get("keywords") or data.get("recommendations") or []
-                for rec in reco_list:
-                    kw_id = str(rec.get("keywordId", ""))
-                    code = rec.get("code", "")
-                    if code and code != "SUCCESS":
-                        results[kw_id] = None
-                        continue
-                    bid_info = rec.get("bid") or rec.get("suggestedBid") or {}
-                    suggested = bid_info.get("suggested")
-                    results[kw_id] = float(suggested) if suggested is not None else None
-                # Mark any keyword not returned by the API as no-reco.
-                for kw in group_kws:
-                    kw_id = str(kw["keywordId"])
-                    if kw_id not in results:
-                        results[kw_id] = None
+                _parse_reco_response(response.json(), group_kws)
             except Exception as exc:
                 # Determine HTTP status from the exception if available.
                 resp = getattr(exc, "response", None)
@@ -1617,9 +1621,46 @@ class AmazonAdsAPI:
                     inner = getattr(exc, "__cause__", None)
                     resp = getattr(inner, "response", None)
                 status = int(getattr(resp, "status_code", 0) or 0) if resp else 0
+                if status == 404:
+                    # v2 endpoint returned 404.  This can be a genuine "endpoint
+                    # not found" or a deprecated-resource 429 that was converted
+                    # to 404 by the sitecustomize HOTFIX.  Either way, retry with
+                    # the v3/unversioned path.
+                    logger.debug(
+                        "bidRecommendations v2 returned HTTP %d for campaign=%s adGroup=%s;"
+                        " retrying with v3 endpoint (exc=%s)",
+                        status,
+                        campaign_id,
+                        ad_group_id,
+                        exc,
+                    )
+                    try:
+                        response = self._request(
+                            "POST", "/sp/keywords/bidRecommendations", json=payload
+                        )
+                        _parse_reco_response(response.json(), group_kws)
+                        continue
+                    except Exception as exc2:
+                        resp2 = getattr(exc2, "response", None)
+                        if resp2 is None:
+                            inner2 = getattr(exc2, "__cause__", None)
+                            resp2 = getattr(inner2, "response", None)
+                        status = int(getattr(resp2, "status_code", 0) or 0) if resp2 else 0
+                        logger.debug(
+                            "bidRecommendations v3 fallback also failed for campaign=%s"
+                            " adGroup=%s: %s",
+                            campaign_id,
+                            ad_group_id,
+                            exc2,
+                        )
+                # Guard: only set the error result for keywords whose recommendation
+                # was not already populated by a successful v3 retry above.  When the
+                # v3 call succeeds, `continue` is used so this block is never reached.
+                # When v3 also fails, `status` reflects the v3 response code.
                 for kw in group_kws:
                     kw_id = str(kw["keywordId"])
-                    results[kw_id] = (status, None) if status else None
+                    if kw_id not in results:
+                        results[kw_id] = (status, None) if status else None
 
         return results
 
@@ -1646,12 +1687,12 @@ class AmazonAdsAPI:
                         success += 1
                     else:
                         failed += 1
-                print(f"Batch updated keyword bids: {success} success, {failed} failed")
+                logger.info("Batch updated keyword bids: %d success, %d failed", success, failed)
             except Exception as exc:
                 resp = getattr(exc, "response", None)
                 status = int(getattr(resp, "status_code", 0) or 0) if resp else 0
                 if status == 404:
-                    print(
+                    logger.warning(
                         "Amazon returned 404 Method Not Found for PUT /v2/sp/keywords;"
                         " trying PUT /sp/keywords (v3)"
                     )
@@ -1662,8 +1703,8 @@ class AmazonAdsAPI:
                                 success += 1
                             else:
                                 failed += 1
-                        print(
-                            f"Batch updated keyword bids: {success} success, {failed} failed"
+                        logger.info(
+                            "Batch updated keyword bids: %d success, %d failed", success, failed
                         )
                     except Exception as exc2:
                         logger.error("Failed to update keywords via v3 fallback: %s", exc2)
@@ -3527,8 +3568,9 @@ class SuggestedBidOptimizer:
         """Load keyword performance data from BigQuery.
 
         Returns a list of dicts with at least 'keyword_text'.  Issues a
-        warning and returns an empty list when the data is unavailable or
-        the schema is missing expected columns.
+        warning and returns an empty list when the data is unavailable, the
+        schema is missing the sales field, or all records have zero/null
+        sales (which would cause every keyword to fail the ACoS filter).
         """
         if not self.bigquery_client:
             return []
@@ -3539,15 +3581,35 @@ class SuggestedBidOptimizer:
             if not keywords:
                 return []
 
-            # Warn when the sales field is absent so callers know ACoS / order
-            # counts will default to zero and may affect selection.
-            sample = keywords[0] if keywords else {}
-            if "sales" not in sample or sample.get("sales") is None:
+            sample = keywords[0]
+            sales_missing = "sales" not in sample or sample.get("sales") is None
+
+            if sales_missing:
                 logger.warning(
                     "keyword_performance schema missing sales field; "
                     "treating sales as 0. ACoS will be null/inf and may affect "
                     "selection logic."
                 )
+                logger.warning(
+                    "keyword_performance has %d records but sales data is "
+                    "unavailable; skipping top-performance selection "
+                    "(falling back to all-enabled).",
+                    len(keywords),
+                )
+                return []
+
+            # If ALL records have zero sales the top-performance filter
+            # (which requires both min_orders and max_acos) would reject every
+            # keyword, producing an unhelpful "Selected 0 of N" log entry before
+            # falling back to all-enabled.  Detect this upfront.
+            if all(not (kw.get("sales") or 0) for kw in keywords):
+                logger.warning(
+                    "keyword_performance has %d records but all have sales=0; "
+                    "skipping top-performance selection (falling back to all-enabled).",
+                    len(keywords),
+                )
+                return []
+
             logger.info("Loaded %d keywords for optimization", len(keywords))
             return keywords
         except Exception as exc:
