@@ -1545,6 +1545,136 @@ class AmazonAdsAPI:
             return []
     
     # ========================================================================
+    # BID RECOMMENDATIONS
+    # ========================================================================
+
+    def get_keyword_bid_recommendations(
+        self, keywords: List[Dict]
+    ) -> Dict[str, Optional[float]]:
+        """Get suggested bids from Amazon for a list of keywords.
+
+        Uses the bulk SP bid-recommendations endpoint
+        (POST /v2/sp/keywords/bidRecommendations), grouping keywords by
+        (campaign_id, ad_group_id) as required by the API.
+
+        Args:
+            keywords: List of dicts with keys 'keywordId', 'campaignId',
+                      'adGroupId', and optionally 'matchType'.
+
+        Returns:
+            Dict mapping str(keywordId) -> suggested bid (float) or None
+            when Amazon has no recommendation or an error was returned.
+            Keywords that received an HTTP error response are mapped to a
+            tuple (http_status, None) so callers can distinguish 404 / 401.
+        """
+        from collections import defaultdict
+
+        # Group by (campaignId, adGroupId) — API requires a single group per call.
+        groups: Dict[tuple, List[Dict]] = defaultdict(list)
+        for kw in keywords:
+            key = (str(kw.get("campaignId", "")), str(kw.get("adGroupId", "")))
+            groups[key].append(kw)
+
+        results: Dict[str, Any] = {}
+
+        for (campaign_id, ad_group_id), group_kws in groups.items():
+            payload = {
+                "campaignId": int(campaign_id),
+                "adGroupId": int(ad_group_id),
+                "keywords": [
+                    {
+                        "keywordId": int(kw["keywordId"]),
+                        "matchType": str(kw.get("matchType", "BROAD")).upper(),
+                    }
+                    for kw in group_kws
+                ],
+            }
+            try:
+                response = self._request(
+                    "POST", "/v2/sp/keywords/bidRecommendations", json=payload
+                )
+                data = response.json()
+                # The response may use 'keywords' or 'recommendations' as the list key.
+                reco_list = data.get("keywords") or data.get("recommendations") or []
+                for rec in reco_list:
+                    kw_id = str(rec.get("keywordId", ""))
+                    code = rec.get("code", "")
+                    if code and code != "SUCCESS":
+                        results[kw_id] = None
+                        continue
+                    bid_info = rec.get("bid") or rec.get("suggestedBid") or {}
+                    suggested = bid_info.get("suggested")
+                    results[kw_id] = float(suggested) if suggested is not None else None
+                # Mark any keyword not returned by the API as no-reco.
+                for kw in group_kws:
+                    kw_id = str(kw["keywordId"])
+                    if kw_id not in results:
+                        results[kw_id] = None
+            except Exception as exc:
+                # Determine HTTP status from the exception if available.
+                resp = getattr(exc, "response", None)
+                if resp is None:
+                    inner = getattr(exc, "__cause__", None)
+                    resp = getattr(inner, "response", None)
+                status = int(getattr(resp, "status_code", 0) or 0) if resp else 0
+                for kw in group_kws:
+                    kw_id = str(kw["keywordId"])
+                    results[kw_id] = (status, None) if status else None
+
+        return results
+
+    def batch_update_keywords_with_fallback(self, updates: List[Dict]) -> Dict:
+        """Batch-update keyword bids, falling back to the v3 unversioned endpoint
+        when the v2 path returns HTTP 404 Method Not Found.
+
+        Args:
+            updates: List of dicts with 'keywordId' (int) and 'bid' (float).
+
+        Returns:
+            Dict with 'success' and 'failed' counts.
+        """
+        batch_size = 500
+        success = 0
+        failed = 0
+
+        for i in range(0, len(updates), batch_size):
+            batch = updates[i : i + batch_size]
+            try:
+                response = self._request("PUT", "/v2/sp/keywords", json=batch)
+                for r in response.json():
+                    if r.get("code") == "SUCCESS":
+                        success += 1
+                    else:
+                        failed += 1
+                print(f"Batch updated keyword bids: {success} success, {failed} failed")
+            except Exception as exc:
+                resp = getattr(exc, "response", None)
+                status = int(getattr(resp, "status_code", 0) or 0) if resp else 0
+                if status == 404:
+                    print(
+                        "Amazon returned 404 Method Not Found for PUT /v2/sp/keywords;"
+                        " trying PUT /sp/keywords (v3)"
+                    )
+                    try:
+                        response = self._request("PUT", "/sp/keywords", json=batch)
+                        for r in response.json():
+                            if r.get("code") == "SUCCESS":
+                                success += 1
+                            else:
+                                failed += 1
+                        print(
+                            f"Batch updated keyword bids: {success} success, {failed} failed"
+                        )
+                    except Exception as exc2:
+                        logger.error("Failed to update keywords via v3 fallback: %s", exc2)
+                        failed += len(batch)
+                else:
+                    logger.error("Failed to update keywords: %s", exc)
+                    failed += len(batch)
+
+        return {"success": success, "failed": failed}
+
+    # ========================================================================
     # NEGATIVE KEYWORDS
     # ========================================================================
     
@@ -3035,6 +3165,501 @@ class NegativeKeywordManager:
 
 
 # ============================================================================
+# SUGGESTED BID OPTIMIZER
+# ============================================================================
+
+
+class SuggestedBidOptimizer:
+    """Optimizes keyword bids by applying Amazon's suggested bid recommendations.
+
+    Unlike the ACoS-based BidOptimizer (which derives target bids from historical
+    performance ratios), this module fetches Amazon's own recommended bid for each
+    keyword and applies it subject to configurable guardrails:
+      - Absolute min/max bid clamps
+      - Per-step maximum change (expressed as a multiplier of the current bid)
+      - Minimum delta threshold (skip tiny adjustments)
+      - Optional daypart multiplier
+
+    Selection logic:
+      1. Load keyword performance from BigQuery (optional).
+      2. Attempt a "top-performance" filter (min_orders + max_acos).
+      3. If 0 candidates pass that filter, fall back to ALL enabled keywords
+         (controlled by env SUGGESTED_BID_FALLBACK_TO_ALL; default true).
+      4. Cap at SUGGESTED_BID_MAX_KEYWORDS (env var, default 2000).
+    """
+
+    def __init__(
+        self,
+        config: "Config",
+        api: "AmazonAdsAPI",
+        audit: "AuditLogger",
+        bigquery_client=None,
+    ) -> None:
+        self.config = config
+        self.api = api
+        self.audit = audit
+        self.bigquery_client = bigquery_client
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def optimize(self, dry_run: bool = False) -> Dict[str, Any]:
+        """Run suggested-bid optimization.
+
+        Returns a dict with evaluation counts, reco/delta/guardrail summaries,
+        and whether the run was a dry-run.
+        """
+        logger.info("=" * 60)
+        logger.info("🧠 Starting Suggested Bid Optimizer")
+        logger.info("Timestamp: %s", datetime.now().astimezone().isoformat())
+
+        daypart = self._get_daypart()
+        logger.info(
+            "Daypart: %s (hour=%d, selector=%s, mult=%.2f)",
+            daypart["name"],
+            daypart["hour"],
+            daypart["selector"],
+            daypart["mult"],
+        )
+        logger.info("Dry Run: %s", dry_run)
+        logger.info("=" * 60)
+
+        # --- Config -------------------------------------------------------
+        min_bid = float(self.config.get("suggested_bid_optimization.min_bid", 0.02))
+        max_bid = float(self.config.get("suggested_bid_optimization.max_bid", 10.0))
+        # max_step: maximum bid change as a fraction of the current bid (e.g.
+        # 2.0 means the bid can at most double or halve in one pass).
+        max_step = float(self.config.get("suggested_bid_optimization.max_step", 2.0))
+        min_delta = float(
+            self.config.get("suggested_bid_optimization.min_delta", 0.01)
+        )
+        max_keywords = int(
+            os.getenv(
+                "SUGGESTED_BID_MAX_KEYWORDS",
+                str(self.config.get("suggested_bid_optimization.max_keywords", 2000)),
+            )
+        )
+        fallback_to_all = (
+            os.getenv("SUGGESTED_BID_FALLBACK_TO_ALL", "true").lower() != "false"
+        )
+
+        # --- Recent update history (informational) -------------------------
+        recent_count = self._load_recent_update_count()
+        if recent_count is not None:
+            logger.info(
+                "Loaded %d recent suggested-bid updates (last 6h)", recent_count
+            )
+
+        # --- Keyword performance for selection ----------------------------
+        kw_performance = self._load_keyword_performance()
+
+        min_orders = int(
+            self.config.get("suggested_bid_optimization.min_orders", 1)
+        )
+        max_acos_sel = float(
+            self.config.get("suggested_bid_optimization.max_acos", 0.40)
+        )
+
+        candidates = self._select_top_performers(
+            kw_performance, min_orders, max_acos_sel
+        )
+
+        if not candidates:
+            if fallback_to_all:
+                logger.warning(
+                    "Top-performance selection returned 0 keywords; falling back to "
+                    "all-enabled selection "
+                    "(set SUGGESTED_BID_FALLBACK_TO_ALL=false to disable)"
+                )
+                candidates = self._get_all_enabled_keywords()
+            else:
+                return self._empty_result(
+                    "No candidates selected and fallback disabled"
+                )
+
+        if not candidates:
+            return self._empty_result("No enabled keywords found")
+
+        # --- Cap ----------------------------------------------------------
+        if len(candidates) > max_keywords:
+            candidates = candidates[:max_keywords]
+            logger.info(
+                "Capped processing to %d keywords via SUGGESTED_BID_MAX_KEYWORDS",
+                max_keywords,
+            )
+
+        # --- Activate sitecustomize HOTFIX --------------------------------
+        try:
+            import sitecustomize as _sc  # noqa: PLC0415
+
+            if hasattr(_sc, "log_hotfix_active"):
+                _sc.log_hotfix_active()
+        except (ImportError, AttributeError):
+            pass
+
+        # --- Fetch bid recommendations from Amazon ------------------------
+        kw_meta = [
+            {
+                "keywordId": kw.keyword_id,
+                "campaignId": kw.campaign_id,
+                "adGroupId": kw.ad_group_id,
+                "matchType": kw.match_type,
+            }
+            for kw in candidates
+        ]
+        raw_recommendations = self.api.get_keyword_bid_recommendations(kw_meta)
+
+        # --- Build updates with guardrails --------------------------------
+        counters: Dict[str, int] = {
+            "none": 0,
+            "unparsed": 0,
+            "no_base": 0,
+            "http_401": 0,
+            "http_404": 0,
+            "below_min_delta": 0,
+            "proposed": 0,
+        }
+        guardrails: Dict[str, int] = {
+            "current_above_max_bid": 0,
+            "step_capped": 0,
+            "limited_updates": 0,
+        }
+
+        updates: List[Dict] = []
+        delta_inc: List[float] = []
+        delta_dec: List[float] = []
+
+        for kw in candidates:
+            kw_id = str(kw.keyword_id)
+            current_bid = kw.bid
+            reco = raw_recommendations.get(kw_id)
+
+            # reco is either: None, a float, or a (status, None) error tuple.
+            if reco is None:
+                counters["none"] += 1
+                continue
+
+            if isinstance(reco, tuple):
+                http_status, _ = reco
+                if http_status == 401:
+                    counters["http_401"] += 1
+                elif http_status == 404:
+                    counters["http_404"] += 1
+                else:
+                    counters["none"] += 1
+                # HTTP errors mean the response body cannot be parsed for a bid
+                # (unparsed) and there is no base bid to apply (no_base).
+                counters["unparsed"] += 1
+                counters["no_base"] += 1
+                continue
+
+            suggested_bid = reco
+            if suggested_bid is None:
+                # Amazon returned a response but provided no suggested bid value.
+                counters["no_base"] += 1
+                counters["unparsed"] += 1
+                continue
+
+            # Apply daypart multiplier.
+            target_bid = suggested_bid * daypart["mult"]
+
+            # Guardrail: flag keywords whose current bid already exceeds max.
+            if current_bid > max_bid:
+                guardrails["current_above_max_bid"] += 1
+
+            # Guardrail: cap the step size relative to the current bid.
+            max_change = current_bid * (max_step - 1.0)
+            if abs(target_bid - current_bid) > max_change and max_change > 0:
+                target_bid = (
+                    current_bid + max_change
+                    if target_bid > current_bid
+                    else current_bid - max_change
+                )
+                guardrails["step_capped"] += 1
+
+            # Clamp to absolute min/max.
+            new_bid = max(min_bid, min(max_bid, round(target_bid, 2)))
+            if new_bid != round(target_bid, 2):
+                guardrails["limited_updates"] += 1
+
+            # Skip tiny adjustments.
+            delta = abs(new_bid - current_bid)
+            if delta < min_delta:
+                counters["below_min_delta"] += 1
+                continue
+
+            counters["proposed"] += 1
+            updates.append({"keywordId": int(kw_id), "bid": new_bid})
+            if new_bid > current_bid:
+                delta_inc.append(new_bid - current_bid)
+            else:
+                delta_dec.append(current_bid - new_bid)
+
+        # --- Apply updates ------------------------------------------------
+        errors = 0
+        if updates and not dry_run:
+            logger.info("Applying %d bid updates", len(updates))
+            batch_result = self.api.batch_update_keywords_with_fallback(updates)
+            actual_updated = batch_result.get("success", 0)
+            errors = batch_result.get("failed", 0)
+        elif updates and dry_run:
+            logger.info("Dry run: would apply %d bid updates", len(updates))
+            actual_updated = len(updates)
+        else:
+            actual_updated = 0
+
+        # --- Record updates in BigQuery (best-effort) ---------------------
+        if actual_updated > 0 and not dry_run:
+            self._record_updates(updates)
+
+        # --- Summary ------------------------------------------------------
+        evaluated = len(candidates)
+        unchanged = evaluated - actual_updated
+
+        logger.info("=" * 60)
+        logger.info("Evaluated: %d", evaluated)
+        logger.info("Updated: %d", actual_updated)
+        logger.info("Unchanged: %d", unchanged)
+        logger.info("Errors: %d", errors)
+
+        reco_parts = " ".join(f"{k}={v}" for k, v in counters.items())
+        logger.info("Reco summary: %s", reco_parts)
+
+        inc = len(delta_inc)
+        dec = len(delta_dec)
+        all_deltas = delta_inc + delta_dec
+        avg_abs = sum(all_deltas) / len(all_deltas) if all_deltas else 0.0
+        avg_signed = (
+            (sum(delta_inc) - sum(delta_dec)) / len(all_deltas) if all_deltas else 0.0
+        )
+        logger.info(
+            "Delta summary: inc=%d dec=%d avg_abs=$%.2f avg_signed=$%.2f",
+            inc,
+            dec,
+            avg_abs,
+            avg_signed,
+        )
+
+        g_parts = " ".join(f"{k}={v}" for k, v in guardrails.items())
+        logger.info("Guardrails: %s", g_parts)
+        logger.info("=" * 60)
+
+        return {
+            "keywords_evaluated": evaluated,
+            "keywords_updated": actual_updated,
+            "keywords_unchanged": unchanged,
+            "errors": errors,
+            "reco_summary": counters,
+            "delta_summary": {
+                "inc": inc,
+                "dec": dec,
+                "avg_abs": avg_abs,
+                "avg_signed": avg_signed,
+            },
+            "guardrails": guardrails,
+            "dry_run": dry_run,
+        }
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _get_daypart(self) -> Dict[str, Any]:
+        """Return current daypart metadata using the dayparting config."""
+        try:
+            import pytz  # type: ignore
+
+            tz = pytz.timezone(
+                self.config.get("dayparting.timezone", "US/Eastern")
+            )
+            now = datetime.now(tz)
+        except Exception:
+            now = datetime.now()
+
+        hour = now.hour
+
+        # Selector label based on time of day.
+        if 9 <= hour <= 21:
+            selector = "high"
+        elif 6 <= hour <= 8:
+            selector = "normal"
+        else:
+            selector = "low"
+
+        # Daypart name bucket.
+        if 7 <= hour <= 11:
+            name = "morning"
+        elif 12 <= hour <= 15:
+            name = "afternoon"
+        elif 16 <= hour <= 21:
+            name = "prime"
+        elif 22 <= hour <= 23:
+            name = "evening"
+        else:
+            name = "overnight"
+
+        hour_multipliers = self.config.get("dayparting.hour_multipliers", {})
+        mult = float(hour_multipliers.get(str(hour), 1.0))
+
+        return {"name": name, "hour": hour, "selector": selector, "mult": mult}
+
+    def _load_recent_update_count(self) -> Optional[int]:
+        """Return the count of suggested-bid updates in the last 6 hours from
+        BigQuery, or None if BigQuery is unavailable."""
+        if not self.bigquery_client:
+            return None
+        try:
+            table_id = (
+                f"{self.bigquery_client.dataset_ref}.suggested_bid_updates"
+            )
+            job = self.bigquery_client._query(
+                f"SELECT COUNT(*) AS cnt FROM `{table_id}`"
+                " WHERE ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 6 HOUR)"
+            )
+            for row in job.result(timeout=15):
+                return int(row.cnt)
+            return 0
+        except Exception:
+            return None
+
+    def _load_keyword_performance(self) -> List[Dict]:
+        """Load keyword performance data from BigQuery.
+
+        Returns a list of dicts with at least 'keyword_text'.  Issues a
+        warning and returns an empty list when the data is unavailable or
+        the schema is missing expected columns.
+        """
+        if not self.bigquery_client:
+            return []
+        try:
+            keywords = self.bigquery_client.fetch_top_performing_keywords(
+                days=30, limit=500
+            )
+            if not keywords:
+                return []
+
+            # Warn when the sales field is absent so callers know ACoS / order
+            # counts will default to zero and may affect selection.
+            sample = keywords[0] if keywords else {}
+            if "sales" not in sample or sample.get("sales") is None:
+                logger.warning(
+                    "keyword_performance schema missing sales field; "
+                    "treating sales as 0. ACoS will be null/inf and may affect "
+                    "selection logic."
+                )
+            logger.info("Loaded %d keywords for optimization", len(keywords))
+            return keywords
+        except Exception as exc:
+            logger.debug("Could not load keyword performance from BigQuery: %s", exc)
+            return []
+
+    def _select_top_performers(
+        self,
+        kw_performance: List[Dict],
+        min_orders: int,
+        max_acos: float,
+    ) -> List["Keyword"]:
+        """Select keywords from BigQuery performance data that meet the
+        top-performance criteria, then return the corresponding live Keyword
+        objects from the Amazon API.
+
+        Logs the selection outcome (number selected vs. total candidates).
+        """
+        n_total = len(kw_performance)
+
+        # Identify keyword texts that pass the filter.
+        passing_texts: set = set()
+        for kw in kw_performance:
+            sales = float(kw.get("sales") or 0)
+            cost = float(kw.get("cost") or 0)
+            # Derive orders from conversions or purchases fields when available,
+            # otherwise approximate from sales (non-zero sales ≈ at least 1 order).
+            orders = int(
+                kw.get("orders")
+                or kw.get("conversions")
+                or kw.get("purchases")
+                or (1 if sales > 0 else 0)
+            )
+            acos = (cost / sales) if sales > 0 else float("inf")
+            if orders >= min_orders and acos <= max_acos:
+                text = str(kw.get("keyword_text") or "").strip().lower()
+                if text:
+                    passing_texts.add(text)
+
+        logger.info(
+            "Selection: top-performance metric=orders, filters: "
+            "min_orders=%d, max_acos=%.2f. Selected %d of %d candidates",
+            min_orders,
+            max_acos,
+            len(passing_texts),
+            n_total,
+        )
+
+        if not passing_texts:
+            return []
+
+        try:
+            all_keywords = self.api.get_keywords()
+            return [
+                kw
+                for kw in all_keywords
+                if kw.state == "enabled"
+                and kw.keyword_text.strip().lower() in passing_texts
+            ]
+        except Exception as exc:
+            logger.error(
+                "Failed to fetch keywords for top-performance selection: %s", exc
+            )
+            return []
+
+    def _get_all_enabled_keywords(self) -> List["Keyword"]:
+        """Return all enabled SP keywords from the Amazon API."""
+        try:
+            return [
+                kw
+                for kw in self.api.get_keywords()
+                if kw.state == "enabled"
+            ]
+        except Exception as exc:
+            logger.error("Failed to fetch all enabled keywords: %s", exc)
+            return []
+
+    def _record_updates(self, updates: List[Dict]) -> None:
+        """Write applied bid updates to BigQuery for history tracking."""
+        if not self.bigquery_client:
+            return
+        try:
+            table_id = (
+                f"{self.bigquery_client.dataset_ref}.suggested_bid_updates"
+            )
+            rows = [
+                {
+                    "ts": datetime.utcnow().isoformat(),
+                    "keywordId": u["keywordId"],
+                    "bid": u["bid"],
+                }
+                for u in updates
+            ]
+            self.bigquery_client.client.insert_rows_json(table_id, rows)
+        except Exception as exc:
+            logger.debug("Could not record suggested-bid updates to BigQuery: %s", exc)
+
+    @staticmethod
+    def _empty_result(message: str) -> Dict[str, Any]:
+        return {
+            "keywords_evaluated": 0,
+            "keywords_updated": 0,
+            "keywords_unchanged": 0,
+            "errors": 0,
+            "reco_summary": {},
+            "delta_summary": {},
+            "guardrails": {},
+            "message": message,
+        }
+
+
+# ============================================================================
 # MAIN AUTOMATION ORCHESTRATOR
 # ============================================================================
 
@@ -3066,6 +3691,9 @@ class PPCAutomation:
         self.campaign_manager = CampaignManager(self.config, self.api, self.audit)
         self.keyword_discovery = KeywordDiscovery(self.config, self.api, self.audit)
         self.negative_keywords = NegativeKeywordManager(self.config, self.api, self.audit)
+        self.suggested_bid_optimizer = SuggestedBidOptimizer(
+            self.config, self.api, self.audit, bigquery_client
+        )
     
     def run(self, features: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -3126,6 +3754,8 @@ class PPCAutomation:
                         results['keyword_discovery'] = self.keyword_discovery.discover_keywords(self.dry_run)
                     elif feature == 'negative_keywords':
                         results['negative_keywords'] = self.negative_keywords.add_negative_keywords(self.dry_run)
+                    elif feature == 'suggested_bid_optimization':
+                        results['suggested_bid_optimization'] = self.suggested_bid_optimizer.optimize(self.dry_run)
                     else:
                         logger.warning(f"Unknown feature '{feature}' encountered; skipping")
                         results[feature] = {'warning': 'unknown_feature'}
@@ -3180,7 +3810,8 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Run without making actual changes')
     parser.add_argument('--features', nargs='+',
                        choices=['bid_optimization', 'dayparting', 'campaign_management',
-                               'keyword_discovery', 'negative_keywords'],
+                               'keyword_discovery', 'negative_keywords',
+                               'suggested_bid_optimization'],
                        help='Specific features to run (default: all enabled in config)')
     parser.add_argument('--verify-connection', action='store_true',
                         help='Check Amazon Ads API connectivity and exit')
