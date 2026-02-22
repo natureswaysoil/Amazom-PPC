@@ -509,6 +509,68 @@ class TestGetKeywordBidRecommendations(unittest.TestCase):
 
         self.assertEqual(call_count[0], 2)
 
+    def test_v2_404_falls_back_to_v3_endpoint(self):
+        """A 404 from POST /v2/sp/keywords/bidRecommendations retries with
+        POST /sp/keywords/bidRecommendations and returns the suggested bid."""
+        import requests as _requests
+
+        api = self._make_api()
+        called_endpoints = []
+
+        resp_404 = MagicMock()
+        resp_404.status_code = 404
+        resp_404.text = "Not Found"
+        http_err = _requests.exceptions.HTTPError(response=resp_404)
+        http_err.response = resp_404
+
+        def fake_request(method, endpoint, **kwargs):
+            called_endpoints.append(endpoint)
+            if endpoint == "/v2/sp/keywords/bidRecommendations":
+                raise http_err
+            # v3 fallback succeeds
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "keywords": [
+                    {
+                        "keywordId": 555,
+                        "code": "SUCCESS",
+                        "bid": {"suggested": 0.80},
+                    }
+                ]
+            }
+            return mock_resp
+
+        with patch.object(api, "_request", side_effect=fake_request):
+            result = api.get_keyword_bid_recommendations(
+                [{"keywordId": 555, "campaignId": 1, "adGroupId": 2}]
+            )
+
+        self.assertIn("/v2/sp/keywords/bidRecommendations", called_endpoints)
+        self.assertIn("/sp/keywords/bidRecommendations", called_endpoints)
+        self.assertEqual(result.get("555"), 0.80)
+
+    def test_v2_404_v3_also_fails_returns_error_tuple(self):
+        """When both v2 and v3 bid-recommendation endpoints return 404, the
+        result is a (404, None) error tuple for affected keywords."""
+        import requests as _requests
+
+        api = self._make_api()
+
+        def _make_404_err():
+            resp = MagicMock()
+            resp.status_code = 404
+            resp.text = "Not Found"
+            err = _requests.exceptions.HTTPError(response=resp)
+            err.response = resp
+            return err
+
+        with patch.object(api, "_request", side_effect=_make_404_err()):
+            result = api.get_keyword_bid_recommendations(
+                [{"keywordId": 666, "campaignId": 1, "adGroupId": 2}]
+            )
+
+        self.assertEqual(result.get("666"), (404, None))
+
 
 class TestBatchUpdateKeywordsWithFallback(unittest.TestCase):
     """Tests for AmazonAdsAPI.batch_update_keywords_with_fallback."""
@@ -760,6 +822,105 @@ class TestSuggestedBidOptimizerUnit(unittest.TestCase):
         self.assertEqual(result["reco_summary"].get("http_404", 0), 1)
         self.assertEqual(result["reco_summary"].get("no_base", 0), 1)
         self.assertEqual(result["reco_summary"].get("unparsed", 0), 1)
+
+
+class TestLoadKeywordPerformance(unittest.TestCase):
+    """Tests for SuggestedBidOptimizer._load_keyword_performance."""
+
+    def _make_optimizer(self):
+        from optimizer_core import (
+            AmazonAdsAPI,
+            Auth,
+            Config,
+            AuditLogger,
+            SuggestedBidOptimizer,
+        )
+        import tempfile, json, os
+
+        fake_auth = Auth(
+            access_token="fake_token",
+            token_type="bearer",
+            expires_at=time.time() + 3600,
+        )
+
+        cfg_data = {
+            "api": {"region": "NA"},
+            "dayparting": {
+                "timezone": "UTC",
+                "hour_multipliers": {str(h): 1.0 for h in range(24)},
+            },
+            "suggested_bid_optimization": {
+                "min_bid": 0.02,
+                "max_bid": 10.0,
+                "max_step": 2.0,
+                "min_delta": 0.01,
+                "max_keywords": 2000,
+                "min_orders": 1,
+                "max_acos": 0.40,
+            },
+            "logging": {"output_dir": "/tmp"},
+        }
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as fh:
+            json.dump(cfg_data, fh)
+            cfg_path = fh.name
+
+        try:
+            with patch.object(AmazonAdsAPI, "_authenticate", return_value=fake_auth):
+                api = AmazonAdsAPI(profile_id="123456789")
+            config = Config(cfg_path)
+            audit = AuditLogger("/tmp")
+            bq = MagicMock()
+            optimizer = SuggestedBidOptimizer(config, api, audit, bigquery_client=bq)
+        finally:
+            os.unlink(cfg_path)
+
+        return optimizer
+
+    def test_missing_sales_field_returns_empty(self):
+        """When the performance schema has no 'sales' key, _load_keyword_performance
+        returns [] so the top-performance selection is skipped."""
+        optimizer = self._make_optimizer()
+        # Return records without 'sales' key.
+        optimizer.bigquery_client.fetch_top_performing_keywords.return_value = [
+            {"keyword_text": "organic soil", "clicks": 10, "cost": 5.0}
+        ]
+        result = optimizer._load_keyword_performance()
+        self.assertEqual(result, [])
+
+    def test_sales_none_returns_empty(self):
+        """When sales is present but None for the first record, _load_keyword_performance
+        returns [] so the top-performance selection is skipped."""
+        optimizer = self._make_optimizer()
+        optimizer.bigquery_client.fetch_top_performing_keywords.return_value = [
+            {"keyword_text": "organic soil", "clicks": 10, "cost": 5.0, "sales": None}
+        ]
+        result = optimizer._load_keyword_performance()
+        self.assertEqual(result, [])
+
+    def test_all_zero_sales_returns_empty(self):
+        """When all records have sales=0, _load_keyword_performance returns []
+        to avoid a guaranteed 'Selected 0 of N' outcome."""
+        optimizer = self._make_optimizer()
+        optimizer.bigquery_client.fetch_top_performing_keywords.return_value = [
+            {"keyword_text": "organic soil", "clicks": 10, "cost": 5.0, "sales": 0},
+            {"keyword_text": "potting mix", "clicks": 3, "cost": 1.5, "sales": 0},
+        ]
+        result = optimizer._load_keyword_performance()
+        self.assertEqual(result, [])
+
+    def test_positive_sales_returns_keywords(self):
+        """Records with positive sales are returned for top-performance selection."""
+        optimizer = self._make_optimizer()
+        records = [
+            {"keyword_text": "organic soil", "clicks": 10, "cost": 5.0, "sales": 20.0},
+            {"keyword_text": "potting mix", "clicks": 3, "cost": 1.5, "sales": 0},
+        ]
+        optimizer.bigquery_client.fetch_top_performing_keywords.return_value = records
+        result = optimizer._load_keyword_performance()
+        self.assertEqual(result, records)
 
 
 class TestSitecustomizeHotfix(unittest.TestCase):
