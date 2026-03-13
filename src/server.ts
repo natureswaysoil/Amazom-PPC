@@ -45,9 +45,13 @@ export function createServer(config: ServerConfig = {}): http.Server {
 
     res.setHeader('Content-Type', 'application/json');
 
-    if (method === 'GET' && pathname === '/health') {
+    if (method === 'GET' && (pathname === '/health' || pathname === '/status')) {
       res.statusCode = 200;
-      res.end(JSON.stringify({ status: 'ok', platforms: processor.getRegisteredPlatforms() }));
+      res.end(JSON.stringify({
+        status: 'ok',
+        service: 'video-processor',
+        platforms: processor.getRegisteredPlatforms(),
+      }));
       return;
     }
 
@@ -70,7 +74,9 @@ export function createServer(config: ServerConfig = {}): http.Server {
 
   const port = config.port ?? Number(process.env.PORT ?? '8080');
   server.listen(port, () => {
-    console.log(`Video processor listening on port ${port}`);
+    console.log(`Health check server running on port ${port}`);
+    console.log(`   GET http://localhost:${port}/health`);
+    console.log(`   GET http://localhost:${port}/status`);
   });
 
   return server;
