@@ -185,7 +185,10 @@ function resolveFilePath(filePath: string): string {
     return filePath;
   }
 
-  const cwdUrl = pathToFileURL(process.cwd()).href;
+  const cwdWithSeparator = process.cwd().endsWith(path.sep)
+    ? process.cwd()
+    : `${process.cwd()}${path.sep}`;
+  const cwdUrl = pathToFileURL(cwdWithSeparator).href;
   const resolved = new URL(filePath, cwdUrl);
   return fileURLToPath(resolved);
 }
