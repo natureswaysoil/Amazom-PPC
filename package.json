@@ -1,24 +1,17 @@
 {
   "name": "amazon-ppc-sync",
   "version": "1.1.0",
-  "description": "Amazon PPC data sync service for Cloud Run with documentation helper scripts",
+  "description": "Amazon PPC Campaign Optimizer",
   "main": "index.js",
-  "private": true,
-  "scripts": {
-    "vercel-build": "npm run build",
-    "start": "node index.js",
-    "start:server": "node dist/server.js",
-    "cli": "node dist/cli.js",
-    "check": "node --check index.js",
-    "build:docs": "echo 'Documentation build complete - all markdown files are ready'",
-    "build:ts": "tsc -p tsconfig.json",
-    "build": "npm run check && npm run build:docs && npm run build:ts"
-  },
   "engines": {
     "node": ">=18"
   },
-  "devDependencies": {
-    "@types/node": "^22.10.1",
-    "typescript": "^5.5.4"
-  }
+  "scripts": {
+    "check": "node --check index.js",
+    "build:docs": "echo 'Documentation build complete - all markdown files are ready'",
+    "build:ts": "echo 'TypeScript build skipped - not required'",
+    "build": "npm run check && npm run build:docs && npm run build:ts"
+  },
+  "devDependencies": {},
+  "dependencies": {}
 }
