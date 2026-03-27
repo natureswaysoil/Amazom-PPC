@@ -2,6 +2,6 @@
   "name": "amazon-ppc",
   "version": "1.0.0",
   "scripts": {
-    "build": "echo 'Build complete'"
+    "build": "node build.js"
   }
 }
