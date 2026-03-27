@@ -8,10 +8,8 @@
   },
   "scripts": {
     "check": "node --check index.js",
-    "build:docs": "echo 'Documentation build complete - all markdown files are ready'",
-    "build:ts": "echo 'TypeScript build skipped - not required'",
+    "build:docs": "echo 'Documentation build complete'",
+    "build:ts": "echo 'TypeScript build skipped'",
     "build": "npm run check && npm run build:docs && npm run build:ts"
-  },
-  "devDependencies": {},
-  "dependencies": {}
+  }
 }
