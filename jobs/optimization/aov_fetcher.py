@@ -106,12 +106,37 @@ class AOVFetcher:
         """
         logger.info("Fetching keyword performance data from BigQuery...")
 
-        # Build campaign filter with proper type casting
+        # Build campaign filter - compare as INT64 to avoid type mismatch
         campaign_filter = ""
         if campaign_ids:
-            # Ensure campaign IDs are strings and properly quoted
-            campaign_ids_str = ", ".join([f"'{str(cid)}'" for cid in campaign_ids])
-            campaign_filter = f"AND CAST(campaign_id AS STRING) IN ({campaign_ids_str})"
+            # Convert to integers for native INT64 comparison (no STRING cast in WHERE)
+            try:
+                # First try direct int conversion; if that fails, try float conversion
+                # This preserves precision for large integers while handling string floats
+                validated_ids = []
+                for cid in campaign_ids:
+                    try:
+                        validated_ids.append(int(cid))
+                    except ValueError:
+                        # Handle string representations of floats (e.g., "123.45")
+                        # Note: This may lose precision for very large float values
+                        float_val = float(cid)
+                        int_val = int(float_val)
+                        # Check if the float has a fractional part (more reliable than !=)
+                        if float_val % 1 != 0:
+                            logger.warning(f"Campaign ID {cid} is a float, truncating to {int_val}")
+                        validated_ids.append(int_val)
+                
+                # Validate all IDs are non-negative (campaign IDs are always positive)
+                invalid_ids = [cid for cid in validated_ids if cid < 0]
+                if invalid_ids:
+                    raise ValueError(f"Campaign IDs must be non-negative integers, found: {invalid_ids}")
+                
+                campaign_ids_joined = ", ".join(str(cid) for cid in validated_ids)
+                campaign_filter = f"AND campaign_id IN ({campaign_ids_joined})"
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid campaign_id format - expected numeric values: {e}")
+                raise ValueError(f"Campaign IDs must be numeric values, got: {campaign_ids}") from e
 
         # Use CAST for all ID columns to ensure consistent STRING types
         query = f"""
