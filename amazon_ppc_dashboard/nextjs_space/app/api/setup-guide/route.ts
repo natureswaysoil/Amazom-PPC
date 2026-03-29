@@ -60,7 +60,9 @@ export async function GET(request: NextRequest) {
   if (step1.status === 'incomplete') allStepsComplete = false;
   
   // Step 2: Check Project ID
-  const projectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
+  // Resolve from env vars first, then fall back to the project_id embedded in credentials
+  const envProjectId = getFirstSetEnv(PROJECT_ID_ENV_NAMES);
+  const projectId = envProjectId || credentialResult?.projectId || null;
   const step2 = {
     step: currentStep++,
     title: 'Google Cloud Project ID',
