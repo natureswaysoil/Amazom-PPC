@@ -791,10 +791,20 @@ def run_live_data(request) -> Tuple[Dict[str, Any], int]:
     if section in ('overview', ''):
       recent_results = bigquery_client.fetch_recent_optimization_results(days=days, limit=limit, profile_id=profile_id)
       daily = bigquery_client.fetch_daily_overview(days=days, profile_id=profile_id)
+      
+      # Add metadata about lookback attribution to help dashboard display correctly
+      # When data contains lookback windows (e.g., attributedSales14d), summing daily values
+      # causes duplicate counting. The dashboard should use the latest day's value instead.
+      metadata = {
+        'has_lookback_attribution': True,  # Assume true since most Amazon data has 7d/14d/30d attribution
+        'lookback_warning': 'Daily metrics contain multi-day attribution windows. Use latest day for totals, do not sum across days.',
+      }
+      
       return {
         'status': 'success',
         'recent_results': recent_results,
         'daily': daily,
+        'metadata': metadata,
       }, 200
 
     if section == 'campaigns':
@@ -834,10 +844,18 @@ def run_live_data(request) -> Tuple[Dict[str, Any], int]:
     if section == 'reports':
       recent_results = bigquery_client.fetch_recent_optimization_results(days=days, limit=limit, profile_id=profile_id)
       daily = bigquery_client.fetch_daily_overview(days=days, profile_id=profile_id)
+      
+      # Add metadata about lookback attribution
+      metadata = {
+        'has_lookback_attribution': True,
+        'lookback_warning': 'Daily metrics contain multi-day attribution windows. Use latest day for totals, do not sum across days.',
+      }
+      
       return {
         'status': 'success',
         'recent_results': recent_results,
         'daily': daily,
+        'metadata': metadata,
       }, 200
 
     # Unknown section -> keep backward-compatible payload.
