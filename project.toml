@@ -1,0 +1,6 @@
+# Google Cloud buildpack configuration for Cloud Run
+# This file specifies the function entry point when deploying with buildpacks
+
+[[build.env]]
+name = "GOOGLE_FUNCTION_TARGET"
+value = "run_optimizer"
