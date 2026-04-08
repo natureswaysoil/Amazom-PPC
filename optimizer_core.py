@@ -1775,27 +1775,6 @@ class AmazonAdsAPI:
             except Exception:
                 pass
 
-            # Then try upgraded path; if forbidden, retry with vendor Accept.
-            try:
-                response = self._request('POST', '/sp/targets/report', json=payload)
-                data = response.json() if response.content else {}
-                rid = data.get('reportId') or data.get('report_id')
-                return rid
-            except Exception:
-                try:
-                    response = self._request(
-                        'POST',
-                        '/sp/targets/report',
-                        json=payload,
-                        headers_extra={'Accept': 'application/vnd.spTargetingClause.v3+json'},
-                    )
-                    data = response.json() if response.content else {}
-                    rid = data.get('reportId') or data.get('report_id')
-                    return rid
-                except Exception as exc:
-                    logger.error(f"Failed to create targets report: {exc}")
-                    return None
-
         report_definitions = {
             'campaigns': {
                 'reportTypeId': 'spCampaigns',
