@@ -1,15 +1,17 @@
 {
   "name": "amazon-sales-data-cloud-function",
-  "version": "1.0.0",
-  "description": "Cloud Function to retrieve Amazon sales data via SP-API",
+  "version": "2.0.0",
+  "description": "Cloud Function to retrieve Amazon sales and settlement data via SP-API",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node -e \"require('./index.js'); console.log('amazonSalesData loaded')\""
   },
   "keywords": [
     "amazon",
     "sp-api",
     "sales",
+    "settlements",
+    "accounting",
     "cloud-function"
   ],
   "author": "Nature's Way Soil",
@@ -18,7 +20,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@google-cloud/secret-manager": "^5.0.0",
-    "aws4": "^1.12.0"
+    "@google-cloud/secret-manager": "^5.0.0"
   }
 }
