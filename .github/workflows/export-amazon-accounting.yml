@@ -1,0 +1,141 @@
+name: Export Amazon Accounting Settlements
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloud-function/**'
+      - '.github/workflows/export-amazon-accounting.yml'
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: 'Settlement report createdSince date (YYYY-MM-DD)'
+        required: true
+        default: '2026-08-01'
+      end_date:
+        description: 'Settlement report createdUntil date (YYYY-MM-DD)'
+        required: true
+        default: '2026-09-14'
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-central1
+  FUNCTION_NAME: amazonSalesData
+
+jobs:
+  deploy-and-export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: '>= 471.0.0'
+
+      - name: Resolve date range
+        id: dates
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            START="${{ inputs.start_date }}"
+            END="${{ inputs.end_date }}"
+          else
+            START="2026-08-01"
+            END="2026-09-14"
+          fi
+          echo "start=$START" >> "$GITHUB_OUTPUT"
+          echo "end=$END" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Google Secret Manager credentials exist
+        shell: bash
+        run: |
+          set -e
+          for SECRET in amazon-client-id amazon-client-secret amazon-refresh-token; do
+            gcloud secrets describe "$SECRET" --project="$GCP_PROJECT_ID" >/dev/null
+            echo "Found $SECRET"
+          done
+
+      - name: Deploy Amazon sales/accounting function
+        shell: bash
+        run: |
+          gcloud functions deploy "$FUNCTION_NAME" \
+            --gen2 \
+            --runtime=nodejs20 \
+            --region="$GCP_REGION" \
+            --source=cloud-function \
+            --entry-point=amazonSalesData \
+            --trigger-http \
+            --no-allow-unauthenticated \
+            --timeout=540s \
+            --memory=1024MB \
+            --min-instances=0 \
+            --max-instances=2 \
+            --set-secrets='AMAZON_SP_API_CLIENT_ID=amazon-client-id:latest,AMAZON_SP_API_CLIENT_SECRET=amazon-client-secret:latest,AMAZON_SP_API_REFRESH_TOKEN=amazon-refresh-token:latest' \
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT_ID,GCLOUD_PROJECT=$GCP_PROJECT_ID" \
+            --project="$GCP_PROJECT_ID"
+
+      - name: Export settlement reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          START="${{ steps.dates.outputs.start }}"
+          END="${{ steps.dates.outputs.end }}"
+
+          cat > request.json <<EOF
+          {
+            "action": "accounting",
+            "startDate": "${START}T00:00:00Z",
+            "endDate": "${END}T23:59:59Z",
+            "includeRows": true,
+            "maxReports": 100,
+            "maxDocuments": 25
+          }
+          EOF
+
+          gcloud functions call "$FUNCTION_NAME" \
+            --gen2 \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT_ID" \
+            --data="$(cat request.json)" \
+            --format=json > amazon-accounting-export.json
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          p = Path("amazon-accounting-export.json")
+          outer = json.loads(p.read_text())
+          payload = outer.get("result", outer)
+
+          if isinstance(payload, str):
+              payload = json.loads(payload)
+
+          Path("amazon-settlements.json").write_text(
+              json.dumps(payload, indent=2, ensure_ascii=False)
+          )
+
+          meta = payload.get("metadata", {})
+          print("reportsFound:", meta.get("reportsFound"))
+          print("completedReports:", meta.get("completedReports"))
+          print("documentsReturned:", meta.get("documentsReturned"))
+
+          if payload.get("success") is not True:
+              raise SystemExit("Amazon settlement export did not return success=true")
+          PY
+
+      - name: Upload accounting export
+        uses: actions/upload-artifact@v4
+        with:
+          name: amazon-accounting-settlements-${{ steps.dates.outputs.start }}-to-${{ steps.dates.outputs.end }}
+          path: amazon-settlements.json
+          retention-days: 14
