@@ -116,11 +116,19 @@ jobs:
           from pathlib import Path
 
           p = Path("amazon-accounting-export.json")
-          outer = json.loads(p.read_text())
-          payload = outer.get("result", outer)
+          payload = json.loads(p.read_text())
 
-          if isinstance(payload, str):
-              payload = json.loads(payload)
+          for _ in range(5):
+              if isinstance(payload, str):
+                  payload = json.loads(payload)
+                  continue
+              if isinstance(payload, dict) and "result" in payload:
+                  payload = payload["result"]
+                  continue
+              break
+
+          if not isinstance(payload, dict):
+              raise SystemExit(f"Unexpected function response type: {type(payload).__name__}: {payload!r}")
 
           print("Function response:", json.dumps(payload, indent=2)[:4000])
 
