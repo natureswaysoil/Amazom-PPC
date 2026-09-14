@@ -109,7 +109,9 @@ jobs:
             --project="$GCP_PROJECT_ID" \
             --format='value(serviceConfig.uri)')"
 
-          ID_TOKEN="$(gcloud auth print-identity-token --audiences="$FUNCTION_URL")"
+          ID_TOKEN="$(gcloud auth print-identity-token \
+            --impersonate-service-account=ppc-automation@amazon-ppc-474902.iam.gserviceaccount.com \
+            --audiences="$FUNCTION_URL")"
 
           HTTP_CODE="$(curl -sS -o amazon-accounting-export.json -w '%{http_code}' \
             -X POST "$FUNCTION_URL" \
