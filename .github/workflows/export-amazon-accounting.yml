@@ -103,23 +103,34 @@ jobs:
           }
           EOF
 
-          gcloud functions call "$FUNCTION_NAME" \
+          FUNCTION_URL="$(gcloud functions describe "$FUNCTION_NAME" \
             --gen2 \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT_ID" \
-            --data="$(cat request.json)" \
-            --format=json > amazon-accounting-export.json
+            --format='value(serviceConfig.uri)')"
+
+          ID_TOKEN="$(gcloud auth print-identity-token --audiences="$FUNCTION_URL")"
+
+          HTTP_CODE="$(curl -sS -o amazon-accounting-export.json -w '%{http_code}' \
+            -X POST "$FUNCTION_URL" \
+            -H "Authorization: Bearer $ID_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @request.json)"
+
+          echo "Amazon accounting HTTP status: $HTTP_CODE"
 
           python3 - <<'PY'
           import json
           from pathlib import Path
 
           p = Path("amazon-accounting-export.json")
-          outer = json.loads(p.read_text())
-          payload = outer.get("result", outer)
+          raw = p.read_text()
+          print("Function response:", raw[:4000])
 
-          if isinstance(payload, str):
-              payload = json.loads(payload)
+          try:
+              payload = json.loads(raw)
+          except Exception as exc:
+              raise SystemExit(f"Function returned non-JSON response: {exc}")
 
           Path("amazon-settlements.json").write_text(
               json.dumps(payload, indent=2, ensure_ascii=False)
