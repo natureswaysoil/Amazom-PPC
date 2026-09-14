@@ -242,7 +242,8 @@ exports.amazonSalesData = async (req, res) => {
     const host = (await getSecret('SP_API_HOST')) || DEFAULT_SP_API_HOST;
 
     if (!clientId || !clientSecret || !refreshToken) {
-      return res.status(500).json({
+      const diagnosticStatus = req.body?.debugResponse200 ? 200 : 500;
+      return res.status(diagnosticStatus).json({
         success: false,
         error: 'Configuration error',
         message: 'Missing Amazon SP-API LWA credentials',
@@ -367,7 +368,8 @@ exports.amazonSalesData = async (req, res) => {
     });
   } catch (err) {
     console.error('Error in amazonSalesData:', err);
-    return res.status(500).json({
+    const diagnosticStatus = req.body?.debugResponse200 ? 200 : 500;
+    return res.status(diagnosticStatus).json({
       success: false,
       error: 'Internal server error',
       message: err.message,
