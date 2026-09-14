@@ -99,40 +99,30 @@ jobs:
             "endDate": "${END}T23:59:59Z",
             "includeRows": true,
             "maxReports": 100,
-            "maxDocuments": 25
+            "maxDocuments": 25,
+            "debugResponse200": true
           }
           EOF
 
-          FUNCTION_URL="$(gcloud functions describe "$FUNCTION_NAME" \
+          gcloud functions call "$FUNCTION_NAME" \
             --gen2 \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT_ID" \
-            --format='value(serviceConfig.uri)')"
-
-          ID_TOKEN="$(gcloud auth print-identity-token \
-            --impersonate-service-account=ppc-automation@amazon-ppc-474902.iam.gserviceaccount.com \
-            --audiences="$FUNCTION_URL")"
-
-          HTTP_CODE="$(curl -sS -o amazon-accounting-export.json -w '%{http_code}' \
-            -X POST "$FUNCTION_URL" \
-            -H "Authorization: Bearer $ID_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data-binary @request.json)"
-
-          echo "Amazon accounting HTTP status: $HTTP_CODE"
+            --data="$(cat request.json)" \
+            --format=json > amazon-accounting-export.json
 
           python3 - <<'PY'
           import json
           from pathlib import Path
 
           p = Path("amazon-accounting-export.json")
-          raw = p.read_text()
-          print("Function response:", raw[:4000])
+          outer = json.loads(p.read_text())
+          payload = outer.get("result", outer)
 
-          try:
-              payload = json.loads(raw)
-          except Exception as exc:
-              raise SystemExit(f"Function returned non-JSON response: {exc}")
+          if isinstance(payload, str):
+              payload = json.loads(payload)
+
+          print("Function response:", json.dumps(payload, indent=2)[:4000])
 
           Path("amazon-settlements.json").write_text(
               json.dumps(payload, indent=2, ensure_ascii=False)
