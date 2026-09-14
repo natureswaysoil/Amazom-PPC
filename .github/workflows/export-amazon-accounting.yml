@@ -18,7 +18,7 @@ on:
         default: '2026-09-14'
 
 env:
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_PROJECT_ID: amazon-ppc-474902
   GCP_REGION: us-central1
   FUNCTION_NAME: amazonSalesData
 
@@ -35,7 +35,7 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          workload_identity_provider: projects/1009540130231/locations/global/workloadIdentityPools/github-pool/providers/github-provider
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
